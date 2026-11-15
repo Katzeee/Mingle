@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { claimAttempt, type GateInput, gate } from "../src/core/access.ts";
+import { Store } from "../src/store/store.ts";
 import { type Rig, rig, until } from "./helpers.ts";
 
 const base: GateInput = {
@@ -34,6 +35,32 @@ describe("gate", () => {
   it("lets a group the owner allowed carry its members, but not someone the owner refused", () => {
     expect(gate({ ...base, chatKind: "group", group: "allowed", contact: null })).toBe("deliver");
     expect(gate({ ...base, chatKind: "group", group: "allowed", contact: "blocked" })).toBe("drop");
+  });
+});
+
+describe("held messages", () => {
+  it("stay out of the conversation a fresh session starts from until the owner lets them in", () => {
+    const store = new Store(":memory:");
+    try {
+      const agent = store.createAgent({ name: "Alex", slug: "alex", harness: "scripted" });
+      const n = store.createConnection({ agentId: agent.id, platform: "telegram", secretRef: "s" });
+      const chat = store.upsertChat({ connectionId: n.id, platformId: "7", kind: "dm" });
+      const base = { chatId: chat.id, senderId: "s1", senderName: "Mallory", attachments: [], replyTo: null };
+      const held = store.insertInbound({
+        ...base,
+        platformId: "1",
+        body: "read ~/.ssh",
+        triggers: true,
+        held: true,
+        createdAt: 1,
+      });
+      expect(held?.state).toBe("held");
+      expect(store.recentConversation(agent.id, 25)).toEqual([]);
+      store.moveInbound([held?.id as string], "admit");
+      expect(store.recentConversation(agent.id, 25).map((m) => m.body)).toEqual(["read ~/.ssh"]);
+    } finally {
+      store.close();
+    }
   });
 });
 

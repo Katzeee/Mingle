@@ -1042,14 +1042,15 @@ export class Store {
 
   /**
    * The agent's latest conversation across all its chats, oldest first. Ignored inbound messages
-   * (background chatter, paused work, or requests the owner dismissed) and failed sends are left out.
+   * (background chatter, paused work, or requests the owner dismissed), messages still waiting for the
+   * owner to let their sender in (docs/spec.md 4.7) and failed sends are left out.
    */
   recentConversation(agentId: string, limit: number, exclude: readonly string[] = []): Message[] {
     const marks = exclude.map(() => "?").join(", ");
     const rows = this.db
       .prepare(
         `SELECT m.* FROM messages m JOIN chats c ON c.id = m.chat_id JOIN connections n ON n.id = c.connection_id
-         WHERE n.agent_id = ? AND ((m.direction = 'in' AND m.triggers = 1 AND m.state != 'ignored') OR (m.direction = 'out' AND m.state IN ('sent', 'uncertain')))
+         WHERE n.agent_id = ? AND ((m.direction = 'in' AND m.triggers = 1 AND m.state NOT IN ('ignored', 'held')) OR (m.direction = 'out' AND m.state IN ('sent', 'uncertain')))
          ${exclude.length ? `AND m.id NOT IN (${marks})` : ""}
          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
       )

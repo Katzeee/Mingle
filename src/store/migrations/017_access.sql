@@ -17,4 +17,4 @@ UPDATE contacts SET access = 'allowed'
     WHERE c.connection_id = contacts.connection_id AND m.direction = 'in' AND m.sender_id = contacts.platform_id
   );
 UPDATE chats SET access = 'allowed' WHERE kind <> 'dm';
-CREATE INDEX messages_held ON messages(chat_id) WHERE state = 'held';
+CREATE INDEX messages_held ON messages(state) WHERE state = 'held';
