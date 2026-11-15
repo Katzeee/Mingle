@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AgentEnv } from "./AgentEnv.tsx";
 import type { Navigate } from "./App.tsx";
 import {
   type Activity,
   type AgentView,
+  ApiError,
   api,
   type ConnectionView,
   type Harness,
   type Reminder,
   type Task,
 } from "./api.ts";
-import { fetchCached, peek, useCached } from "./cache.ts";
+import { fetchCached, peek, remember, useCached } from "./cache.ts";
 import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
 import { ModelPicker } from "./NewAgent.tsx";
 import { online, useOnline } from "./online.ts";
@@ -115,6 +116,21 @@ export function AgentPage({
       workPending.current = false;
     }
   }, [agent.id]);
+  /** The owner closed a task or cancelled a reminder: gone from the list at once, then read again. */
+  const dropWork = useCallback(
+    (kind: "tasks" | "reminders", id: string) => {
+      setWork((current) => {
+        if (!current) return current;
+        const next =
+          kind === "tasks"
+            ? { ...current, tasks: current.tasks.filter((x) => x.id !== id) }
+            : { ...current, reminders: current.reminders.filter((x) => x.id !== id) };
+        return remember(`work:${agent.id}`, next);
+      });
+      void refreshWork();
+    },
+    [agent.id, refreshWork],
+  );
   const refresh = useCallback(() => {
     void refreshActivity();
     void refreshWork();
@@ -399,7 +415,7 @@ export function AgentPage({
                   )}
                 </Section>
                 <div className="flex flex-col gap-7 min-[1140px]:hidden">
-                  <Work work={work} error={workError} onRetry={refreshWork} />
+                  <Work agentId={agent.id} work={work} error={workError} onRetry={refreshWork} onDropped={dropWork} />
                 </div>
               </>
             )}
@@ -417,7 +433,7 @@ export function AgentPage({
               }}
             />
           ) : null}
-          <Work work={work} error={workError} onRetry={refreshWork} />
+          <Work agentId={agent.id} work={work} error={workError} onRetry={refreshWork} onDropped={dropWork} />
         </aside>
       </div>
     </>
@@ -730,7 +746,19 @@ function LoadProblem({ title, onRetry }: { title: string; onRetry: () => Promise
   );
 }
 
-function Work({ work, error, onRetry }: { work: WorkData | null; error: boolean; onRetry: () => Promise<void> }) {
+function Work({
+  agentId,
+  work,
+  error,
+  onRetry,
+  onDropped,
+}: {
+  agentId: string;
+  work: WorkData | null;
+  error: boolean;
+  onRetry: () => Promise<void>;
+  onDropped: (kind: "tasks" | "reminders", id: string) => void;
+}) {
   const { t, locale } = useI18n();
   if (work === null) {
     return (
@@ -755,14 +783,21 @@ function Work({ work, error, onRetry }: { work: WorkData | null; error: boolean;
         ) : (
           <Group>
             {work.tasks.map((task) => (
-              <GroupRow key={task.id} className="min-h-[44px]">
-                <span className="line-clamp-2 min-w-0 flex-1 wrap-anywhere" title={task.title}>
-                  {task.title}
-                </span>
-                <span className="shrink-0 rounded-full bg-bg3 px-2 py-0.5 text-caption text-ink2">
-                  {t(`task.${task.status}` as MessageKey)}
-                </span>
-              </GroupRow>
+              <WorkRow
+                key={task.id}
+                label={task.title}
+                action={t("task.close")}
+                actionLabel={t("task.closeLabel", { title: task.title })}
+                ask={t("task.closeAsk")}
+                confirm={t("task.closeYes")}
+                run={() => api.closeTask(agentId, task.id)}
+                onDone={() => onDropped("tasks", task.id)}
+                aside={
+                  <span className="shrink-0 rounded-full bg-bg3 px-2 py-0.5 text-caption text-ink2">
+                    {t(`task.${task.status}` as MessageKey)}
+                  </span>
+                }
+              />
             ))}
           </Group>
         )}
@@ -776,25 +811,131 @@ function Work({ work, error, onRetry }: { work: WorkData | null; error: boolean;
         ) : (
           <Group>
             {work.reminders.map((r) => (
-              <GroupRow key={r.id} className="min-h-[44px] flex-col items-start gap-0.5">
-                <span className="line-clamp-2 wrap-anywhere" title={r.body}>
-                  {r.body}
-                </span>
-                <span className="text-caption text-ink2">
-                  {r.nextFireAt ? shortDateTime(r.nextFireAt, locale) : ""}
-                  {r.lastFiredAt ? (
-                    <span className="text-ink3">
-                      {" · "}
-                      {t("agent.reminderLastFired", { time: shortDateTime(r.lastFiredAt, locale) })}
-                    </span>
-                  ) : null}
-                </span>
-              </GroupRow>
+              <WorkRow
+                key={r.id}
+                label={r.body}
+                action={t("reminder.cancel")}
+                actionLabel={t("reminder.cancelLabel", { body: r.body })}
+                ask={t("reminder.cancelAsk")}
+                confirm={t("reminder.cancelYes")}
+                danger
+                run={() => api.cancelReminder(agentId, r.id)}
+                onDone={() => onDropped("reminders", r.id)}
+                detail={
+                  <>
+                    {r.nextFireAt ? shortDateTime(r.nextFireAt, locale) : ""}
+                    {r.lastFiredAt ? (
+                      <span className="text-ink3">
+                        {" · "}
+                        {t("agent.reminderLastFired", { time: shortDateTime(r.lastFiredAt, locale) })}
+                      </span>
+                    ) : null}
+                  </>
+                }
+              />
             ))}
           </Group>
         )}
       </Section>
     </>
+  );
+}
+
+/**
+ * A task or reminder. The agent owns them; the owner's one action (close, cancel) stays out of the
+ * way until the row is hovered or focused, and asks once in place, since it cannot be undone.
+ */
+function WorkRow({
+  label,
+  detail,
+  aside,
+  action,
+  actionLabel,
+  ask,
+  confirm,
+  danger = false,
+  run,
+  onDone,
+}: {
+  label: string;
+  detail?: ReactNode;
+  aside?: ReactNode;
+  action: string;
+  actionLabel: string;
+  ask: string;
+  confirm: string;
+  danger?: boolean;
+  run: () => Promise<unknown>;
+  onDone: () => void;
+}) {
+  const { t } = useI18n();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const actionButton = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
+  useEffect(() => {
+    if (wasConfirming.current && !confirming) actionButton.current?.focus();
+    wasConfirming.current = confirming;
+  }, [confirming]);
+  return (
+    <GroupRow
+      className={`group relative min-h-[44px] flex-wrap transition-colors duration-[120ms] ${confirming ? (danger ? "bg-red-tint" : "bg-bg2") : ""}`}
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="line-clamp-2 wrap-anywhere" title={label}>
+          {label}
+        </span>
+        {detail ? <span className="text-caption text-ink2">{detail}</span> : null}
+      </span>
+      {confirming ? (
+        <span className="flex w-full items-center justify-end gap-1.5">
+          <span className="sr-only">{ask}</span>
+          <Button
+            small
+            variant={danger ? "danger" : "default"}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setFailure(null);
+              try {
+                await run();
+                onDone();
+              } catch (error) {
+                // Already gone (the agent got there first): the list catches up.
+                if (error instanceof ApiError && error.status === 404) onDone();
+                else setFailure(errorText(t, error));
+                setConfirming(false);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {confirm}
+          </Button>
+          <Button small variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+            {t("work.keep")}
+          </Button>
+        </span>
+      ) : (
+        <>
+          {aside}
+          {/* Over the row's end on hover or focus, so it takes no room from the text otherwise. */}
+          <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 bg-card pl-1 opacity-0 shadow-[-14px_0_10px_-2px_var(--color-card)] transition-opacity duration-[120ms] group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:static [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100 [@media(hover:none)]:shadow-none">
+            <Button
+              ref={actionButton}
+              small
+              variant="ghost"
+              aria-label={actionLabel}
+              onClick={() => setConfirming(true)}
+            >
+              {action}
+            </Button>
+          </span>
+        </>
+      )}
+      {failure ? <p className="w-full text-caption text-red">{failure}</p> : null}
+    </GroupRow>
   );
 }
 

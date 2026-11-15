@@ -1352,6 +1352,41 @@ export class Mingle {
     runtime.enqueueText(formatReminder(reminder, now, quoted || undefined));
   }
 
+  /**
+   * The owner cancels a reminder from the console (docs/spec.md 4.6). It never fires again, paused
+   * or not, and the agent hears it with its next input so it does not set the reminder again.
+   */
+  cancelReminder(idOrSlug: string, reminderId: string): void {
+    const agent = this.agent(idOrSlug);
+    const reminder = this.store.reminder(agent.id, reminderId);
+    // A one-off that already fired is no longer listed: nothing is left to cancel.
+    if (!reminder || reminder.nextFireAt === null || !this.store.deleteReminder(agent.id, reminderId))
+      throw notFound("reminder", reminderId);
+    this.store.addOwnerNote(
+      agent.id,
+      `[mingle] The owner cancelled reminder ${reminder.id} (${quoteNote(reminder.body)}) in the console. It will not fire again; don't set it again unless asked.`,
+    );
+    this.log(`${agent.name}: owner cancelled reminder ${reminder.id}`);
+  }
+
+  /**
+   * The owner closes an open task from the console (docs/spec.md 4.6). False when it was already
+   * done or closed. The agent hears it with its next input.
+   */
+  closeTask(idOrSlug: string, taskId: string): boolean {
+    const agent = this.agent(idOrSlug);
+    const task = this.store.task(agent.id, taskId);
+    if (!task) throw notFound("task", taskId);
+    if (task.status === "done" || task.status === "closed") return false;
+    this.store.setTaskStatus(agent.id, task.id, "closed");
+    this.store.addOwnerNote(
+      agent.id,
+      `[mingle] The owner closed task ${task.id} (${quoteNote(task.title)}) in the console. Stop working on it.`,
+    );
+    this.log(`${agent.name}: owner closed task ${task.id}`);
+    return true;
+  }
+
   // --------------------------------------------------------------------- cli
 
   private writeCliWrapper(): void {
@@ -1375,4 +1410,10 @@ function imageType(bytes: Uint8Array): "png" | "jpg" | "webp" | undefined {
   if (starts([0xff, 0xd8, 0xff])) return "jpg";
   if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "webp";
   return undefined;
+}
+
+/** A reminder or task in an owner note: one line, short enough to recognise. */
+function quoteNote(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return JSON.stringify(line.length > 80 ? `${line.slice(0, 79)}…` : line);
 }

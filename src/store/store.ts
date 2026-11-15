@@ -996,6 +996,29 @@ export class Store {
   deleteReminder(agentId: string, id: string): boolean {
     return this.db.prepare("DELETE FROM reminders WHERE id = ? AND agent_id = ?").run(id, agentId).changes > 0;
   }
+
+  // ------------------------------------------------------------- owner notes
+
+  /** Something the owner changed for the agent, told with its next input (docs/spec.md 4.6). */
+  addOwnerNote(agentId: string, body: string): void {
+    this.db
+      .prepare("INSERT INTO owner_notes (agent_id, body, created_at) VALUES (?, ?, ?)")
+      .run(agentId, body, this.now());
+  }
+
+  /** The notes not yet told, oldest first. */
+  ownerNotes(agentId: string): { id: number; body: string }[] {
+    const rows = this.db
+      .prepare("SELECT id, body FROM owner_notes WHERE agent_id = ? ORDER BY id")
+      .all(agentId) as Row[];
+    return rows.map((r) => ({ id: Number(r.id), body: String(r.body) }));
+  }
+
+  /** The agent was told these. */
+  deleteOwnerNotes(agentId: string, ids: readonly number[]): void {
+    const remove = this.db.prepare("DELETE FROM owner_notes WHERE id = ? AND agent_id = ?");
+    for (const id of ids) remove.run(id, agentId);
+  }
 }
 
 const str = (v: SQLInputValue | undefined): string | null => (v === null || v === undefined ? null : String(v));
