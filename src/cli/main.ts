@@ -4,7 +4,9 @@ import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, writeFileS
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { tailLog } from "../core/logs.ts";
 import { resolvePaths } from "../core/paths.ts";
+import { desktopLogFile } from "../platform/logs.ts";
 import { VERSION } from "../version.ts";
 
 /**
@@ -53,6 +55,9 @@ const OPTIONS = {
   "stop-on-stdin-close": { type: "boolean" },
   "login-shell-env": { type: "boolean" },
   port: { type: "string" },
+  agent: { type: "string" },
+  lines: { type: "string" },
+  prompt: { type: "boolean" },
 } as const;
 
 type Flags = ReturnType<typeof parse>["values"];
@@ -634,11 +639,15 @@ async function adminCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "agent diagnostics": {
-      const id = need(args[0], "agent_required", "usage: mingle agent diagnostics <agent>");
-      const result = await adminClient()<{ text: string }>("GET", `/v1/admin/agents/${id}/diagnostics`);
+      const id = need(args[0], "agent_required", "usage: mingle agent diagnostics <agent> [--prompt]");
+      const path = `/v1/admin/agents/${id}/${flags.prompt ? "diagnosis-prompt" : "diagnostics"}`;
+      const result = await adminClient()<{ text: string }>("GET", path);
       print(result, () => result.text.trimEnd());
       return true;
     }
+    case "log":
+      await showLog(flags);
+      return true;
     case "agent delete": {
       const id = need(args[0], "agent_required", "usage: mingle agent delete <agent> [--remove-home]");
       await adminClient()("DELETE", `/v1/admin/agents/${id}${flags["remove-home"] ? "?removeHome=1" : ""}`);
@@ -684,6 +693,48 @@ function agentLine(a: AgentView): string {
     `${a.name} (${a.slug})  ${a.harness}  ${a.status}${a.statusDetail ? `: ${a.statusDetail}` : ""}`,
     ...conns.map((c) => `  ${c}`),
   ].join("\n");
+}
+
+// --------------------------------------------------------------------- log
+
+/**
+ * The tail of Mingle's log, and of the desktop app's log of Mingle's error output (crash traces).
+ * Reads the files directly, so it works when Mingle is not running, which is when it matters most.
+ */
+async function showLog(flags: Flags): Promise<void> {
+  const count = Number(flags.lines ?? 200);
+  if (!Number.isInteger(count) || count < 1) {
+    throw new CliError("invalid_lines", "--lines takes a whole number of lines, e.g. --lines 300");
+  }
+  const terms = flags.agent ? await agentTerms(flags.agent) : [];
+  const file = resolve(resolvePaths().logs, "mingle.log");
+  const lines = tailLog(file, count, terms) ?? [];
+  const desktopFile = desktopLogFile();
+  // Crash traces do not name the agent; show them unfiltered.
+  const desktop = tailLog(desktopFile, count);
+  const about = flags.agent ? ` mentioning ${terms.join(", ")}` : "";
+  print({ file, lines, desktop: desktop?.length ? { file: desktopFile, lines: desktop } : null }, () =>
+    [
+      `# ${file}: last ${lines.length} lines${about}`,
+      ...(lines.length ? lines : ["(nothing)"]),
+      ...(desktop?.length
+        ? ["", `# ${desktopFile} (desktop app, Mingle's error output): last ${desktop.length} lines`, ...desktop]
+        : []),
+    ].join("\n"),
+  );
+}
+
+/**
+ * What the log calls an agent: its ID, name and slug, and its connections' IDs. Without a running
+ * Mingle to ask, the given text alone.
+ */
+async function agentTerms(agent: string): Promise<string[]> {
+  try {
+    const status = await adminClient()<{ agents: AgentView[] }>("GET", "/v1/admin/status");
+    const found = status.agents.find((a) => a.id === agent || a.slug === agent || a.name === agent);
+    if (found) return [...new Set([found.id, found.name, found.slug, ...found.connections.map((c) => c.id)])];
+  } catch {}
+  return [agent];
 }
 
 // ------------------------------------------------------------------- start
@@ -814,7 +865,11 @@ For the owner:
   mingle agent pause <agent>               stop it and take no messages until resumed
   mingle agent resume <agent>              take messages again
   mingle agent reset <agent>               start it over in a new session; memory and files stay
-  mingle agent diagnostics <agent>         versions, brain, session and status, to share when asking for help
+  mingle agent diagnostics <agent> [--prompt]
+                                           versions, brain, session and status; --prompt wraps them in a
+                                           prompt for a local agent to find the cause and file a GitHub issue
+  mingle log [--agent <agent>] [--lines 200]
+                                           the end of Mingle's log, optionally only what mentions an agent
   mingle agent delete <agent> [--remove-home]
   mingle handoff <agent>                   hand it what another conversation knows, on standard input
   mingle handoff prompt <agent>            the prompt to give that conversation
