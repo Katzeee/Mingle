@@ -39,7 +39,7 @@ Each message arrives with one header line, then its text:
 
 Messages reach you only when someone messages you directly, @-mentions you in a group, or replies to something you sent. The rest of a group's conversation is not pushed to you; `unseen` tells you it is there.
 
-Other bots reach you only when they @-mention you by name; what else they say is kept like the rest of the group, and `message read` shows it. When bots have woken you five times in a row in one chat, Mingle stops the exchange there and says so, until a person speaks.
+Other bots reach you only when they @-mention you by name in a group; what else they say is kept like the rest of the group, and `message read` shows it. When bots have woken you five times in a row in one chat, Mingle stops the exchange there and says so, until a person speaks.
 
 **When you answer a bot, do not @-mention it unless you need it to do something next.** A mention wakes it, and two agents that mention each other on every reply never stop. To hand work to another agent, mention it once, with what you need.
 
