@@ -292,7 +292,7 @@ export async function reviewInteractions({
     await send("Page.addScriptToEvaluateOnNewDocument", { source: INSTALL_MOCK });
 
     // Run a function in the page; page errors and timeouts are real failures.
-    const prelude = `const connTriggers=(more)=>[...document.querySelectorAll("button[aria-label]")].filter((b)=>b.getAttribute("aria-label")===more&&!b.closest("header")&&!b.closest("aside"));const brainRow=(name)=>{const el=[...document.querySelectorAll("span.font-medium")].find((s)=>s.textContent.trim()===name);return el?el.closest(".divide-y > *"):null;};`;
+    const prelude = `const connTriggers=(more)=>[...document.querySelectorAll("button[aria-label]")].filter((b)=>b.getAttribute("aria-label")===more&&!b.closest("header")&&!b.closest("aside")&&b.closest('[id^="connection-"]'));const brainRow=(name)=>{const el=[...document.querySelectorAll("span.font-medium")].find((s)=>s.textContent.trim()===name);return el?el.closest(".divide-y > *"):null;};`;
     const call = async (fn, ...args) => {
       const { result, exceptionDetails } = await send("Runtime.evaluate", {
         expression: `(()=>{${prelude}return (${fn.toString()})(${args.map((a) => JSON.stringify(a)).join(",")})})()`,
@@ -352,6 +352,8 @@ export async function reviewInteractions({
       if (!root) return null;
       const el = [...root.querySelectorAll(tag)].find((b) => b.textContent.trim() === wanted);
       if (!el) return null;
+      // A long "Needs you" can push it below the fold: a click there would land on nothing.
+      el.scrollIntoView({ block: "nearest" });
       const r = el.getBoundingClientRect();
       if (!r.width || !r.height) return null;
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
@@ -786,6 +788,7 @@ export async function reviewInteractions({
               const rows = [...(section?.querySelectorAll(".divide-y > button") ?? [])];
               const row = rows.at(-1);
               if (!row) return null;
+              row.scrollIntoView({ block: "nearest" });
               const r = row.getBoundingClientRect();
               return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2, count: rows.length } : null;
             },
