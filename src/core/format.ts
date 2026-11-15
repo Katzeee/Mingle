@@ -38,6 +38,8 @@ export function formatMessage(
     const name = contactName(opts.contact) ?? (message.senderName !== message.senderId ? message.senderName : null);
     if (name) parts.push(`from=${quote(name)}`);
     if (opts.contact) parts.push(`user=${opts.contact.id}`);
+    // One person across chat apps: `mingle contact info` has their other accounts and the note.
+    if (opts.contact?.personId) parts.push(`person=${opts.contact.personId}`);
     if (opts.ownerId && message.senderId === opts.ownerId) parts.push("owner");
     else if (opts.contact?.isBot) parts.push("bot");
   }

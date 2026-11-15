@@ -12,6 +12,7 @@ import { excerpt, renderMessage } from "../core/format.ts";
 import { readRole } from "../core/home.ts";
 import { renderManual } from "../core/manual.ts";
 import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
+import * as people from "../core/people.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
 import {
@@ -181,18 +182,46 @@ export function createApi(mingle: Mingle): Hono<Env> {
     alias: k.alias,
     owner: k.owner,
     bot: k.isBot && !k.owner,
+    person: k.personId,
+    linkedBy: k.linkedBy,
   });
 
   app.get("/v1/agent/contacts", (c) => c.json(store.agentContacts(c.get("agent").id).map(contactView)));
 
+  app.get("/v1/agent/contacts/:id", (c) => c.json(people.info(store, c.get("agent").id, c.req.param("id"))));
+
+  /** Name a contact, or the person it belongs to (every account of theirs shows the name). */
   app.patch("/v1/agent/contacts/:id", async (c) => {
     const agent = c.get("agent");
     const id = c.req.param("id");
-    if (!store.agentContact(agent.id, id)) throw notFound("contact", id);
     const body = await c.req.json<{ name?: unknown }>();
-    store.setContactAlias(id, contactAlias(body.name));
-    const updated = store.agentContacts(agent.id).find((k) => k.id === id);
-    return c.json(updated && contactView(updated));
+    people.rename(store, agent.id, id, contactAlias(body.name));
+    const { person, accounts } = people.resolve(store, agent.id, id);
+    return c.json({ id, name: person?.name ?? contactName(accounts[0]) });
+  });
+
+  app.post("/v1/agent/contacts/link", async (c) => {
+    const agent = c.get("agent");
+    const body = await c.req.json<{ ids?: unknown }>();
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
+    const person = people.link(store, agent.id, ids, "agent");
+    return c.json(people.info(store, agent.id, person.id));
+  });
+
+  app.post("/v1/agent/contacts/:id/unlink", (c) => {
+    const agent = c.get("agent");
+    people.unlink(store, agent.id, c.req.param("id"), "agent");
+    return c.json({ ok: true });
+  });
+
+  app.put("/v1/agent/contacts/:id/note", async (c) => {
+    const agent = c.get("agent");
+    const body = await c.req.json<{ note?: unknown }>();
+    if (body.note !== null && typeof body.note !== "string") {
+      throw new MingleError("note_invalid", "pass the note on standard input, or --clear to remove it");
+    }
+    const person = people.writeNote(store, agent.id, c.req.param("id"), body.note);
+    return c.json({ person: person?.id ?? null, note: person?.note ?? null });
   });
 
   app.get("/v1/agent/chats/:id/messages", (c) => {
@@ -392,13 +421,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
    * Connections whose owner is not the only one on that platform: two WeChat accounts scanned by two
    * people, say. There "you" would be two people, so the console names them instead.
    */
-  const sharedOwners = (connections: readonly Connection[]): Set<string> =>
-    new Set(
+  const sharedOwners = (connections: readonly Connection[]): Set<string> => {
+    // Owners the owner linked as one person in the console are one human, whatever their IDs.
+    const who = (n: Connection) => {
+      const k = n.ownerId ? store.contactByPlatformId(n.id, n.ownerId) : undefined;
+      return k?.personId && k.linkedBy === "owner" ? `p:${k.personId}` : `u:${n.ownerId}`;
+    };
+    return new Set(
       connections
         .filter((n) => n.ownerId)
-        .filter((n) => connections.some((o) => o.platform === n.platform && o.ownerId && o.ownerId !== n.ownerId))
+        .filter((n) => connections.some((o) => o.platform === n.platform && o.ownerId && who(o) !== who(n)))
         .map((n) => n.id),
     );
+  };
 
   /** Who owns this bot, as the console names them. */
   const ownerContact = (connectionId: string, ownerId: string | null) => {
@@ -578,16 +613,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
   });
 
   /**
-   * The owner edits someone in the agent's address book: `name` names them (empty clears it), `bot`
-   * marks an account that is a bot though the platform does not say so (docs/spec.md 4.2). Fields
-   * left out stay as they are.
+   * The owner edits someone in the agent's address book: `name` names them, or the person they are
+   * linked to (empty clears it); `note` writes the person's note; `bot` marks an account that is a
+   * bot though the platform does not say so (docs/spec.md 4.2). Fields left out stay as they are.
    */
   app.patch("/v1/admin/agents/:id/contacts/:contactId", async (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const id = c.req.param("contactId");
     const found = store.agentContact(agent.id, id);
     if (!found) throw notFound("contact", id);
-    const body = await c.req.json<{ name?: unknown; bot?: unknown }>();
+    const body = await c.req.json<{ name?: unknown; bot?: unknown; note?: unknown }>();
+    if (body.note !== undefined && body.note !== null && typeof body.note !== "string") {
+      throw new MingleError("note_invalid", "pass the note as text");
+    }
     if (body.bot !== undefined && typeof body.bot !== "boolean") {
       throw new MingleError("bot_invalid", "pass bot as true or false");
     }
@@ -595,10 +633,85 @@ export function createApi(mingle: Mingle): Hono<Env> {
       throw new MingleError("contact_is_owner", "the owner is a person; their messages always reach the agent", 409);
     }
     const name = "name" in body ? contactAlias(body.name) : undefined;
-    if (name !== undefined) store.setContactAlias(id, name);
+    if (name !== undefined) store.nameContact(id, name);
     if (typeof body.bot === "boolean") store.setContactBot(id, body.bot);
+    // A note sits on the person; an account on its own gets one to hold it.
+    if (body.note !== undefined) people.writeNote(store, agent.id, id, (body.note as string | null) || null);
     const contact = store.contact(id);
     return c.json({ id, name: contactName(contact), bot: contact?.isBot ?? false });
+  });
+
+  /**
+   * The agent's address book for the console: people with their accounts, and accounts on their
+   * own, most recently active first (docs/spec.md 4.2).
+   */
+  app.get("/v1/admin/agents/:id/contacts", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const shared = sharedOwners(store.connections(agent.id));
+    const all = store.agentContacts(agent.id);
+    const account = (k: (typeof all)[number]) => ({
+      id: k.id,
+      platform: k.platform,
+      name: k.alias ?? k.name,
+      platformName: k.name,
+      owner: k.owner,
+      ownerShared: k.owner && shared.has(k.connectionId),
+      bot: k.isBot && !k.owner,
+      linkedBy: k.linkedBy,
+    });
+    const byPerson = new Map(store.agentPeople(agent.id).map((p) => [p.id, p]));
+    const seen = new Set<string>();
+    const entries: unknown[] = [];
+    for (const k of all) {
+      if (!k.personId) {
+        entries.push({ person: null, name: contactName(k), note: null, accounts: [account(k)] });
+        continue;
+      }
+      if (seen.has(k.personId)) continue;
+      seen.add(k.personId);
+      const person = byPerson.get(k.personId);
+      const members = all.filter((m) => m.personId === k.personId);
+      entries.push({
+        person: k.personId,
+        name: person?.name ?? null,
+        note: person?.note ?? null,
+        accounts: members.map(account),
+      });
+    }
+    return c.json(entries);
+  });
+
+  /** The owner says these accounts are one person. Their links can carry permissions later; the agent's cannot. */
+  app.post("/v1/admin/agents/:id/people/link", async (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const body = await c.req.json<{ contacts?: unknown }>();
+    const ids = Array.isArray(body.contacts) ? body.contacts.filter((x): x is string => typeof x === "string") : [];
+    const person = people.link(store, agent.id, ids, "owner");
+    return c.json({ person: person.id });
+  });
+
+  app.post("/v1/admin/agents/:id/people/unlink", async (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const body = await c.req.json<{ contact?: unknown }>();
+    if (typeof body.contact !== "string") throw new MingleError("contact_required", "pass the contact to unlink");
+    people.unlink(store, agent.id, body.contact, "owner");
+    return c.json({ ok: true });
+  });
+
+  /** The owner names a person or writes their note. Fields left out stay as they are; empty clears. */
+  app.put("/v1/admin/agents/:id/people/:personId", async (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const id = c.req.param("personId");
+    if (!store.agentPerson(agent.id, id)) throw notFound("contact", id);
+    const body = await c.req.json<{ name?: unknown; note?: unknown }>();
+    if ("name" in body) store.updatePerson(id, { name: contactAlias(body.name) });
+    if ("note" in body) {
+      if (body.note !== null && typeof body.note !== "string")
+        throw new MingleError("note_invalid", "pass the note as text");
+      people.writeNote(store, agent.id, id, body.note);
+    }
+    const person = store.person(id);
+    return c.json({ person: id, name: person?.name ?? null, note: person?.note ?? null });
   });
 
   app.get("/v1/admin/agents/:id/work", (c) => {

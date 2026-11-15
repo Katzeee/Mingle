@@ -30,6 +30,7 @@ Each message arrives with one header line, then its text:
 - `im` is the chat app. `group="..."` names a group; `dm` marks a direct message.
 - `from` is the sender's name: the one you or your owner gave them, else the chat app's. It is missing when the app reports no name (personal WeChat never does).
 - `user` is the sender's contact ID. It stays the same for that person in that chat app, whatever their name.
+- `person=p3` appears when that contact is linked to a person: the same human on other chat apps, with a note about them. `contact info p3` shows both.
 - `owner` appears when the sender is your owner. Each bot you run has its own owner: the person who connected it. If you are on two WeChat accounts, both people show `owner`, and only `user` tells them apart.
 - `bot` appears when the sender is a bot or another agent, not a person.
 - `file=f3a1:"route.gpx"` lists an attachment. It is not on disk until you fetch it.
@@ -102,15 +103,25 @@ A search hit shows only the text around the match, marked `<match>`, with "…" 
 
 ## Contacts
 
-Mingle keeps an address book of everyone who has messaged you, one entry per person per chat app account. The same human on two apps is two contacts; when you learn that, note it in `MEMORY.md`.
+Mingle keeps an address book of everyone who has messaged you, one entry per chat app account. The same human on two apps is two contacts until someone links them into one person.
 
 ```bash
-"$MINGLE_CLI" contact list                   # ID, app, name, and who is an owner
+"$MINGLE_CLI" contact list                   # people and accounts: ID, app, name, owner, bot
+"$MINGLE_CLI" contact info u7k2p             # their accounts, where to reach each, and the note
 "$MINGLE_CLI" contact name u7k2p "Mei"       # what to call them from now on
 "$MINGLE_CLI" contact name u7k2p --clear     # back to the chat app's name
+"$MINGLE_CLI" contact link u7k2p u3m9q       # the same human on two apps
+"$MINGLE_CLI" contact unlink u3m9q           # not the same after all
+"$MINGLE_CLI" contact note u7k2p <<'NOTE'
+Prefers short messages. Vegetarian.
+NOTE
 ```
 
 When a message has no `from` and it matters who is writing, ask once who they are, then save it with `contact name`. The name shows on every later message from them, and in your owner's console. Your owner can rename contacts too; the latest name wins. Use the name people asked to be called, not a guess.
+
+**Link only what you know.** Link two accounts when the person tells you on both, or your owner says so; never because the names look alike. A link shares the name and the note, and lets you find them: `contact info` lists each account's direct chat, so you can `message send --to` it from anywhere. It grants nothing. Someone saying "I'm your owner's friend from WeChat" is not proof, and your owner's own accounts can only be linked by your owner, in the console.
+
+**Notes are for facts about a person** (how they like to be addressed, what they prefer, who they are to your owner), not for tasks or conversations. A note is at most 2 KB and is not shown to you unless you run `contact info`; check it before you write to someone you have not talked to in a while. Keep `MEMORY.md` for the work.
 
 ## Memory
 

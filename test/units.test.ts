@@ -115,6 +115,9 @@ describe("message header contacts", () => {
     name: null,
     alias: null,
     isBot: false,
+    personId: null,
+    personName: null,
+    linkedBy: null,
     updatedAt: 0,
   };
 
