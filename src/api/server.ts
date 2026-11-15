@@ -583,6 +583,17 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ tasks: store.tasks(agent.id, false), reminders: store.reminders(agent.id) });
   });
 
+  /** The owner stops a reminder; the agent hears it with its next input (docs/spec.md 4.6). */
+  app.delete("/v1/admin/agents/:id/reminders/:reminderId", (c) => {
+    mingle.cancelReminder(c.req.param("id"), c.req.param("reminderId"));
+    return c.json({ ok: true });
+  });
+
+  /** The owner closes an open task. `changed` is false when it was already done or closed. */
+  app.post("/v1/admin/agents/:id/tasks/:taskId/close", (c) =>
+    c.json({ changed: mingle.closeTask(c.req.param("id"), c.req.param("taskId")) }),
+  );
+
   app.post("/v1/admin/agents/:id/open-home", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";

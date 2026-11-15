@@ -389,7 +389,10 @@ export class AgentRuntime {
       this.coldTurn = undefined;
       return;
     }
-    const input = context ? `${context}\n\n${text}` : text;
+    // What the owner changed from the console rides along; it never starts a turn of its own.
+    const notes = this.deps.store.ownerNotes(this.agentId);
+    const told = notes.length > 0 ? `${notes.map((n) => n.body).join("\n")}\n\n${text}` : text;
+    const input = context ? `${context}\n\n${told}` : told;
     let result: Awaited<ReturnType<HarnessSession["deliver"]>>;
     try {
       result = await session.deliver(input, inputId);
@@ -402,6 +405,10 @@ export class AgentRuntime {
       this.lose(batch, error);
       throw error;
     }
+    this.deps.store.deleteOwnerNotes(
+      this.agentId,
+      notes.map((n) => n.id),
+    );
     this.deps.log?.(`${this.agentId}: delivered ${messageIds.join(",") || "note"} (${result.outcome})`);
   }
 

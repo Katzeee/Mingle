@@ -277,6 +277,11 @@ export const api = {
     call<{ id: string; name: string | null }>("PATCH", `/v1/admin/agents/${id}/contacts/${contactId}`, { name }),
   activity: (id: string) => call<Activity[]>("GET", `/v1/admin/agents/${id}/activity?limit=30`),
   work: (id: string) => call<{ tasks: Task[]; reminders: Reminder[] }>("GET", `/v1/admin/agents/${id}/work`),
+  /** Stop a reminder for good; the agent hears it with its next input. */
+  cancelReminder: (id: string, reminderId: string) => call("DELETE", `/v1/admin/agents/${id}/reminders/${reminderId}`),
+  /** Close an open task; the agent hears it with its next input. */
+  closeTask: (id: string, taskId: string) =>
+    call<{ changed: boolean }>("POST", `/v1/admin/agents/${id}/tasks/${taskId}/close`),
   connect: (id: string, platform: Platform, credentials: Record<string, string>) =>
     call<{ id: string; bot: string | null }>("POST", `/v1/admin/agents/${id}/connections`, { platform, credentials }),
   disconnect: (connectionId: string) => call("DELETE", `/v1/admin/connections/${connectionId}`),

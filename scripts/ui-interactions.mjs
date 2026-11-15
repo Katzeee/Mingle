@@ -36,6 +36,10 @@ const LOCALES = {
     envAdd: "Add",
     activity: "Activity",
     pause: "Pause",
+    closeTask: "Close task: ",
+    closeTaskYes: "Close task",
+    cancelReminder: "Cancel reminder: ",
+    cancelReminderYes: "Cancel reminder",
     reset: "Reset",
     resetAsk: "Reset ",
     resetDone: "session has been cleared",
@@ -85,6 +89,10 @@ const LOCALES = {
     envAdd: "添加",
     activity: "动态",
     pause: "暂停",
+    closeTask: "关闭任务：",
+    closeTaskYes: "关闭任务",
+    cancelReminder: "取消提醒：",
+    cancelReminderYes: "取消提醒",
     reset: "重置",
     resetAsk: "重置 ",
     resetDone: "的会话已清除",
@@ -1009,6 +1017,78 @@ export async function reviewInteractions({
         console.log(`pause ${localeName} ${width}: passed`);
       }
     }
+
+    // --- the owner closes a task and cancels a reminder, here on a paused agent (MING-75) ---
+    const workScenario = async (localeName, labels, width, task, reminder) => {
+      const tag = `work ${localeName} ${width}`;
+      const auth = { headers: { authorization: `Bearer ${token}` } };
+      await fetch(`${url}/v1/admin/agents/${pauseSlug}/pause`, { ...auth, method: "POST" });
+      await metrics(width);
+      await goto(`/a/${pauseSlug}`, labels);
+      // The visible copy of the list: the side panel when wide, the main column when narrow.
+      const rowAt = (label) => {
+        const el = [...document.querySelectorAll("span[title]")].find((s) => s.title === label && s.offsetParent);
+        const row = el?.closest(".group");
+        if (!row) return null;
+        row.scrollIntoView({ block: "center" });
+        const r = row.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      };
+      const actionAt = (aria) => {
+        const el = [...document.querySelectorAll("button[aria-label]")].find(
+          (b) => b.getAttribute("aria-label") === aria && b.offsetParent,
+        );
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, shown: getComputedStyle(el.parentElement).opacity };
+      };
+      const gone = (label) => ![...document.querySelectorAll("span[title]")].some((s) => s.title === label);
+      for (const [kind, label, aria, yes] of [
+        ["task", task, labels.closeTask + task, labels.closeTaskYes],
+        ["reminder", reminder, labels.cancelReminder + reminder, labels.cancelReminderYes],
+      ]) {
+        // Quiet until hovered.
+        const row = await settled(`${kind} row`, rowAt, label);
+        assert((await call(actionAt, aria))?.shown === "0", `${tag}: ${kind} action shows before hover`);
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: row.x, y: row.y });
+        await until(
+          `${kind} action on hover`,
+          (a) => {
+            const b = [...document.querySelectorAll("button[aria-label]")].find(
+              (x) => x.getAttribute("aria-label") === a && x.offsetParent,
+            );
+            return b && getComputedStyle(b.parentElement).opacity === "1";
+          },
+          aria,
+        );
+        await shot(`${localeName}-${width}-${kind}-hover`);
+        await clickEl(await call(actionAt, aria));
+        await until(`${kind} confirm`, buttonByText, yes);
+        assert(await call(pageFits), `${tag}: horizontal overflow while confirming`);
+        await shot(`${localeName}-${width}-${kind}-confirm`);
+        await clickEl(await call(buttonByText, yes));
+        await until(`${kind} gone`, gone, label);
+      }
+      await send("Page.reload");
+      await until("app ready after reload", () => !!document.querySelector('header [role="radiogroup"]'));
+      await until(
+        "work loaded",
+        (l) => [...document.querySelectorAll("span[title]")].some((s) => s.title === l),
+        labels.storage === "en" ? "Ask about the cable car" : "确认缆车末班时间",
+      );
+      assert(await call(gone, task), `${tag}: task back after reload`);
+      assert(await call(gone, reminder), `${tag}: reminder back after reload`);
+      const work = await (await fetch(`${url}/v1/admin/agents/${pauseSlug}/work`, auth)).json();
+      assert(!work.tasks.some((t) => t.title === task), `${tag}: API still lists the task`);
+      assert(!work.reminders.some((r) => r.body === reminder), `${tag}: API still lists the reminder`);
+      await fetch(`${url}/v1/admin/agents/${pauseSlug}/resume`, { ...auth, method: "POST" });
+    };
+    await workScenario("en-US", LOCALES["en-US"], 1440, "Draft the packing list", "Post the daily summary");
+    passed++;
+    console.log("work en-US 1440: passed");
+    await workScenario("zh-CN", LOCALES["zh-CN"], 560, "整理装备清单，周四前发到群里", "每天 9 点在群里发昨日总结");
+    passed++;
+    console.log("work zh-CN 560: passed");
 
     // --- reset session (asked in place) and diagnostic info (MING-61) ---
     const resetScenario = async (localeName, labels, width) => {

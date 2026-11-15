@@ -203,6 +203,32 @@ try {
     now + 86_400_000,
     now,
   );
+  // Nova's tasks and reminders are closed and cancelled by the interaction checks, one per run.
+  for (const [i, title] of [
+    "Draft the packing list",
+    "整理装备清单，周四前发到群里",
+    "Ask about the cable car",
+    "确认缆车末班时间",
+  ].entries()) {
+    insert(
+      "INSERT INTO tasks (id, agent_id, title, status, created_at, updated_at) VALUES (?, ?, ?, 'todo', ?, ?)",
+      `tw${i + 1}`,
+      pauseAgent.id,
+      title,
+      now + i,
+      now + i,
+    );
+    insert(
+      "INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, created_at) VALUES (?, ?, ?, 'daily@09:00', 'Asia/Shanghai', ?, ?)",
+      `rw${i + 1}`,
+      pauseAgent.id,
+      ["Post the daily summary", "每天 9 点在群里发昨日总结", "Check the weekend forecast", "周五晚上看一下周末天气"][
+        i
+      ],
+      now + (i + 1) * 3_600_000,
+      now,
+    );
+  }
   // A recurring one that has fired: the list shows when, quietly, after the next time.
   insert(
     "INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, last_fired_at, created_at) VALUES ('r2', ?, 'Post the morning summary of new trail reports and the weekend forecast', 'daily@09:00', 'Asia/Shanghai', ?, ?, ?)",
