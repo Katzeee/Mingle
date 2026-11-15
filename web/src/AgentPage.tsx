@@ -740,7 +740,7 @@ function AccessRequestItem({
       </p>
       <p className="selectable mt-1 line-clamp-3 wrap-anywhere text-ink">
         {request.kind === "group" && request.sender ? (
-          <span className="text-ink2">{t("needs.groupSender", { name: request.sender })} </span>
+          <span className="text-ink2">{t("needs.groupSender", { name: request.sender })}</span>
         ) : null}
         {request.preview}
       </p>

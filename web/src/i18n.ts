@@ -411,7 +411,7 @@ const en = {
   "needs.groupRequest": "{agent} was added to {name}",
   "needs.groupRequestUnnamed": "{agent} was added to a group",
   "needs.someone": "Someone",
-  "needs.groupSender": "{name}:",
+  "needs.groupSender": "{name}: ",
   "needs.more": "and {count} more",
   "needs.dmRequestBody": "If you allow them, they can have {agent} act on this computer.",
   "needs.groupRequestBody": "If you allow the group, anyone in it can have {agent} act on this computer.",
