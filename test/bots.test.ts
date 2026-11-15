@@ -21,6 +21,8 @@ describe("trigger rules", () => {
     // A reply to the agent, or a direct message, is not a handoff.
     expect(trigger({ ...bot, addressed: true })).toBe("background");
     expect(trigger({ ...bot, dm: true })).toBe("background");
+    // Writing its name in a direct message is not a handoff either, on any platform.
+    expect(trigger({ ...bot, dm: true, mentioned: true })).toBe("background");
     expect(trigger({ ...bot, addressed: true, mentioned: true })).toBe("wake");
     expect(trigger({ ...bot, mentioned: true, hops: MAX_BOT_HOPS - 1 })).toBe("wake");
     expect(trigger({ ...bot, mentioned: true, hops: MAX_BOT_HOPS })).toBe("brake");

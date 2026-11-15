@@ -304,9 +304,6 @@ export const api = {
     call<{ ignored: string[] }>("POST", `/v1/admin/agents/${id}/messages/ignore`, { ids }),
   remove: (id: string) => call("DELETE", `/v1/admin/agents/${id}`),
   openHome: (id: string) => call("POST", `/v1/admin/agents/${id}/open-home`),
-  /** Name someone in the agent's address book; an empty name clears it. */
-  nameContact: (id: string, contactId: string, name: string) =>
-    call<{ id: string; name: string | null }>("PATCH", `/v1/admin/agents/${id}/contacts/${contactId}`, { name }),
   contacts: (id: string) => call<ContactEntry[]>("GET", `/v1/admin/agents/${id}/contacts`),
   /** Name, note (on the person) or bot mark; fields left out stay. */
   editContact: (id: string, contactId: string, patch: { name?: string; note?: string; bot?: boolean }) =>
