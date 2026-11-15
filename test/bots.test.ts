@@ -132,7 +132,14 @@ describe("bots in a chat", () => {
     expect(connection?.ownerId).toBeNull();
     expect(mingle.store.contactByPlatformId(connection?.id as string, "bot1")?.isBot).toBe(true);
 
-    // The owner marks an account the platform does not flag; the owner cannot be marked.
+    // The owner claims the bot with its code (docs/spec.md 4.7), then marks an account the platform
+    // does not flag; the owner cannot be marked.
+    channel.receive({
+      text: connection?.claimCode as string,
+      chat: { platformId: "me", kind: "dm" },
+      sender: { id: "me", name: "Me", isBot: false },
+    });
+    await until(() => mingle.store.connection(connection?.id as string)?.ownerId === "me");
     channel.receive({
       text: "hello",
       chat: { platformId: "me", kind: "dm" },
