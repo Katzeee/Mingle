@@ -39,9 +39,9 @@ const en = {
   "agent.resetAsk": "Reset {name}'s session?",
   "agent.reset": "Reset",
   "agent.resetDone": "{name}'s session has been cleared. It will start from its role and memory when it next runs.",
-  "agent.diagnosticsTitle": "Diagnostic info",
+  "agent.diagnosticsTitle": "Diagnose a problem",
   "agent.diagnosticsBody":
-    "Versions, brain, session and status, to share when asking for help. No message text and no keys.",
+    "Give this prompt to Claude Code or Codex on this computer. It reads the logs, finds the cause and, once you agree, reports it on GitHub.",
   "agent.diagnosticsCopy": "Copy",
   "agent.diagnosticsCopied": "Copied",
   "agent.pausedNotice": "{name} is paused.",
@@ -682,8 +682,9 @@ const zh: Record<MessageKey, string> = {
   "agent.resetAsk": "重置 {name} 的会话？",
   "agent.reset": "重置",
   "agent.resetDone": "{name} 的会话已清除，下次运行时会从角色和记忆重新开始。",
-  "agent.diagnosticsTitle": "诊断信息",
-  "agent.diagnosticsBody": "版本、大脑、会话和状态，求助时贴给对方。不含消息内容和密钥。",
+  "agent.diagnosticsTitle": "诊断问题",
+  "agent.diagnosticsBody":
+    "把这段提示词交给这台电脑上的 Claude Code 或 Codex。它会查日志、找出原因，经你同意后提交到 GitHub。",
   "agent.diagnosticsCopy": "复制",
   "agent.diagnosticsCopied": "已复制",
   "agent.pausedNotice": "{name} 已暂停。",

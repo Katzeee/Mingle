@@ -341,7 +341,7 @@ export const api = {
   /** Start over in a new harness session; home, memory and messages stay. */
   resetSession: (id: string) => call<{ ok: true }>("POST", `/v1/admin/agents/${id}/reset`),
   /** Plain text to share when asking for help: versions, brain, session, status. */
-  diagnostics: (id: string) => call<{ text: string }>("GET", `/v1/admin/agents/${id}/diagnostics`),
+  diagnosisPrompt: (id: string) => call<{ text: string }>("GET", `/v1/admin/agents/${id}/diagnosis-prompt`),
   /** Try again on failed or unanswered messages: these, or all of them. */
   retry: (id: string, ids?: string[]) =>
     call<{ retried: string[]; offline: string[] }>("POST", `/v1/admin/agents/${id}/messages/retry`, ids ? { ids } : {}),

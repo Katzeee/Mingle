@@ -1677,7 +1677,10 @@ function ResetRow({ agent, busy, disabled }: { agent: AgentView; busy: boolean; 
   );
 }
 
-/** Copy what someone helping needs. Where copying fails, the text shows in place to select by hand. */
+/**
+ * Copy a prompt for a local agent (Claude Code, Codex) to find why this agent misbehaves and, once the
+ * owner agrees, file it on GitHub. Where copying fails, the text shows in place to select by hand.
+ */
 function DiagnosticsRow({ agent }: { agent: AgentView }) {
   const { t } = useI18n();
   const [pending, setPending] = useState(false);
@@ -1701,7 +1704,7 @@ function DiagnosticsRow({ agent }: { agent: AgentView }) {
         onClick={async () => {
           setPending(true);
           try {
-            const { text } = await api.diagnostics(agent.id);
+            const { text } = await api.diagnosisPrompt(agent.id);
             setState((await copyText(text)) ? { kind: "copied" } : { kind: "manual", text });
           } catch (error) {
             setState({ kind: "error", text: errorText(t, error) });

@@ -408,9 +408,11 @@ stateDiagram-v2
 | 删除 | 断开机器人，删除凭据和环境变量，保留文件夹 | Agent 设置 → 文件夹，原地确认、`mingle agent delete` | 已有 |
 | 修改角色、大脑、环境变量 | 下一条消息起生效，不打断正在做的事 | Agent 设置 | 已有 |
 | 重置会话 | 中止正在做的事，丢下当前 harness 会话，开一个新会话，Agent 从 `ROLE.md` 和 `MEMORY.md` 重新开始。主目录、消息记录、任务、提醒、连接都保留。用于会话卡住、上下文太乱或一再出错 | Agent 设置 → 运行，原地确认、`mingle agent reset` | 新增（MING-61） |
-| 复制诊断信息 | 一段纯文本：时间、Mingle/Node/系统版本、Agent ID、状态和失败类别、大脑及版本、模型、会话 ID、`MEMORY.md` 大小、用的是这台电脑的登录还是自己的凭据、正在进行的额度等待（到何时、恢复时间）、最后一条触发消息和最后一次回复的时间、各连接的平台和状态、最近 7 天各状态的消息数、未完成任务和提醒数。不含消息内容、联系人名字、凭据和环境变量的值 | Agent 设置 → 运行、`mingle agent diagnostics` | 新增（MING-61） |
+| 复制诊断信息 | 一段纯文本：时间、Mingle/Node/系统版本、Agent ID、状态和失败类别、大脑及版本、模型、会话 ID、`MEMORY.md` 大小、用的是这台电脑的登录还是自己的凭据、正在进行的额度等待（到何时、恢复时间）、最后一条触发消息和最后一次回复的时间、各连接的平台和状态、最近 7 天各状态的消息数、未完成任务和提醒数。不含消息内容、联系人名字、凭据和环境变量的值 | `mingle agent diagnostics`，也嵌在"诊断问题"的提示词里 | 新增（MING-61） |
+| 诊断问题 | 一段交给本机 agent（Claude Code、Codex）的提示词，内含上面的诊断信息，让它查日志、对照源码找原因，经 owner 同意后提交 GitHub issue。只诊断和报告，不改代码、设置和数据，不开 PR。见下方"诊断问题" | Agent 设置 → 运行、`mingle agent diagnostics --prompt` | 新增（MING-84） |
+| 查看日志 | `mingle log [--agent <agent>] [--lines 200]`：直接读 `~/.mingle/logs/mingle.log` 的末尾，Mingle 没在运行时也能用；`--agent` 只留提到它的行（按整词匹配 ID、名字、slug 和它的连接 ID；Mingle 没在运行时只按给定的文字匹配）。桌面应用另记的 Mingle 错误输出（Node 的报错和崩溃堆栈，见 9.1）存在时附在后面，不过滤 | `mingle log` | 新增（MING-84） |
 
-**排查顺序（借鉴 Raft 的恢复梯子）**：Agent 不回复时，先看"需要你处理"和状态；能叫停就叫停；仍不行再重置会话（重启 Mingle 等同于重开同一会话）；还不行就复制诊断信息贴给帮忙的人。重置不可撤销（旧会话不会再被恢复），所以在原地确认；Agent 正在工作时说明里多一句"重置会中止这件事"。重置同时作废旧会话的 CLI 授权（它留在后台的工作不能再发消息），旧会话之后再上报的事件一律丢弃，不会改动新会话的工作；已经投递未回复的消息标为"没有回复"，由 owner 在控制台重试或忽略；排队未投递的消息和提醒、系统消息留给新会话，额度等待也保留。暂停中的 Agent 重置只清掉会话 ID，恢复时开新会话。
+**排查顺序（借鉴 Raft 的恢复梯子）**：Agent 不回复时，先看"需要你处理"和状态；能叫停就叫停；仍不行再重置会话（重启 Mingle 等同于重开同一会话）；还不行就在"诊断问题"复制提示词，交给本机的 agent 查明原因并报告到 GitHub。重置不可撤销（旧会话不会再被恢复），所以在原地确认；Agent 正在工作时说明里多一句"重置会中止这件事"。重置同时作废旧会话的 CLI 授权（它留在后台的工作不能再发消息），旧会话之后再上报的事件一律丢弃，不会改动新会话的工作；已经投递未回复的消息标为"没有回复"，由 owner 在控制台重试或忽略；排队未投递的消息和提醒、系统消息留给新会话，额度等待也保留。暂停中的 Agent 重置只清掉会话 ID，恢复时开新会话。
 
 暂不做，等有需求再加：复制 Agent、导出/导入、定时暂停（例如夜间免打扰）、只暂停某一个聊天软件（目前可以移除那个机器人）、IM 里的 `/pause` 命令（IM 里仍只有 `/stop`，4.7）。
 
@@ -428,7 +430,23 @@ stateDiagram-v2
 - **重启**：暂停状态存在 `agents.status = 'paused'`，Mingle 重启后不为它打开会话。
 - **桌面应用**：菜单栏里它的那一行显示"已暂停"，不算在线，不计入"N 个 Agent 在线"，也不为它保持唤醒。
 
-**接口**：`POST /v1/admin/agents/:id/pause`、`POST /v1/admin/agents/:id/resume`，返回 `{ changed }`，已经是目标状态时为 `false`，重复调用没有副作用。CLI：`mingle agent pause <agent>`、`mingle agent resume <agent>`。重置：`POST /v1/admin/agents/:id/reset`，返回 `{ ok: true }`；诊断：`GET /v1/admin/agents/:id/diagnostics`，返回 `{ text }`。
+**接口**：`POST /v1/admin/agents/:id/pause`、`POST /v1/admin/agents/:id/resume`，返回 `{ changed }`，已经是目标状态时为 `false`，重复调用没有副作用。CLI：`mingle agent pause <agent>`、`mingle agent resume <agent>`。重置：`POST /v1/admin/agents/:id/reset`，返回 `{ ok: true }`；诊断：`GET /v1/admin/agents/:id/diagnostics`，返回 `{ text }`。诊断提示词：`GET /v1/admin/agents/:id/diagnosis-prompt`，返回 `{ text }`。
+
+**诊断问题（MING-84）**：Mingle 是开源项目，用户遇到问题时最省事的路径是让本机已有的 agent 去查，而不是让用户自己读日志、写 issue。提示词（`src/core/diagnose.ts`）让 agent 依次：
+
+1. 问 owner 看到了什么，已经说过就跳过。
+2. 跑 `mingle log --agent <id>`、`mingle log --lines 300`、`mingle agent diagnostics`、`mingle status` 收集事实。
+3. 在 `git checkout v<版本>` 的源码里，从 `AGENTS.md`、`docs/spec.md` 和日志行出发定位原因，写明把握多大。原因在 Mingle 之外（harness 登录或额度、聊天软件、本机配置）时告诉 owner 怎么解决，只有 Mingle 本该处理或说明得更好时才提 issue。
+4. 先 `gh issue list` 查重，已有就补评论。
+5. 草稿用英文，去掉消息内容、人和聊天的名字、平台用户和聊天 ID、电话邮箱、token 和密钥、环境变量的值，路径里的主目录换成 `~`。
+6. 把完整草稿给 owner 看，同意后才 `gh issue create`；没有 gh 或没登录时给出草稿和新建 issue 的链接。
+7. 告诉 owner 结论和链接。
+
+不改代码、设置和数据，不开 PR：维护者只收 issue。这不违反"不对外上报"：Mingle 自己不发送任何东西，提交的是 owner 自己的 agent、用 owner 自己的 GitHub 账号，并且经过 owner 确认。
+
+- 控制台"Agent 设置 → 运行"里的"诊断问题"一行复制这段提示词；复制失败时原地显示全文供手动选择。
+- 诊断信息嵌在提示词里，Mingle 之后停了 agent 也有这份快照；日志由 `mingle log` 读文件，不依赖 Mingle 在运行。
+- 命令用 Mingle 的绝对路径（桌面应用的 `mingle` 不一定在 PATH 上），Windows 下写成 PowerShell 的 `& "..."`。
 
 **界面**（视觉见 `DESIGN.md`）
 
@@ -910,6 +928,7 @@ flowchart TD
 - 应用内置 Node.js 24（版本和校验和锁定在 `desktop/scripts/prepare.mjs`）和 Mingle 的构建产物，启动时用它运行 `mingle start --no-open`，进程退出后自动重启，退出应用时先让它正常关闭。核心仍是同一个 Node 进程，桌面壳不碰业务逻辑。
 - 从 Finder 打开的应用拿到的环境很少：`PATH` 找不到用户用 Homebrew、npm 装的 harness，用户在 `~/.zshrc` 里给 harness 配的 API Key、`ANTHROPIC_BASE_URL`、代理也都没有，harness 会表现为"没有登录"。所以应用用 `mingle start --login-shell-env` 启动 Mingle：Mingle 通过 OAR 的 `userShellEnvironment()` 读一次用户登录 shell 的完整环境并采用（`MINGLE_*` 以应用给的为准），内置的 Node.js 放在 `PATH` 最后兜底。读不到时照常启动，日志里只记原因，不记任何变量值。Windows 应用本来就拿到用户环境，不读。
 - 已经有一个 Mingle 在跑（比如在终端里 `mingle start`），应用直接显示它，不另起一个。
+- 日志：Mingle 自己的日志照常写 `~/.mingle/logs/mingle.log`；应用把 Mingle 的标准错误（Node 的报错、崩溃堆栈）另写到系统日志目录的 `mingle.log`（macOS `~/Library/Logs/Mingle/`，其他系统 `os.UserConfigDir()/Mingle/logs/`），标准输出带 admin token，丢弃。菜单的"查看日志"打开后者所在目录，`mingle log` 两份都读（MING-84）。
 - 窗口在控制台能打开之前显示等待页（`desktop/page.go`，2026-11-15，MING-78）：居中的图标、转圈和一句"正在启动…"，跟随系统明暗，整页可拖动窗口；Mingle 退出重启时换成"已停止，正在重新启动…"，下面一行说明一直停在这里时去哪查看日志，不显示内部错误（原因只写日志）。等待页用 `LoadHTML` 放在控制台同一站点的地址下，不用 `data:` URL：mygo 会把 `data:` URL 再编码一次，样式失效；同站点也让打开控制台时不切换网页进程。网页进程崩溃或被系统结束时（mygo `OnRenderProcessGone`），窗口重新打开当时该显示的页面，连续发生时至少间隔 10 秒，不会一直白屏。
 - 选 mygo 而不是原生 SwiftUI 壳：控制台不用写第二套；托盘、登录项、DMG、签名、公证、带签名的增量自动更新都是现成的。代价是依赖一个年轻的单人项目（2026-09 创建，0.9.0），但壳只有约 1600 行 Go，业务逻辑都在 Node 进程里，将来换壳成本低。nsh 的强项是跨移动端原生 UI，不是我们的需求。
 - 自动更新：mygo 的 updater 插件（类 Sparkle 的更新窗口），从本仓库的 GitHub Releases 读带签名的更新清单。签名私钥不在仓库里，在 CI 的 `MYGO_UPDATER_PRIVATE_KEY` secret 中。

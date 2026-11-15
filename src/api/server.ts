@@ -945,6 +945,10 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.get("/v1/admin/agents/:id/diagnostics", async (c) =>
     c.json({ text: await mingle.diagnostics(c.req.param("id")) }),
   );
+  /** The same, wrapped in a prompt for a local agent to find the cause and file a GitHub issue. */
+  app.get("/v1/admin/agents/:id/diagnosis-prompt", async (c) =>
+    c.json({ text: await mingle.diagnosisPrompt(c.req.param("id")) }),
+  );
   /** Pause and resume (docs/spec.md 4.11). Both are idempotent: `changed` is false when it already was. */
   app.post("/v1/admin/agents/:id/pause", async (c) => c.json({ changed: await mingle.pauseAgent(c.req.param("id")) }));
   app.post("/v1/admin/agents/:id/resume", async (c) =>

@@ -30,6 +30,7 @@ import { VERSION } from "../version.ts";
 import { CLAIM_ATTEMPTS, CLAIM_TTL_MS, claimAttempt, claimCode, gate } from "./access.ts";
 import { Brains } from "./brains.ts";
 import { coldRebuildFor } from "./cold.ts";
+import { diagnosisPrompt } from "./diagnose.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
 import { MingleError, notFound } from "./errors.ts";
 import { formatReminder, renderMessage } from "./format.ts";
@@ -636,6 +637,12 @@ export class Mingle {
       `tasks open: ${this.store.tasks(agent.id, false).length} · reminders: ${this.store.reminders(agent.id).length}`,
     ];
     return `${lines.join("\n")}\n`;
+  }
+
+  /** What the owner gives a local agent so it finds why this agent misbehaves and files an issue. */
+  async diagnosisPrompt(idOrSlug: string): Promise<string> {
+    const agent = this.agent(idOrSlug);
+    return diagnosisPrompt(agent, await this.diagnostics(agent.id), this.cliPath, VERSION);
   }
 
   isPaused(agentId: string): boolean {
