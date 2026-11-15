@@ -25,14 +25,16 @@ export class ApiError extends Error {
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   let response: Response;
+  // Raw bytes (a picture) go as they are; everything else is JSON.
+  const raw = body instanceof Blob;
   try {
     response = await fetch(path, {
       method,
       headers: {
         authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ""}`,
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(body !== undefined ? { "content-type": raw ? body.type : "application/json" } : {}),
       },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(body !== undefined ? { body: raw ? body : JSON.stringify(body) } : {}),
     });
   } catch {
     throw new ApiError("offline", "", 0);
@@ -79,6 +81,8 @@ export interface AgentView {
   id: string;
   slug: string;
   name: string;
+  /** The picture's URL, or null to draw the generated initial. */
+  avatar: string | null;
   harness: string;
   model: string | null;
   status: AgentStatus;
@@ -245,6 +249,8 @@ export const api = {
     call<SetupState>("POST", `/v1/admin/platforms/${platform}/setup/${action}`),
   createAgent: (input: { name: string; role: string; harness: string; model?: string }) =>
     call<AgentView>("POST", "/v1/admin/agents", input),
+  setAvatar: (id: string, image: Blob) => call<AgentView>("PUT", `/v1/admin/agents/${id}/avatar`, image),
+  clearAvatar: (id: string) => call<AgentView>("DELETE", `/v1/admin/agents/${id}/avatar`),
   setRole: (id: string, role: string) => call("PUT", `/v1/admin/agents/${id}/role`, { role }),
   env: (id: string) => call<EnvVar[]>("GET", `/v1/admin/agents/${id}/env`),
   setEnv: (id: string, name: string, value: string) =>

@@ -123,7 +123,13 @@ export class Mingle {
 
   constructor(options: MingleOptions) {
     this.options = options;
-    for (const dir of [options.paths.home, options.paths.agents, options.paths.bin, options.paths.logs]) {
+    for (const dir of [
+      options.paths.home,
+      options.paths.agents,
+      options.paths.avatars,
+      options.paths.bin,
+      options.paths.logs,
+    ]) {
       mkdirSync(dir, { recursive: true });
     }
     this.store = new Store(options.paths.db);
@@ -383,6 +389,41 @@ export class Mingle {
     return this.agent(agent.id);
   }
 
+  /**
+   * Give the agent a picture for the console (docs/spec.md 8.1). Each picture gets a new
+   * unguessable file name, so its URL can be cached for good and works only while current.
+   */
+  setAvatar(idOrSlug: string, image: Uint8Array): Agent {
+    const agent = this.agent(idOrSlug);
+    const type = imageType(image);
+    if (!type) throw new MingleError("avatar_invalid", "use a PNG, JPEG or WebP image");
+    if (image.byteLength > AVATAR_MAX_BYTES) throw new MingleError("avatar_too_large", "use an image under 2 MB", 413);
+    const file = `${agent.id}-${randomBytes(9).toString("base64url")}.${type}`;
+    writeFileSync(join(this.options.paths.avatars, file), image);
+    this.store.setAvatar(agent.id, file);
+    this.removeAvatar(agent.avatar);
+    return this.agent(agent.id);
+  }
+
+  /** Back to the generated initial. */
+  clearAvatar(idOrSlug: string): Agent {
+    const agent = this.agent(idOrSlug);
+    this.store.setAvatar(agent.id, null);
+    this.removeAvatar(agent.avatar);
+    return this.agent(agent.id);
+  }
+
+  /** Where a current picture is on disk; undefined for any name that is not some agent's picture now. */
+  avatarPath(file: string): string | undefined {
+    if (!AVATAR_FILE.test(file)) return undefined;
+    if (!this.store.agents().some((a) => a.avatar === file)) return undefined;
+    return join(this.options.paths.avatars, file);
+  }
+
+  private removeAvatar(file: string | null): void {
+    if (file && AVATAR_FILE.test(file)) rmSync(join(this.options.paths.avatars, file), { force: true });
+  }
+
   createAgent(input: { name: string; role: string; harness: string; model?: string | null }): Agent {
     const name = input.name.trim();
     if (!name) throw new MingleError("name_required", "give the agent a name");
@@ -491,6 +532,7 @@ export class Mingle {
     this.revokeTokens(agent.id);
     this.paused.delete(agent.id);
     this.store.deleteAgent(agent.id);
+    this.removeAvatar(agent.avatar);
     if (removeHome) rmSync(this.homeDir(agent), { recursive: true, force: true });
   }
 
@@ -1320,4 +1362,17 @@ export class Mingle {
     writeFileSync(this.cliPath, script);
     chmodSync(this.cliPath, 0o755);
   }
+}
+
+/** A picture is at most this big; the console sends a 256 px square, far below it. */
+export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_FILE = /^[A-Za-z0-9_-]+\.(?:png|jpg|webp)$/;
+
+/** The image format from its first bytes, so a file is never trusted by its name or a header. */
+function imageType(bytes: Uint8Array): "png" | "jpg" | "webp" | undefined {
+  const starts = (sig: readonly number[], at = 0) => sig.every((b, i) => bytes[at + i] === b);
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "png";
+  if (starts([0xff, 0xd8, 0xff])) return "jpg";
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "webp";
+  return undefined;
 }

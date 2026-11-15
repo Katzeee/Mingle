@@ -194,7 +194,23 @@ export function StatusDot({ state }: { state: string }) {
   return <span aria-hidden className={`inline-block size-2 shrink-0 rounded-full ${dot[state] ?? "bg-ink3"}`} />;
 }
 
-export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
+export function Avatar({ name, src, size = 32 }: { name: string; src?: string | null; size?: number }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  const radius = Math.round(size * 0.28);
+  if (src && broken !== src) {
+    return (
+      <img
+        alt=""
+        src={src}
+        width={size}
+        height={size}
+        draggable={false}
+        onError={() => setBroken(src)}
+        style={{ width: size, height: size, borderRadius: radius }}
+        className="shrink-0 bg-bg3 object-cover"
+      />
+    );
+  }
   const initial = [...name.trim()][0]?.toUpperCase() ?? "?";
   // A stable hue per name, so agents tell apart at a glance; soft, never loud.
   let hash = 0;
@@ -207,7 +223,7 @@ export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
         width: size,
         height: size,
         fontSize: size * 0.46,
-        borderRadius: Math.round(size * 0.28),
+        borderRadius: radius,
         background: `oklch(0.62 0.12 ${hue})`,
       }}
       className="flex shrink-0 items-center justify-center font-semibold text-white"

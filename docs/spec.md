@@ -681,6 +681,7 @@ flowchart TD
 ~/.mingle/
 ├── mingle.db              运行状态
 ├── logs/
+├── avatars/               Agent 的头像，<agent id>-<随机串>.png，不放进主目录
 └── agents/<slug>/         Agent 的主目录，也是 harness 的工作目录
     ├── ROLE.md            它是谁，用户编写
     ├── MEMORY.md          恢复索引，Agent 维护
@@ -688,6 +689,8 @@ flowchart TD
 ```
 
 主目录里 Mingle 只约定这两个文件和一个目录。其余的文件和目录由 Agent 按需要自己建，Mingle 不预设结构。
+
+**头像**是 owner 在控制台"设置 → 名字和头像"里选的图，只在 Mingle 里显示（侧栏、页头），不同步到聊天软件：各平台改机器人头像的接口和权限不一，个人账号也不该被 Mingle 改资料，所以机器人的头像仍在各平台上设置。控制台在浏览器里把图裁成 256 px 的方形 PNG 后上传（`PUT /v1/admin/agents/:id/avatar`，原始字节，按文件头认 PNG、JPEG、WebP，最大 2 MB；`DELETE` 回到按名字生成的首字头像）。`agents.avatar` 存文件名，每次更换都换一个新的随机文件名并删掉旧文件，删除 Agent 时一并删除。`<img>` 带不了 admin token，所以图片由 `GET /v1/avatars/:file` 免 token 提供：只认当前某个 Agent 正在用的文件名，文件名不可猜，响应带 `Cross-Origin-Resource-Policy: same-origin`，别的网站嵌不进来，并且可以永久缓存。头像不放进主目录，因为主目录只约定上面三项（见 AGENTS.md），也不该被 Agent 当成自己的文件改动。
 
 **文件是 Agent 的内容，SQLite 是运行状态。** 角色、记忆和产物都是普通文件，用户可以直接打开、编辑、用 git 管理、整个目录拷走。
 
@@ -872,6 +875,7 @@ docs/             文档
 | 多微信号与通讯录（MING-55） | 完成（2026-11-14）：见 4.2、6.1。`contacts` 表和迁移 006，消息头带 `user=`，`mingle contact list / name`，控制台连接行给 owner 起名、动态按名字显示；请求微信二维码时带上本机已有的 token。测试覆盖迁移补建、名字优先级、两个 owner 在同一平台时不显示"你"、Agent 用 CLI 起名后消息头和动态更新、`local_token_list` 和 `already_connected`。手机端提示待实测（12.2） |
 | 群聊背景消息（MING-62） | 完成（2026-11-15）：见 4.2。来源行的 `unseen` 和 `in`、`message read --since`、Slack 存下没 @ 它的频道消息，迁移 010 加 `chats.parent_id`。测试覆盖计数（含线程和所属频道）、`--since`、Slack 映射和不触发；Slack 真机未复测 |
 | GitHub 渠道（MING-70） | 完成（2026-11-15）：见 6.7。设备码和 token 两种接入、通知轮询、评论定位、协作者限制、issue 评论和 review 楼内回复、👀 → 🚀 表情。单元测试覆盖；真实 GitHub 上的结果见 12.1，独立机器账号的端到端待验证（12.2） |
+| Agent 头像与改名（MING-73） | 完成（2026-11-15）：见 8.1、`DESIGN.md`“名字和头像”。设置页第一组，选图或拖入后原地取景，保存 256 px PNG；侧栏和页头显示，首字头像兜底；名字可在同一组里改。测试覆盖上传、按文件头校验、大小限制、换图后旧地址失效和旧文件删除、移除、删除 Agent 时清理、不写主目录；`pnpm ui:review` 在两种语言、两种宽度下真实选图、键盘缩放、保存并截图 |
 | 更多 harness、审批转发 | 未开始 |
 
 ## 12. 验证记录

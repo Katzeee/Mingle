@@ -32,6 +32,7 @@ const LOCALES = {
     ignore: "Ignore",
     ignored: "Ignored",
     envTitle: "Environment variables",
+    profileTitle: "Name and picture",
     envAdd: "Add",
     activity: "Activity",
     pause: "Pause",
@@ -80,6 +81,7 @@ const LOCALES = {
     ignore: "忽略",
     ignored: "已忽略",
     envTitle: "环境变量",
+    profileTitle: "名字和头像",
     envAdd: "添加",
     activity: "动态",
     pause: "暂停",
@@ -657,6 +659,51 @@ export async function reviewInteractions({
       assert(await call(envSection, labels.envTitle), `${tag}: section lost`);
     };
 
+    // --- name and picture: choose an image, frame it in place, save it (MING-73) ---
+    // Alex's seeded picture is the file to choose: the review needs no image of its own.
+    const picture = join(mkdtempSync(join(tmpdir(), "mingle-picture-")), "picture.png");
+    {
+      const auth = { authorization: `Bearer ${token}` };
+      const alex = await (await fetch(`${url}/v1/admin/agents/${slug}`, { headers: auth })).json();
+      if (alex.avatar) writeFileSync(picture, Buffer.from(await (await fetch(`${url}${alex.avatar}`)).arrayBuffer()));
+    }
+    const profileScenario = async (localeName, labels, width) => {
+      const tag = `profile ${localeName} ${width}`;
+      await goto(`/a/${envSlug}`, labels);
+      await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
+      await until("profile section", envSection, labels.profileTitle);
+      await call(() => document.querySelector("main, .overflow-y-auto")?.scrollTo?.(0, 0));
+      assert(await call(pageFits), `${tag}: page overflows horizontally`);
+      await shot(`${localeName}-${width}-profile`);
+      if (!existsSync(picture)) return;
+      const before = await call(() => document.querySelector("header img")?.getAttribute("src") ?? null);
+
+      // Choosing a file opens the framing in place, with no dialog.
+      const { root } = await send("DOM.getDocument", { depth: -1 });
+      const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: 'input[type="file"]' });
+      await send("DOM.setFileInputFiles", { nodeId, files: [picture] });
+      await until("crop stage", () => !!document.querySelector('[role="slider"]'));
+      assert(!(await call(() => !!document.querySelector('[role="dialog"]'))), `${tag}: framing opened a dialog`);
+      // The keyboard zooms the framing.
+      await call(() => document.querySelector('[role="slider"]')?.focus());
+      for (let i = 0; i < 4; i++) await key("+", "Equal", 187, "+");
+      const zoom = await call(() => Number(document.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")));
+      assert(zoom > 100, `${tag}: + did not zoom (${zoom})`);
+      assert(await call(pageFits), `${tag}: framing overflows horizontally`);
+      await shot(`${localeName}-${width}-profile-crop`);
+
+      await clickEl(await call(envCenter, labels.profileTitle, "button", labels.save));
+      const after = await until(
+        "new picture in the header",
+        (old) => {
+          const src = document.querySelector("header img")?.getAttribute("src");
+          return !document.querySelector('[role="slider"]') && src && src !== old ? src : null;
+        },
+        before,
+      );
+      assert(after.startsWith("/v1/avatars/"), `${tag}: header picture is ${after}`);
+    };
+
     let passed = 0;
     for (const [localeName, labels] of Object.entries(LOCALES)) {
       for (const width of [1440, 560]) {
@@ -769,6 +816,7 @@ export async function reviewInteractions({
           "single connection lost after cancel",
         );
         if (envSlug) await envScenario(localeName, labels, width);
+        if (envSlug) await profileScenario(localeName, labels, width);
         passed++;
         console.log(`interactions ${localeName} ${width}: passed`);
       }

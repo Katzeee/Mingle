@@ -14,6 +14,7 @@ import { fetchCached, peek, useCached } from "./cache.ts";
 import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
 import { ModelPicker } from "./NewAgent.tsx";
 import { online, useOnline } from "./online.ts";
+import { Profile } from "./Profile.tsx";
 import { PlatformIcon } from "./platforms.tsx";
 import { usePolling } from "./poll.ts";
 import { OnlineRows } from "./Settings.tsx";
@@ -211,7 +212,7 @@ export function AgentPage({
   return (
     <>
       <PageHeader
-        leading={<Avatar name={agent.name} size={26} />}
+        leading={<Avatar name={agent.name} src={agent.avatar} size={26} />}
         title={agent.name}
         meta={<AgentStatusText status={agent.status} detail={agent.statusDetail} />}
         actions={
@@ -253,6 +254,7 @@ export function AgentPage({
 
             {tab === "settings" ? (
               <>
+                <Profile agent={agent} onSaved={onChanged} />
                 <section
                   ref={connectionsRef}
                   aria-label={t("agent.chatApps")}
