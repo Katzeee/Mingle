@@ -8,7 +8,6 @@ import (
 	_ "embed"
 	"log"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -77,7 +76,6 @@ func main() {
 			StateKey:  "main",
 			// Trusted, so the page gets the title bar's insets and can move the window.
 			Page: mygo.PageOptions{TrustedOrigins: []string{origin}},
-			URL:  "data:text/html;charset=utf-8," + loadingPage(t.starting),
 		}
 		if isMac {
 			// The console draws its own title bar: the traffic lights sit in the sidebar's
@@ -89,6 +87,8 @@ func main() {
 			options.Vibrancy = mygo.VibrancySidebar
 		}
 		win = mygo.NewWindow(options)
+		page := newPageState(win.Page(), origin)
+		page.waiting(t.starting, "")
 		// Closing the window keeps Mingle running in the menu bar.
 		win.OnClose(func(e *mygo.CloseEvent) {
 			if quitting {
@@ -109,11 +109,12 @@ func main() {
 		// Each time Mingle (re)starts, point the window at its console.
 		d.onReady = func(url, token string) {
 			tray.ready(url, token)
-			_ = win.Page().LoadURL(url + "/#token=" + token)
+			page.console(url, token)
 		}
 		d.onDown = func(reason string) {
 			tray.down()
-			_ = win.Page().LoadURL("data:text/html;charset=utf-8," + loadingPage(t.restarting+" "+reason))
+			// The reason is in the log; the window says what happens next.
+			page.waiting(t.restarting, t.restartHint)
 		}
 		go d.run()
 	})
@@ -137,18 +138,4 @@ func setAppMenu(tray *trayController) {
 		{Role: mygo.RoleEditMenu},
 		{Role: mygo.RoleWindowMenu},
 	}))
-}
-
-// loadingPage is shown until the console answers, in the console's own look (DESIGN.md).
-func loadingPage(text string) string {
-	html := `<!doctype html><meta name="color-scheme" content="light dark"><style>
-html,body{height:100%;margin:0}
-body{display:flex;align-items:center;justify-content:center;font:13px -apple-system,system-ui,sans-serif;
-background:light-dark(#fff,#161616);color:light-dark(#6b6b66,#9c9c96)}
-</style><p>` + escape(text) + `</p>`
-	return strings.NewReplacer("%", "%25", "#", "%23", "\n", "%0A").Replace(html)
-}
-
-func escape(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
