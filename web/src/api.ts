@@ -98,6 +98,28 @@ export interface AgentView {
   connections: ConnectionView[];
 }
 
+/** One chat app account in the agent's address book. */
+export interface ContactAccount {
+  id: string;
+  platform: Platform;
+  /** The name given to this account, else the app's. */
+  name: string | null;
+  platformName: string | null;
+  owner: boolean;
+  /** Another account on this platform has a different owner: "you" would be ambiguous. */
+  ownerShared: boolean;
+  bot: boolean;
+  linkedBy: "owner" | "agent" | null;
+}
+
+/** A person with their accounts, or one account on its own (`person` null). */
+export interface ContactEntry {
+  person: string | null;
+  name: string | null;
+  note: string | null;
+  accounts: ContactAccount[];
+}
+
 export interface Activity {
   id: string;
   direction: "in" | "out";
@@ -285,6 +307,19 @@ export const api = {
   /** Name someone in the agent's address book; an empty name clears it. */
   nameContact: (id: string, contactId: string, name: string) =>
     call<{ id: string; name: string | null }>("PATCH", `/v1/admin/agents/${id}/contacts/${contactId}`, { name }),
+  contacts: (id: string) => call<ContactEntry[]>("GET", `/v1/admin/agents/${id}/contacts`),
+  /** Name, note (on the person) or bot mark; fields left out stay. */
+  editContact: (id: string, contactId: string, patch: { name?: string; note?: string; bot?: boolean }) =>
+    call<{ id: string; name: string | null; bot: boolean }>(
+      "PATCH",
+      `/v1/admin/agents/${id}/contacts/${contactId}`,
+      patch,
+    ),
+  /** These accounts are one person, on the owner's word. */
+  linkContacts: (id: string, contacts: string[]) =>
+    call<{ person: string }>("POST", `/v1/admin/agents/${id}/people/link`, { contacts }),
+  unlinkContact: (id: string, contact: string) =>
+    call<{ ok: true }>("POST", `/v1/admin/agents/${id}/people/unlink`, { contact }),
   activity: (id: string) => call<Activity[]>("GET", `/v1/admin/agents/${id}/activity?limit=30`),
   work: (id: string) => call<{ tasks: Task[]; reminders: Reminder[] }>("GET", `/v1/admin/agents/${id}/work`),
   /** Stop a reminder for good; the agent hears it with its next input. */

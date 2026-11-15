@@ -62,7 +62,8 @@ const LOCALES = {
     noReminders: "No reminders.",
     connectAction: "Connect a chat app",
     retryLoad: "Retry",
-    nameOwner: "Name the owner",
+    contactsTitle: "Contacts",
+    allMe: "Are these all you?",
     ownerUnnamed: "Owner not named",
     ownerIs: "Owner: ",
     save: "Save",
@@ -116,7 +117,8 @@ const LOCALES = {
     noReminders: "没有提醒。",
     connectAction: "连接聊天软件",
     retryLoad: "重试",
-    nameOwner: "给 owner 起名",
+    contactsTitle: "联系人",
+    allMe: "这些都是你吗？",
     ownerUnnamed: "owner 未命名",
     ownerIs: "owner：",
     save: "保存",
@@ -1137,7 +1139,7 @@ export async function reviewInteractions({
       }
     }
 
-    // --- one agent on two WeChat accounts: name the second owner from its row (MING-55) ---
+    // --- one agent on two WeChat accounts: name the second owner under Contacts (MING-55, MING-80) ---
     const ownerScenario = async (localeName, labels, width) => {
       const tag = `owner ${localeName} ${width}`;
       await metrics(width);
@@ -1148,8 +1150,34 @@ export async function reviewInteractions({
       await until("unnamed owner", (u) => document.body.textContent.includes(u), labels.ownerUnnamed);
       assert(await call(pageFits), `${tag}: horizontal overflow`);
       await shot(`${localeName}-${width}-owner-unnamed`);
-      await openTriggerMenu(labels.more, 1);
-      await clickEl(await call(menuItemCenter, labels.nameOwner));
+      // Two owners on one app: Contacts asks whether they are one person, and lists everyone.
+      await until("contacts", envSection, labels.contactsTitle);
+      await call((title) => {
+        const h = [...document.querySelectorAll("section h2")].find((x) => x.textContent.trim() === title);
+        h?.scrollIntoView({ block: "start" });
+      }, labels.contactsTitle);
+      await until("all-me card", (want) => document.body.textContent.includes(want), labels.allMe);
+      assert(await call(pageFits), `${tag}: contacts overflow horizontally`);
+      await shot(`${localeName}-${width}-contacts`);
+      const row = (title, text = "u3hr") => {
+        const section = [...document.querySelectorAll("section h2")]
+          .find((h) => h.textContent.trim() === title)
+          ?.closest("section");
+        const el = [...(section?.querySelectorAll("button") ?? [])].find((b) => b.textContent.includes(text));
+        if (!el) return null;
+        el.scrollIntoView({ block: "center" });
+        const r = el.getBoundingClientRect();
+        return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+      };
+      // A person the agent linked: each account, its marks, and the owner's way to confirm or undo it.
+      await clickEl(await until("linked person row", row, labels.contactsTitle, "Zhang Sanfeng"));
+      await until("person form", () => document.activeElement?.tagName === "INPUT");
+      assert(await call(pageFits), `${tag}: person form overflows horizontally`);
+      await shot(`${localeName}-${width}-contacts-person`);
+      await key("Escape", "Escape", 27);
+      await until("person form closed", () => !document.querySelector("form"));
+      // The second owner has no name: open it in place and name it.
+      await clickEl(await until("unnamed owner row", row, labels.contactsTitle));
       await until("name form", () => document.activeElement?.tagName === "INPUT");
       const name = "小美 Mei";
       await send("Input.insertText", { text: name });

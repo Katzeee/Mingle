@@ -301,6 +301,31 @@ try {
     );
   contact("u2me", "n10", "me@im.wechat", "Maximiliana Alexandrovna Konstantinopolskaya");
   contact("u3hr", "n11", "her@im.wechat", null);
+  // Contacts (MING-80): a person the agent linked across two accounts, with a note; and a bot.
+  insert(
+    "INSERT INTO people (id, agent_id, name, note, created_at, updated_at) VALUES ('p7k2', ?, '张三丰 Zhang Sanfeng the Hiking Club Treasurer', '不喜欢长消息。素食。', ?, ?)",
+    sharedAgent.id,
+    now,
+    now,
+  );
+  const linked = (id, connection, platformId, name, by) =>
+    insert(
+      "INSERT INTO contacts (id, connection_id, platform_id, name, alias, person_id, linked_by, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, 'p7k2', ?, ?, ?)",
+      id,
+      connection,
+      platformId,
+      name,
+      by,
+      now - 5000,
+      now - 5000,
+    );
+  linked("u4zs", "n10", "zs@im.wechat", null, "agent");
+  linked("u5zs", "n11", "zs2@im.wechat", "张三丰", "agent");
+  insert(
+    "INSERT INTO contacts (id, connection_id, platform_id, name, alias, is_bot, created_at, updated_at) VALUES ('u6bt', 'n11', 'bot@im.wechat', '部署机器人 Deploy Notifications for the Weekend Hikes Group', NULL, 1, ?, ?)",
+    now - 9000,
+    now - 9000,
+  );
   insert(
     "INSERT INTO chats (id, connection_id, platform_id, kind, created_at, updated_at) VALUES ('c8','n10','me@im.wechat','dm',?,?)",
     now,

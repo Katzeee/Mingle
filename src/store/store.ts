@@ -58,13 +58,35 @@ export interface Contact {
   alias: string | null;
   /** A bot: the platform or a local agent said so, or the owner marked it (docs/spec.md 4.2). */
   isBot: boolean;
+  /** The person this account belongs to, when someone linked it or wrote a note about them. */
+  personId: string | null;
+  /** The person's name, which wins over the contact's own. */
+  personName: string | null;
+  /** Who put it in its person. Only the owner's links may carry anything beyond a name and a note. */
+  linkedBy: LinkedBy | null;
   updatedAt: number;
 }
 
-/** What to call a contact: the given name, else the platform's, else nothing. */
-export function contactName(contact: Pick<Contact, "name" | "alias"> | undefined): string | null {
-  return contact?.alias || contact?.name || null;
+export type LinkedBy = "owner" | "agent";
+
+/** One human across the agent's chat apps (docs/spec.md 4.2). */
+export interface Person {
+  id: string;
+  agentId: string;
+  name: string | null;
+  note: string | null;
+  updatedAt: number;
 }
+
+/** What to call a contact: the person's name, else the given one, else the platform's, else nothing. */
+export function contactName(
+  contact: (Pick<Contact, "name" | "alias"> & { personName?: string | null }) | undefined,
+): string | null {
+  return contact?.personName || contact?.alias || contact?.name || null;
+}
+
+/** Contacts with their person's name. */
+const CONTACTS = "SELECT k.*, p.name AS person_name FROM contacts k LEFT JOIN people p ON p.id = k.person_id";
 
 export interface Chat {
   id: string;
@@ -472,13 +494,13 @@ export class Store {
   }
 
   contact(id: string): Contact | undefined {
-    const row = this.db.prepare("SELECT * FROM contacts WHERE id = ?").get(id) as Row | undefined;
+    const row = this.db.prepare(`${CONTACTS} WHERE k.id = ?`).get(id) as Row | undefined;
     return row && toContact(row);
   }
 
   contactByPlatformId(connectionId: string, platformId: string): Contact | undefined {
     const row = this.db
-      .prepare("SELECT * FROM contacts WHERE connection_id = ? AND platform_id = ?")
+      .prepare(`${CONTACTS} WHERE k.connection_id = ? AND k.platform_id = ?`)
       .get(connectionId, platformId) as Row | undefined;
     return row && toContact(row);
   }
@@ -486,9 +508,7 @@ export class Store {
   /** The contact, if it belongs to one of this agent's connections. */
   agentContact(agentId: string, id: string): Contact | undefined {
     const row = this.db
-      .prepare(
-        "SELECT k.* FROM contacts k JOIN connections n ON n.id = k.connection_id WHERE k.id = ? AND n.agent_id = ?",
-      )
+      .prepare(`${CONTACTS} JOIN connections n ON n.id = k.connection_id WHERE k.id = ? AND n.agent_id = ?`)
       .get(id, agentId) as Row | undefined;
     return row && toContact(row);
   }
@@ -497,8 +517,10 @@ export class Store {
   agentContacts(agentId: string): (Contact & { platform: Platform; owner: boolean })[] {
     const rows = this.db
       .prepare(
-        `SELECT k.*, n.platform, (n.owner_id IS NOT NULL AND n.owner_id = k.platform_id) AS is_owner
+        `SELECT k.*, p.name AS person_name, n.platform,
+                (n.owner_id IS NOT NULL AND n.owner_id = k.platform_id) AS is_owner
          FROM contacts k JOIN connections n ON n.id = k.connection_id
+         LEFT JOIN people p ON p.id = k.person_id
          WHERE n.agent_id = ? ORDER BY k.updated_at DESC`,
       )
       .all(agentId) as Row[];
@@ -515,6 +537,142 @@ export class Store {
   setContactAlias(id: string, alias: string | null): Contact | undefined {
     this.db.prepare("UPDATE contacts SET alias = ?, updated_at = ? WHERE id = ?").run(alias, this.now(), id);
     return this.contact(id);
+  }
+
+  /**
+   * Name whoever this contact is: the person when it has one (every account of theirs shows the
+   * name), else the contact itself. Null clears it.
+   */
+  nameContact(id: string, name: string | null): Contact | undefined {
+    const contact = this.contact(id);
+    if (contact?.personId) this.updatePerson(contact.personId, { name });
+    else this.setContactAlias(id, name);
+    return this.contact(id);
+  }
+
+  // ------------------------------------------------------------------ people
+
+  person(id: string): Person | undefined {
+    const row = this.db.prepare("SELECT * FROM people WHERE id = ?").get(id) as Row | undefined;
+    return row && toPerson(row);
+  }
+
+  agentPerson(agentId: string, id: string): Person | undefined {
+    const person = this.person(id);
+    return person?.agentId === agentId ? person : undefined;
+  }
+
+  agentPeople(agentId: string): Person[] {
+    const rows = this.db.prepare("SELECT * FROM people WHERE agent_id = ? ORDER BY id").all(agentId) as Row[];
+    return rows.map(toPerson);
+  }
+
+  personContacts(personId: string): Contact[] {
+    const rows = this.db.prepare(`${CONTACTS} WHERE k.person_id = ? ORDER BY k.created_at`).all(personId) as Row[];
+    return rows.map(toContact);
+  }
+
+  updatePerson(id: string, patch: { name?: string | null; note?: string | null }): Person | undefined {
+    const t = this.now();
+    if (patch.name !== undefined)
+      this.db.prepare("UPDATE people SET name = ?, updated_at = ? WHERE id = ?").run(patch.name, t, id);
+    if (patch.note !== undefined)
+      this.db.prepare("UPDATE people SET note = ?, updated_at = ? WHERE id = ?").run(patch.note, t, id);
+    return this.person(id);
+  }
+
+  /** The contact's person, made for it alone when it has none (to hold a note). */
+  ensurePerson(agentId: string, contactId: string): Person {
+    const contact = this.contact(contactId);
+    if (contact?.personId) return this.person(contact.personId) as Person;
+    const id = this.mint("people", "p", 4);
+    const t = this.now();
+    // The name given to the contact moves up, so it still reads the same.
+    this.db
+      .prepare("INSERT INTO people (id, agent_id, name, note, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?)")
+      .run(id, agentId, contact?.alias ?? null, t, t);
+    this.db
+      .prepare("UPDATE contacts SET person_id = ?, linked_by = NULL, updated_at = ? WHERE id = ?")
+      .run(id, t, contactId);
+    return this.person(id) as Person;
+  }
+
+  /**
+   * Put these contacts in one person, merging the people they were in (docs/spec.md 4.2). The
+   * contacts named get `by` as how they were linked. Everyone moved over from another person by
+   * the agent is the agent's link from now on: an agent cannot join two owner-made people into
+   * one that would read as the owner's. The merged person keeps the first name and joins the notes.
+   */
+  linkContacts(agentId: string, ids: readonly string[], by: LinkedBy): Person {
+    this.db.exec("BEGIN");
+    try {
+      const contacts = ids.map((id) => this.contact(id) as Contact);
+      const first = contacts.find((k) => k.personId) ?? contacts[0];
+      const target = this.ensurePerson(agentId, (first as Contact).id);
+      let { name, note } = target;
+      const t = this.now();
+      for (const contact of contacts) {
+        const current = this.contact(contact.id) as Contact;
+        if (current.personId && current.personId !== target.id) {
+          const other = this.person(current.personId) as Person;
+          name = name ?? other.name;
+          note = [note, other.note].filter(Boolean).join("\n\n") || null;
+          this.db
+            .prepare(
+              `UPDATE contacts SET person_id = ?, updated_at = ?${by === "agent" ? ", linked_by = 'agent'" : ""} WHERE person_id = ?`,
+            )
+            .run(target.id, t, other.id);
+          this.db.prepare("DELETE FROM people WHERE id = ?").run(other.id);
+        } else if (!current.personId) {
+          name = name ?? current.alias;
+        }
+        // The owner's word stands: the agent linking again does not turn an owner's link into its own.
+        this.db
+          .prepare(
+            `UPDATE contacts SET person_id = ?, linked_by = ${by === "agent" ? "COALESCE(linked_by, 'agent')" : "'owner'"}, updated_at = ? WHERE id = ?`,
+          )
+          .run(target.id, t, contact.id);
+      }
+      this.db
+        .prepare("UPDATE people SET name = ?, note = ?, updated_at = ? WHERE id = ?")
+        .run(name, note, t, target.id);
+      this.db.exec("COMMIT");
+      return this.person(target.id) as Person;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * Take a contact out of its person. A person left with no accounts goes; one left with a single
+   * account keeps its name and note.
+   */
+  unlinkContact(id: string): void {
+    const contact = this.contact(id);
+    if (!contact?.personId) return;
+    const t = this.now();
+    this.db.prepare("UPDATE contacts SET person_id = NULL, linked_by = NULL, updated_at = ? WHERE id = ?").run(t, id);
+    const left = this.personContacts(contact.personId);
+    if (left.length === 0) this.db.prepare("DELETE FROM people WHERE id = ?").run(contact.personId);
+    else if (left.length === 1) {
+      this.db.prepare("UPDATE contacts SET linked_by = NULL WHERE id = ?").run((left[0] as Contact).id);
+    }
+  }
+
+  /**
+   * The chats where this contact can be found, most recent first: their direct chat with the bot
+   * (by the messages they sent there), then groups they spoke in.
+   */
+  contactChats(contact: Contact, limit = 5): (Chat & { lastAt: number })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.*, MAX(m.created_at) AS last_at FROM chats c JOIN messages m ON m.chat_id = c.id
+         WHERE c.connection_id = ? AND m.direction = 'in' AND m.sender_id = ?
+         GROUP BY c.id ORDER BY (c.kind = 'dm') DESC, last_at DESC LIMIT ?`,
+      )
+      .all(contact.connectionId, contact.platformId, limit) as Row[];
+    return rows.map((r) => ({ ...toChat(r), lastAt: Number(r.last_at) }));
   }
 
   // ---------------------------------------------------------------- messages
@@ -1070,6 +1228,19 @@ function toContact(r: Row): Contact {
     name: str(r.name),
     alias: str(r.alias),
     isBot: r.is_bot === 1,
+    personId: str(r.person_id),
+    personName: str(r.person_name),
+    linkedBy: (str(r.linked_by) as LinkedBy | null) ?? null,
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+function toPerson(r: Row): Person {
+  return {
+    id: String(r.id),
+    agentId: String(r.agent_id),
+    name: str(r.name),
+    note: str(r.note),
     updatedAt: Number(r.updated_at),
   };
 }

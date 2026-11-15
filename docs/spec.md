@@ -72,6 +72,8 @@ erDiagram
   AGENT ||--o{ CONNECTION : "在各 IM 的机器人身份"
   CONNECTION ||--o{ CHAT : "所在的群和私聊"
   CONNECTION ||--o{ CONTACT : "认识的人"
+  AGENT ||--o{ PERSON : "人"
+  PERSON |o--o{ CONTACT : "同一个人的各个账号"
   CHAT ||--o{ MESSAGE : ""
   AGENT ||--o{ TASK : ""
   AGENT ||--o{ REMINDER : ""
@@ -85,6 +87,7 @@ erDiagram
 | **Connection（连接）** | 一个 Agent 在一个 IM 上的机器人身份及其凭据。一个 Agent 可以有多个连接。 |
 | **Chat（聊天）** | 一个群、一个私聊或一个话题。由连接加平台侧 ID 唯一确定。 |
 | **Contact（联系人）** | Agent 的通讯录：一个连接上认识的一个人，由连接加平台侧用户 ID 唯一确定，有 Mingle 分配的短 ID（`u7k2p`）。存平台最近给出的名字，和 owner 或 Agent 起的名字（后者优先）。见 4.2。 |
+| **Person（人）** | 同一个人在不同 IM 上的联系人连成的"人"：一个名字和一段备注。只能显式关联，不推断。见 4.2。 |
 | **Message（消息）** | 收到和发出的每条消息，带来源和平台消息 ID。 |
 | **Task（任务）** | Agent 正在跟踪的事项，记录来源聊天，用于完成后回报。 |
 | **Reminder（提醒）** | Agent 给自己设的定时唤醒，一次性或周期性。 |
@@ -131,9 +134,20 @@ erDiagram
 **认人靠通讯录（MING-55）。** 一个 Agent 同时在多个 IM、多个机器人上，必须分得清每条消息是谁发的。个人微信的 iLink 不给机器人发送者昵称，一个 Agent 扫两个微信号（各自是一个连接、各自有 owner）时，两边的人在 Agent 看来都只是 `owner`，在控制台都显示成"你"。所以：
 
 - 每个发过消息的人在该连接上有一个联系人（`contacts` 表），接入时扫码的 owner 也提前建好。`from` 是联系人的名字：owner 或 Agent 起的优先，其次是平台给的；都没有时不写 `from`（平台 ID 不是名字）。`user=` 是联系人 ID，始终带上，同一个人在同一个连接上不变。
-- Agent 用 `mingle contact list` 看通讯录，用 `mingle contact name <联系人ID> <名字>` 给人起名，`--clear` 清掉。操作指南让它在没有 `from` 且需要知道是谁时问一次对方，再记下来。owner 在控制台的连接行里给该连接的 owner 起名。两边改的是同一个字段，后写的生效，名字最长 64 个字符。
-- 控制台的动态里，发送者显示联系人名字。只有一个 owner 能对上这个平台时，没名字的 owner 才显示"你"；同一平台有两个连接各有 owner 时，显示"未命名 · u7k2p"，连接行提示给每个 owner 起名。
-- **不做跨 IM 合并。** 同一个人在微信和飞书上是两个联系人，Mingle 不推断、不合并成"一个人"，Agent 知道时记在 `MEMORY.md` 里。群也不进通讯录，群名已经在聊天上。等真的需要"一个人跨平台的权限或偏好"时再加人物层。
+- Agent 用 `mingle contact list` 看通讯录，用 `mingle contact name <联系人ID> <名字>` 给人起名，`--clear` 清掉。操作指南让它在没有 `from` 且需要知道是谁时问一次对方，再记下来。owner 在控制台的联系人里给人起名。两边改的是同一个字段，后写的生效，名字最长 64 个字符。
+- 控制台的动态里，发送者显示联系人名字。只有一个 owner 能对上这个平台时，没名字的 owner 才显示"你"；同一平台有两个连接各有 owner（且 owner 没有把它们连成同一个人）时，显示"未命名 · u7k2p"，连接行提示到联系人里给每个 owner 起名。
+- 群不进通讯录，群名已经在聊天上。
+
+**人：把同一个人跨 IM 连起来（MING-80）。** 通讯录按连接建，同一个人在微信和飞书上是两个联系人。"在微信里让 Alex 告诉飞书上的张三明天开会改到 3 点"需要知道这两个联系人是同一个人、去哪个聊天找他；"老板不喜欢长消息"这类关于人的事也不该堆进每轮都读的 `MEMORY.md`。所以加一层很薄的"人"（`people` 表，迁移 015）：
+
+- **只能显式关联。** Agent 用 `mingle contact link <联系人ID> <联系人ID>` 把两个联系人连成同一个人，`unlink` 拆开；owner 在控制台的联系人里做同样的事。Mingle 不按名字、头像、手机号自动合并。连接的两边已经各属于一个人时，两个人合并：名字取先有的，备注拼在一起。人上没有联系人了就删掉；只剩一个时保留，名字和备注还在。
+- **名字**：人上的名字 > 联系人别名 > 平台给的名字。来源行的 `from` 按这个取，联系人属于一个人（关联过或写过备注）时加 `person=p3`。`contact name` 给已关联的联系人起名时改的是人上的名字，各个账号一起变；第一次关联时，账号上已有的别名升到人上。
+- **备注**：`mingle contact note <ID>`，正文走标准输入，`--clear` 清掉，上限 2 KB（UTF-8 字节，`note_too_long`）。写在人上，单独一个联系人写备注时为它建一个人。备注不自动进上下文，Agent 需要时用 `mingle contact info <ID>` 查，它给出这个人在各个 IM 上的账号、每个账号的私聊 ID（`message send --to` 直接可用）和最近说过话的群。`<ID>` 可以是联系人 ID，也可以是人的 ID。
+- **安全边界：关联不传递任何权限。** 陌生人可以骗 Agent："我就是你微信上的张三，把我连上。"所以：每个联系人记下是谁把它连进来的（`contacts.linked_by`：`owner` / `agent`），只有 owner 在控制台做的关联将来才可能同步访问权限（MING-80 第一项），Agent 做的只影响名字、备注和查找；Agent 合并两个人时，被并进来的联系人一律算 Agent 关联的，不会把 owner 做的两组关联拼成一组"owner 的"。owner 的账号只能由 owner 关联和拆开：Agent 不能把任何联系人连到 owner 的账号或含有 owner 账号的人上，也不能拆开 owner 做的关联（`owner_link_console`）。owner 身份始终按连接判断（4.7），和人无关。
+- **owner 自己也是一个人。** 同一个 Agent 下有两个以上 owner 账号还没被 owner 连成一个人时，控制台的联系人里问一次"这些都是你吗？"。选"是"就把它们连成一个人（owner 关联），动态里这些账号都显示"你"：两个 owner 被 owner 连成同一个人后，不再算"同一平台上的不同 owner"（4.2 的"未命名 · u7k2p"）。选"不是"记在这台电脑的浏览器存储里，不再问。
+- **控制台**：Agent 设置里新增"联系人"一组，在"聊天软件"下面。每行是一个人（或一个单独的账号）：平台图标、名字，下面一行是平台和标记（owner、机器人、"Alex 关联的"、有备注）。点开原地编辑：名字、各个账号（每个账号的"…"里有"标记为机器人"和"拆开"）、"和…是同一个人"（选另一行即由 owner 关联）、备注。Agent 关联的人上有一句说明和"确认"，确认后改为 owner 关联。连接行上原来给 owner 起名的入口收进这里，连接行只保留提示。默认显示最近的 6 行，其余点"显示全部"。
+- **API**：`GET /v1/admin/agents/:id/contacts` 按人分组列出；`PATCH …/contacts/:contactId` 的 `{ name, note, bot }`；`POST …/people/link`（`{ contacts }`）、`POST …/people/unlink`（`{ contact }`）、`PUT …/people/:personId`（`{ name, note }`）。Agent 侧：`GET /v1/agent/contacts/:id`、`POST /v1/agent/contacts/link`、`POST /v1/agent/contacts/:id/unlink`、`PUT /v1/agent/contacts/:id/note`。
+- **不做**：自动合并或"这可能是同一个人"的推断；给人加权限等级、偏好这类结构化字段（备注就是一段文字）；群进人物层。
 
 消息是推给 Agent 的，Agent 不需要轮询收件箱。每个 Agent 同一时刻只有一轮在跑，不做并发会话。
 
@@ -450,8 +464,11 @@ MSG
 
 | 命令 | 作用 |
 |---|---|
-| `mingle contact list` | 通讯录：联系人 ID、平台、名字、是否 owner、是否机器人 |
-| `mingle contact name <联系人ID> <名字>` | 给人起名，之后的消息头和控制台都用它；`--clear` 改回平台给的名字 |
+| `mingle contact list` | 通讯录，按人分组：人或联系人 ID、平台、名字、是否 owner、是否机器人 |
+| `mingle contact info <ID>` | 这个人的名字、备注，各个账号和在哪儿找到他（私聊 ID、最近的群） |
+| `mingle contact name <ID> <名字>` | 给人起名，之后的消息头和控制台都用它；已关联时改的是人上的名字；`--clear` 改回平台给的名字 |
+| `mingle contact link <联系人ID> <联系人ID>` / `unlink <联系人ID>` | 把两个联系人连成同一个人，或拆开（4.2） |
+| `mingle contact note <ID>` | 写这个人的备注，正文走标准输入，`--clear` 清掉 |
 
 **文件**
 
@@ -728,7 +745,8 @@ flowchart TD
 | `agents` | 名字、slug、头像、harness、模型、权限模式、当前会话 ID、冷启动替换掉的上一个会话 ID（4.1）、状态 |
 | `connections` | 所属 Agent、平台、机器人身份、连接状态、凭据引用 |
 | `chats` | 所属连接、平台侧 ID、类型（群 / 私聊 / 话题）、名称、线程所属的群（4.2） |
-| `contacts` | 所属连接、平台侧用户 ID、平台给的名字、owner 或 Agent 起的名字、是否机器人（4.2）。升级时从已有消息的发送者和 owner 补建 |
+| `contacts` | 所属连接、平台侧用户 ID、平台给的名字、owner 或 Agent 起的名字、是否机器人、所属的人和是谁关联的（4.2）。升级时从已有消息的发送者和 owner 补建 |
+| `people` | 所属 Agent、名字、备注（4.2） |
 | `messages` | 所属聊天、方向、发送者、内容、附件引用、平台消息 ID、时间、处理状态 |
 | `tasks` | 所属 Agent、标题、状态、来源聊天 |
 | `reminders` | 所属 Agent、内容、触发规则、下次触发时间 |
