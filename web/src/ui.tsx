@@ -130,10 +130,15 @@ export function GroupRow({
   children,
   className = "",
   onClick,
+  id,
+  tabIndex,
 }: {
   children: ReactNode;
   className?: string;
   onClick?: () => void;
+  /** Lets a link elsewhere on the page land on this row. */
+  id?: string;
+  tabIndex?: number;
 }) {
   if (onClick) {
     return (
@@ -146,7 +151,11 @@ export function GroupRow({
       </button>
     );
   }
-  return <div className={`flex min-h-[52px] items-center gap-3 px-4 py-2.5 ${className}`}>{children}</div>;
+  return (
+    <div id={id} tabIndex={tabIndex} className={`flex min-h-[52px] items-center gap-3 px-4 py-2.5 ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 export function Section({

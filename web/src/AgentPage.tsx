@@ -68,13 +68,23 @@ export function AgentPage({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tab, setTab] = useState<"activity" | "settings">("activity");
   const connectionsRef = useRef<HTMLElement>(null);
-  const [manageRequest, setManageRequest] = useState(0);
+  const [manageRequest, setManageRequest] = useState<{ n: number; connectionId?: string }>({ n: 0 });
+  const [landed, setLanded] = useState<string | undefined>();
 
-  // "Manage" in the side panel: land on the settings connections, even when already there.
+  // From the side panel: land on the settings connections (or the one bot clicked), even when already there.
   useLayoutEffect(() => {
-    if (manageRequest === 0) return;
-    connectionsRef.current?.scrollIntoView({ block: "start" });
-    connectionsRef.current?.focus({ preventScroll: true });
+    if (manageRequest.n === 0) return;
+    const row = manageRequest.connectionId
+      ? document.getElementById(connectionRowId(manageRequest.connectionId))
+      : null;
+    const target = row ?? connectionsRef.current;
+    target?.scrollIntoView({ block: row ? "center" : "start" });
+    target?.focus({ preventScroll: true });
+    if (!row) return;
+    // A brief tint says which row was opened; it fades back on its own.
+    setLanded(manageRequest.connectionId);
+    const timer = setTimeout(() => setLanded(undefined), 1600);
+    return () => clearTimeout(timer);
   }, [manageRequest]);
 
   // Each resource guards itself: a slow call is not superseded by the next poll, and one
@@ -119,7 +129,8 @@ export function AgentPage({
     setPauseFailure(null);
     setNotice(null);
     setTab("activity");
-    setManageRequest(0);
+    setManageRequest({ n: 0 });
+    setLanded(undefined);
   }, [agent.id]);
   usePolling(refresh, 2500);
 
@@ -261,6 +272,7 @@ export function AgentPage({
                 >
                   <Connections
                     agent={agent}
+                    landed={landed}
                     onConnect={connect}
                     onChanged={() => {
                       void onChanged();
@@ -393,12 +405,13 @@ export function AgentPage({
         </div>
         <aside className="hidden w-[320px] shrink-0 flex-col gap-6 overflow-y-auto border-l border-line bg-wing px-4 py-5 min-[1140px]:flex">
           {needsYou}
-          {agent.connections.length ? (
+          {/* Settings lists the same bots with their controls; the panel glances at them only beside the activity. */}
+          {tab === "activity" && agent.connections.length ? (
             <ChatAppsSummary
               agent={agent}
-              onManage={() => {
+              onManage={(connectionId) => {
                 setTab("settings");
-                setManageRequest((request) => request + 1);
+                setManageRequest((request) => ({ n: request.n + 1, connectionId }));
               }}
             />
           ) : null}
@@ -623,21 +636,23 @@ function NeedsYou({
   );
 }
 
-/** The agent's bots at a glance, in the side panel. */
-function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: () => void }) {
+const connectionRowId = (id: string) => `connection-${id}`;
+
+/** The agent's bots at a glance, in the side panel. Each row opens that bot in settings. */
+function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: (connectionId?: string) => void }) {
   const { t } = useI18n();
   return (
     <Section
       title={t("agent.chatApps")}
       action={
-        <Button variant="ghost" small onClick={onManage}>
+        <Button variant="ghost" small onClick={() => onManage()}>
           {t("agent.manage")}
         </Button>
       }
     >
       <Group>
         {agent.connections.map((c) => (
-          <GroupRow key={c.id} className="min-h-[44px]">
+          <GroupRow key={c.id} className="min-h-[44px]" onClick={() => onManage(c.id)}>
             <PlatformIcon platform={c.platform} size={22} />
             <span className="min-w-0 flex-1 truncate">
               {c.bot ?? t(`platform.${c.platform}` as MessageKey)}
@@ -650,10 +665,25 @@ function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: () =
               ) : null}
             </span>
             <StatusDot state={c.state} />
+            <ChevronIcon />
           </GroupRow>
         ))}
       </Group>
     </Section>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="shrink-0 text-ink3" aria-hidden="true">
+      <path
+        d="m4.5 2.5 3.5 3.5-3.5 3.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -768,10 +798,13 @@ function Work({ work, error, onRetry }: { work: WorkData | null; error: boolean;
 
 function Connections({
   agent,
+  landed,
   onConnect,
   onChanged,
 }: {
   agent: AgentView;
+  /** The bot just opened from the side panel. */
+  landed?: string;
   onConnect: () => void;
   onChanged: () => void;
 }) {
@@ -796,7 +829,13 @@ function Connections({
       ) : (
         <Group>
           {agent.connections.map((c) => (
-            <ConnectionRow key={c.id} agentId={agent.id} connection={c} onChanged={onChanged} />
+            <ConnectionRow
+              key={c.id}
+              agentId={agent.id}
+              connection={c}
+              highlighted={landed === c.id}
+              onChanged={onChanged}
+            />
           ))}
         </Group>
       )}
@@ -807,10 +846,12 @@ function Connections({
 function ConnectionRow({
   agentId,
   connection,
+  highlighted,
   onChanged,
 }: {
   agentId: string;
   connection: ConnectionView;
+  highlighted: boolean;
   onChanged: () => void;
 }) {
   const { t } = useI18n();
@@ -831,7 +872,11 @@ function ConnectionRow({
           ? t("connection.nameOwnerHint", { platform })
           : null;
   return (
-    <GroupRow className="flex-wrap">
+    <GroupRow
+      id={connectionRowId(connection.id)}
+      tabIndex={-1}
+      className={`flex-wrap scroll-my-6 outline-none transition-colors duration-[180ms] ${highlighted ? "bg-accent-tint" : ""}`}
+    >
       <PlatformIcon platform={connection.platform} size={32} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate font-medium" title={connection.bot ?? undefined}>
