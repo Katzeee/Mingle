@@ -117,13 +117,16 @@ const FIRST_LOOK_MS = 7 * 24 * 3600_000;
 const TOKEN_FIELD: CredentialField = { key: "token", labelKey: "github.token", secret: true };
 const TOKEN_URL = `https://github.com/settings/tokens/new?scopes=${GITHUB_SCOPES.join(",")}&description=Mingle%20(__MINGLE_AGENT_NAME__)`;
 
+/** Mingle's OAuth App (device flow enabled). A public client ID: the device flow needs no secret. */
+const MINGLE_CLIENT_ID = "Ov23lio63Bii42lTv6JN";
+
 export interface GitHubOptions {
   readonly fetch?: Fetch;
   readonly apiBase?: string;
   readonly webBase?: string;
   /**
-   * The public client ID of Mingle's OAuth App, for signing in with a code (device flow). Without
-   * one, the person pastes a classic token instead.
+   * The OAuth App to sign in with a code (device flow); Mingle's own by default, or
+   * `MINGLE_GITHUB_CLIENT_ID`. An empty one leaves only pasting a classic token.
    */
   readonly clientId?: string;
   /** Floor for the wait between polls, in milliseconds; GitHub's `X-Poll-Interval` can only raise it. */
@@ -135,7 +138,7 @@ export function githubChannel(options: GitHubOptions = {}): Channel {
   const fetchImpl = options.fetch ?? fetch;
   const apiBase = options.apiBase ?? "https://api.github.com";
   const webBase = options.webBase ?? "https://github.com";
-  const clientId = options.clientId ?? process.env.MINGLE_GITHUB_CLIENT_ID ?? "";
+  const clientId = options.clientId ?? process.env.MINGLE_GITHUB_CLIENT_ID ?? MINGLE_CLIENT_ID;
   const pollFloor = options.pollMs ?? 60_000;
   const now = options.now ?? Date.now;
 
