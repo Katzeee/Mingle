@@ -22,6 +22,13 @@ export type Platform =
 
 export type ChatKind = "dm" | "group" | "thread";
 
+/**
+ * Who can reach a bot on this platform (docs/spec.md 4.7). `org`: only people inside the workspace
+ * or organization the bot was created in (and who can add it to a group). `public`: anyone who
+ * finds it can message it or add it to a group, so Mingle asks the owner before they reach the agent.
+ */
+export type Trust = "org" | "public";
+
 /** What this bot instance can actually do right now, given its granted permissions. */
 export interface Capabilities {
   readonly quoteReply: boolean;
@@ -265,6 +272,12 @@ export interface Channel {
   readonly setup?: ChannelSetup;
   /** Where the owner adds a connected bot to a server or group, for platforms where that is a separate step. */
   inviteUrl?(bot: BotIdentity): string;
+  /** Who can reach its bots. Absent means `public`: the safe side for a platform not described here. */
+  readonly trust?: Trust;
+  /** False where nobody can message the bot directly (GitHub), so nobody claims it that way. */
+  readonly directMessages?: false;
+  /** A link that opens a direct chat with the bot with `/start <code>` ready to send (Telegram). */
+  claimUrl?(bot: BotIdentity, code: string): string;
 
   /** Start connecting a new bot. Yields progress until `succeeded` or `failed`. */
   onboard(

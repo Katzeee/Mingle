@@ -280,6 +280,9 @@ export function githubChannel(options: GitHubOptions = {}): Channel {
 
   return {
     platform: "github",
+    // Only owners, members and collaborators of a repository reach the agent (TRUSTED below).
+    trust: "org",
+    directMessages: false,
     onboarding,
     ...(clientId ? { manualFields: [TOKEN_FIELD], manualSetupUrl: TOKEN_URL } : {}),
 

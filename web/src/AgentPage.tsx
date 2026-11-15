@@ -2,6 +2,8 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { AgentEnv } from "./AgentEnv.tsx";
 import type { Navigate } from "./App.tsx";
 import {
+  type AccessEntry,
+  type AccessRequest,
   type Activity,
   type AgentView,
   ApiError,
@@ -212,6 +214,17 @@ export function AgentPage({
     }
     refresh();
   };
+  const decide = async (request: AccessRequest, access: "allowed" | "blocked") => {
+    const name = requestName(t, request);
+    try {
+      await api.setAccess(agent.id, request.kind, request.id, access);
+      setNotice(t(access === "allowed" ? "needs.allowed" : "needs.declined", { name, agent: agent.name }));
+    } catch (error) {
+      setNotice(errorText(t, error));
+    }
+    await onChanged();
+    refresh();
+  };
   const connect = () => onNavigate({ kind: "connect", slug: agent.slug });
   const unanswered = (activity ?? []).filter((m) => m.direction === "in" && m.state === "unanswered");
   const failed = (activity ?? []).filter((m) => m.direction === "in" && m.state === "failed");
@@ -222,6 +235,7 @@ export function AgentPage({
     agent.connections.length > 0 ||
     agent.hasReplied ||
     troubled.length > 0 ||
+    agent.requests.length > 0 ||
     unanswered.length > 0 ||
     failed.length > 0;
   const needsYou = hasNeeds ? (
@@ -232,6 +246,7 @@ export function AgentPage({
       troubled={troubled}
       onRetry={retry}
       onIgnore={ignore}
+      onDecide={decide}
       onConnect={connect}
     />
   ) : null;
@@ -299,6 +314,7 @@ export function AgentPage({
                     }}
                   />
                 </section>
+                <AccessSettings agent={agent} onChanged={onChanged} />
                 <RoleEditor agent={agent} onSaved={onChanged} />
                 <Brain agent={agent} onSaved={onChanged} />
                 <AgentEnv agent={agent} />
@@ -368,8 +384,9 @@ export function AgentPage({
                 {!agent.hasReplied ? (
                   <GettingStarted
                     agent={agent}
-                    heard={(activity ?? []).some((m) => m.direction === "in")}
+                    heard={(activity ?? []).some((m) => m.direction === "in" && m.state !== "held")}
                     onConnect={connect}
+                    onChanged={onChanged}
                   />
                 ) : null}
                 {agent.connections.some((c) => c.state === "connected") ? <KeepOnline /> : null}
@@ -441,9 +458,21 @@ export function AgentPage({
 }
 
 /** Until the agent has answered someone: the steps that get it there, and where it is. */
-function GettingStarted({ agent, heard, onConnect }: { agent: AgentView; heard: boolean; onConnect: () => void }) {
+function GettingStarted({
+  agent,
+  heard,
+  onConnect,
+  onChanged,
+}: {
+  agent: AgentView;
+  heard: boolean;
+  onConnect: () => void;
+  onChanged: () => Promise<void> | void;
+}) {
   const { t } = useI18n();
   const connected = agent.connections.find((c) => c.state === "connected");
+  // A bot that does not know its owner yet: claiming it is how to say hello, or the first message waits.
+  const unclaimed = agent.connections.find((c) => c.state === "connected" && c.claim);
   const any = agent.connections.length > 0;
   return (
     <section className="flex flex-col gap-4 rounded-card border border-line bg-card px-5 py-4 shadow-card">
@@ -459,13 +488,19 @@ function GettingStarted({ agent, heard, onConnect }: { agent: AgentView; heard: 
             {t("start.connectAction")}
           </Button>
         </Step>
-        <Step n={3} state={!any ? "later" : heard ? "done" : "now"} title={t("start.say")}>
-          <p className="text-small text-ink2">
-            {connected ? t(`${connected.platform}.qr3` as MessageKey) : t("start.sayBody")}
-          </p>
-          {connected ? <Waiting>{t("start.waiting")}</Waiting> : <Waiting>{t("start.waitingConnection")}</Waiting>}
+        <Step n={3} state={!any ? "later" : heard && !unclaimed ? "done" : "now"} title={t("start.say")}>
+          {unclaimed ? (
+            <ClaimCode connection={unclaimed} onChanged={onChanged} />
+          ) : (
+            <>
+              <p className="text-small text-ink2">
+                {connected ? t(`${connected.platform}.qr3` as MessageKey) : t("start.sayBody")}
+              </p>
+              {connected ? <Waiting>{t("start.waiting")}</Waiting> : <Waiting>{t("start.waitingConnection")}</Waiting>}
+            </>
+          )}
         </Step>
-        <Step n={4} state={heard ? "now" : "later"} title={t("start.reply")}>
+        <Step n={4} state={heard && !unclaimed ? "now" : "later"} title={t("start.reply")}>
           {agent.status === "paused" ? (
             <p className="text-small text-ink2">{t("start.replyPaused", { name: agent.name })}</p>
           ) : agent.status === "error" ? (
@@ -575,6 +610,7 @@ function NeedsYou({
   onConnect,
   onRetry,
   onIgnore,
+  onDecide,
 }: {
   agent: AgentView;
   unanswered: string[];
@@ -583,6 +619,7 @@ function NeedsYou({
   onConnect: () => void;
   onRetry: (ids: string[]) => Promise<void>;
   onIgnore: (ids: string[]) => Promise<void>;
+  onDecide: (request: AccessRequest, access: "allowed" | "blocked") => Promise<void>;
 }) {
   const { t } = useI18n();
   // Retrying while the harness still fails only fails again; say so, but let the person try.
@@ -610,6 +647,9 @@ function NeedsYou({
           t("connection.approvalHint")
         )}
       </Problem>
+    )),
+    ...agent.requests.map((r) => (
+      <AccessRequestItem key={`${r.kind}:${r.id}`} agent={agent} request={r} onDecide={onDecide} />
     )),
     ...(failed.length > 0
       ? [
@@ -650,6 +690,219 @@ function NeedsYou({
           <StatusDot state="connected" /> {t("needs.none")}
         </p>
       )}
+    </Section>
+  );
+}
+
+/** What to call a person or group asking to talk to the agent. */
+function requestName(t: ReturnType<typeof useI18n>["t"], r: { kind: string; name: string | null }): string {
+  return r.name ?? (r.kind === "group" ? t("chat.group") : t("needs.someone"));
+}
+
+/**
+ * Someone new, or a new group, wrote to the agent where anyone can find it (docs/spec.md 4.7): who,
+ * where, the first thing they sent, and the two answers. The agent sees nothing until then.
+ */
+function AccessRequestItem({
+  agent,
+  request,
+  onDecide,
+}: {
+  agent: AgentView;
+  request: AccessRequest;
+  onDecide: (request: AccessRequest, access: "allowed" | "blocked") => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const platform = t(`platform.${request.platform}` as MessageKey);
+  const title =
+    request.kind === "contact"
+      ? t("needs.dmRequest", { name: request.name ?? t("needs.someone"), agent: agent.name })
+      : request.name
+        ? t("needs.groupRequest", { name: request.name, agent: agent.name })
+        : t("needs.groupRequestUnnamed", { agent: agent.name });
+  const answer = async (access: "allowed" | "blocked") => {
+    setBusy(true);
+    try {
+      await onDecide(request, access);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Problem title={title}>
+      <p className="flex min-w-0 items-center gap-1.5 text-caption text-ink3">
+        <PlatformIcon platform={request.platform} size={14} />
+        <span className="truncate">
+          {platform}
+          {request.count > 1 ? ` · ${t("needs.more", { count: String(request.count - 1) })}` : ""}
+        </span>
+      </p>
+      <p className="selectable mt-1 line-clamp-3 wrap-anywhere text-ink">
+        {request.kind === "group" && request.sender ? (
+          <span className="text-ink2">{t("needs.groupSender", { name: request.sender })} </span>
+        ) : null}
+        {request.preview}
+      </p>
+      <p className="mt-1">
+        {t(request.kind === "contact" ? "needs.dmRequestBody" : "needs.groupRequestBody", { agent: agent.name })}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button small variant="primary" disabled={busy} onClick={() => answer("allowed")}>
+          {t("needs.allow")}
+        </Button>
+        <Button small disabled={busy} onClick={() => answer("blocked")}>
+          {t("needs.decline")}
+        </Button>
+      </div>
+    </Problem>
+  );
+}
+
+/**
+ * How to claim a bot the platform named no owner for: the code, big enough to read off and type,
+ * the one-tap link where the platform has one, and how long it lasts. Expired, a button for a new one.
+ */
+function ClaimCode({ connection, onChanged }: { connection: ConnectionView; onChanged: () => Promise<void> | void }) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const claim = connection.claim;
+  if (!claim) return null;
+  const left = claim.expiresAt ? claim.expiresAt - Date.now() : 0;
+  const code = claim.code && left > 0 ? claim.code : null;
+  const renew = async () => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      await api.claim(connection.id);
+      await onChanged();
+    } catch (error) {
+      setFailure(errorText(t, error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2 py-1">
+      <p className="text-small text-ink2">{t(code ? "connection.claimHint" : "connection.claimExpired")}</p>
+      {code ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="selectable font-mono text-title3 font-semibold tracking-[0.18em]">{code}</span>
+          {claim.url ? (
+            <a
+              href={claim.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-7 items-center rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
+            >
+              {t("connection.claimOpen", { platform: t(`platform.${connection.platform}` as MessageKey) })}
+            </a>
+          ) : null}
+          <span className="text-caption text-ink3">
+            {t("connection.claimLeft", { minutes: String(Math.max(1, Math.ceil(left / 60_000))) })}
+          </span>
+        </div>
+      ) : (
+        <Button small className="self-start" disabled={busy} onClick={renew}>
+          {t("connection.claimNew")}
+        </Button>
+      )}
+      {failure ? <p className="text-caption text-red">{failure}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Who can talk to the agent (docs/spec.md 4.7): one switch to be asked about everyone new, and the
+ * people and groups already let in or turned away, so the owner can change their mind.
+ */
+function AccessSettings({ agent, onChanged }: { agent: AgentView; onChanged: () => Promise<void> | void }) {
+  const { t } = useI18n();
+  const [entries, setEntries] = useState<AccessEntry[] | null>(null);
+  const [all, setAll] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setEntries(await api.access(agent.id));
+    } catch {
+      setEntries((current) => current ?? []);
+    }
+  }, [agent.id]);
+  // Read again when a request is answered elsewhere (the side panel), as well as on opening.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the count is the signal to read again
+  useEffect(() => {
+    void load();
+  }, [load, agent.requests.length]);
+  const change = async (entry: AccessEntry, access: "allowed" | "blocked") => {
+    setFailure(null);
+    try {
+      await api.setAccess(agent.id, entry.kind, entry.id, access);
+    } catch (error) {
+      setFailure(errorText(t, error));
+    }
+    await load();
+    await onChanged();
+  };
+  const shown = entries && !all ? entries.slice(0, 6) : (entries ?? []);
+  return (
+    <Section title={t("access.title")}>
+      <p className="-mt-1 px-1 text-small text-ink2">{t("access.body", { name: agent.name })}</p>
+      <Group>
+        <GroupRow>
+          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span>{t("access.askAll")}</span>
+              <span className="text-small text-ink2">{t("access.askAllHint")}</span>
+            </span>
+            <input
+              type="checkbox"
+              className="size-4 shrink-0 accent-[var(--accent-btn)]"
+              checked={agent.askAll}
+              onChange={async (e) => {
+                setFailure(null);
+                try {
+                  await api.setAskAll(agent.id, e.target.checked);
+                } catch (error) {
+                  setFailure(errorText(t, error));
+                }
+                await onChanged();
+              }}
+            />
+          </label>
+        </GroupRow>
+        {shown.map((entry) => (
+          <GroupRow key={`${entry.kind}:${entry.id}`}>
+            <PlatformIcon platform={entry.platform} size={22} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate" title={entry.name ?? undefined}>
+                {entry.name ?? t("access.unnamed")}
+              </span>
+              <span className="truncate text-caption text-ink2">
+                {t(`platform.${entry.platform}` as MessageKey)} ·{" "}
+                {t(entry.kind === "contact" ? "chat.dm" : "chat.group")}
+              </span>
+            </span>
+            {entry.access === "blocked" ? (
+              <span className="shrink-0 text-small text-ink3">{t("access.declined")}</span>
+            ) : null}
+            <MoreMenu
+              label={t("agent.more")}
+              items={[
+                entry.access === "allowed"
+                  ? { label: t("access.revoke"), danger: true, onSelect: () => void change(entry, "blocked") }
+                  : { label: t("access.allow"), onSelect: () => void change(entry, "allowed") },
+              ]}
+            />
+          </GroupRow>
+        ))}
+      </Group>
+      {entries && entries.length > shown.length ? (
+        <Button variant="ghost" small className="self-start" onClick={() => setAll(true)}>
+          {t("access.showAll", { count: String(entries.length) })}
+        </Button>
+      ) : null}
+      {failure ? <p className="px-1 text-caption text-red">{failure}</p> : null}
     </Section>
   );
 }
@@ -1009,11 +1262,9 @@ function ConnectionRow({
   const hint =
     connection.state === "error"
       ? connectionDetail(t, connection)
-      : connection.state === "connected" && !connection.owner
-        ? t("connection.noOwner")
-        : shared && owner && !owner.name
-          ? t("connection.nameOwnerHint", { platform })
-          : null;
+      : shared && owner && !owner.name
+        ? t("connection.nameOwnerHint", { platform })
+        : null;
   return (
     <GroupRow
       id={connectionRowId(connection.id)}
@@ -1097,6 +1348,11 @@ function ConnectionRow({
       {failure ? <p className="w-full pl-11 text-caption text-red">{failure}</p> : null}
       {hint ? (
         <p className={`w-full pl-11 text-caption ${connection.state === "error" ? "text-red" : "text-ink3"}`}>{hint}</p>
+      ) : null}
+      {connection.state === "connected" && connection.claim ? (
+        <div className="w-full pl-11">
+          <ClaimCode connection={connection} onChanged={onChanged} />
+        </div>
       ) : null}
     </GroupRow>
   );
@@ -1609,6 +1865,12 @@ function ActivityList({
                   <StatusDot state="error" />
                   {t("agent.failed")}
                   <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
+                </p>
+              ) : null}
+              {m.direction === "in" && m.state === "held" ? (
+                <p className="flex items-center gap-1.5 text-caption text-amber">
+                  <StatusDot state="awaiting_approval" />
+                  {t("agent.held")}
                 </p>
               ) : null}
               {m.direction === "in" && m.triggers && m.state === "ignored" ? (

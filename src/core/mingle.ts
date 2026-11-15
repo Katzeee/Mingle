@@ -15,8 +15,17 @@ import type {
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
 import type { SecretStore } from "../platform/secrets.ts";
-import { type Agent, type Connection, type Message, type Reminder, Store } from "../store/store.ts";
+import {
+  type Agent,
+  type Chat,
+  type Connection,
+  type Contact,
+  type Message,
+  type Reminder,
+  Store,
+} from "../store/store.ts";
 import { VERSION } from "../version.ts";
+import { CLAIM_ATTEMPTS, CLAIM_TTL_MS, claimAttempt, claimCode, gate } from "./access.ts";
 import { Brains } from "./brains.ts";
 import { coldRebuildFor } from "./cold.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
@@ -25,7 +34,7 @@ import { formatReminder, renderMessage } from "./format.ts";
 import { createHome, memorySize, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
 import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stored } from "./link.ts";
-import { LiveReplies, pausedNote, stopNote } from "./live.ts";
+import { accessText, LiveReplies, pausedNote, stopNote } from "./live.ts";
 import { Outbox } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
@@ -105,6 +114,8 @@ export class Mingle {
   /** Paused agents (docs/spec.md 4.11), and the chats already told so during the current pause. */
   private readonly paused = new Set<string>();
   private readonly pauseNoted = new Set<string>();
+  /** Wrong claim codes each ownerless bot took since its code was issued (docs/spec.md 4.7). */
+  private readonly claimMisses = new Map<string, number>();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -592,7 +603,7 @@ export class Mingle {
     const harness = harnesses.find((h) => h.id === agent.harness);
     const now = Date.now();
     const counts = this.store.inboundCounts(agent.id, now - 7 * 86_400_000);
-    const states = ["received", "delivered", "waiting", "replied", "unanswered", "failed", "ignored"];
+    const states = ["received", "delivered", "waiting", "replied", "unanswered", "failed", "ignored", "held"];
     const iso = (ms: number | null) => (ms == null ? "never" : new Date(ms).toISOString());
     const last = this.store.lastMessageTimes(agent.id);
     const quota = this.store.quotaWait(agent.id);
@@ -947,6 +958,8 @@ export class Mingle {
     });
     // The owner is in the address book from the start, so the console can name them before they write.
     if (event.ownerId) this.store.touchContact(connection.id, event.ownerId, null);
+    // The platform did not say who set the bot up: whoever sends it this code becomes its owner.
+    else if (this.channel(platform).directMessages !== false) this.issueClaim(connection.id);
     await this.reconnect(connection.id, event.credentials);
     if (event.ownerId)
       void this.greetOwner(connection.id, event.ownerId).catch((error) =>
@@ -970,6 +983,23 @@ export class Mingle {
         ? `你好，我是 ${agent.name}。直接在这里给我发消息，或者把我拉进群里 @ 我。`
         : `Hi, I'm ${agent.name}. Message me here, or add me to a group and @ me.`;
     await live.messageUser(ownerId, text).catch((error) => this.log(`greeting failed: ${(error as Error).message}`));
+  }
+
+  /**
+   * A fresh one-time code for an ownerless bot (docs/spec.md 4.7): the first direct message that
+   * carries it makes its sender the owner. Valid for ten minutes; a new one replaces the old.
+   */
+  issueClaim(connectionId: string): { code: string; expiresAt: number } {
+    const connection = this.store.connection(connectionId);
+    if (!connection) throw notFound("connection", connectionId);
+    if (connection.ownerId) throw new MingleError("owner_known", "this bot already has its owner", 409);
+    if (this.channel(connection.platform).directMessages === false) {
+      throw new MingleError("claim_unsupported", "nobody can message this bot directly", 409);
+    }
+    const claim = { code: claimCode(), expiresAt: Date.now() + CLAIM_TTL_MS };
+    this.store.updateConnection(connectionId, { claimCode: claim.code, claimExpiresAt: claim.expiresAt });
+    this.claimMisses.delete(connectionId);
+    return claim;
   }
 
   async removeConnection(connectionId: string): Promise<void> {
@@ -1159,19 +1189,27 @@ export class Mingle {
       name: inbound.chat.name,
       parentId: parent?.id,
     });
-    let ownerId = connection.ownerId;
-    if (!ownerId && chat.kind === "dm") {
-      ownerId = inbound.sender.id;
-      this.store.updateConnection(connectionId, { ownerId });
-      this.log(
-        `${connection.platform}: ${inbound.sender.name} is now the owner of ${connection.botName ?? connection.id}`,
-      );
-    }
-    this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
+    const contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
+    if (!connection.ownerId && chat.kind === "dm" && this.claim(connection, chat, contact, inbound)) return;
+    const ownerId = connection.ownerId;
     const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
     const replyTo = quoted?.id ?? null;
     // A reply to something the agent said is addressed to it, even where the platform does not say so.
     const triggers = chat.kind === "dm" || inbound.addressedToBot || quoted?.direction === "out";
+    // Who may put the agent to work (docs/spec.md 4.7). Only a trigger needs letting in: background
+    // is stored as it always was.
+    const group = chat.kind === "dm" ? undefined : (parent ?? chat);
+    const isOwner = inbound.sender.id === ownerId;
+    const verdict = triggers
+      ? gate({
+          trust: this.channel(connection.platform).trust ?? "public",
+          askAll: this.store.agent(connection.agentId)?.askAll ?? false,
+          isOwner,
+          chatKind: chat.kind,
+          contact: contact.access,
+          group: group?.access ?? null,
+        })
+      : "deliver";
     const message = this.store.insertInbound({
       chatId: chat.id,
       platformId: inbound.platformId,
@@ -1185,10 +1223,24 @@ export class Mingle {
         ...(a.mime ? { mime: a.mime } : {}),
       })),
       replyTo,
-      triggers,
+      // A refused person or group is kept on record, like background: it never wakes the agent.
+      triggers: triggers && verdict !== "drop",
+      held: verdict === "ask",
       createdAt: inbound.sentAt,
     });
-    if (!message || !triggers) return; // Duplicate, or not addressed to the agent.
+    if (!message || !triggers || verdict === "drop") return; // Duplicate, not addressed to the agent, or refused.
+    if (verdict === "ask") {
+      this.asked(connection, chat, group, contact, message);
+      return;
+    }
+    // Let in without asking (or the owner speaking): remembered, so that turning on "ask about
+    // everyone new" later does not cut off people already talking to the agent.
+    if (chat.kind === "dm" && contact.access === null) this.store.setContactAccess(contact.id, "allowed");
+    if (group && group.access === null) {
+      this.store.setChatAccess(group.id, "allowed");
+      // The owner using the agent in a group lets the group in: what waited there goes through too.
+      if (isOwner) this.admit(connection.agentId, this.heldIn(connection.agentId, { group: group.id }));
+    }
 
     const live = this.live.get(connectionId);
 
@@ -1233,6 +1285,172 @@ export class Mingle {
       });
     }
     this.runtimes.get(connection.agentId)?.enqueueMessage(message.id);
+  }
+
+  /**
+   * A direct message to an ownerless bot that carries its claim code makes the sender the owner
+   * (docs/spec.md 4.7). True when this message was that claim and is fully handled. A wrong code
+   * counts against the bot's code, which stops working after a few, so it cannot be guessed.
+   */
+  private claim(connection: Connection, chat: Chat, contact: Contact, inbound: InboundMessage): boolean {
+    const code = claimAttempt(inbound.text);
+    if (!code || !connection.claimCode) return false;
+    const valid = (connection.claimExpiresAt ?? 0) > Date.now();
+    if (!valid || code !== connection.claimCode) {
+      const misses = (this.claimMisses.get(connection.id) ?? 0) + 1;
+      this.claimMisses.set(connection.id, misses);
+      if (valid && misses >= CLAIM_ATTEMPTS) {
+        this.store.updateConnection(connection.id, { claimCode: null, claimExpiresAt: null });
+        this.log(
+          `${connection.platform}: claim code of ${connection.botName ?? connection.id} retired after ${misses} wrong tries`,
+        );
+      }
+      return false;
+    }
+    this.store.updateConnection(connection.id, { ownerId: inbound.sender.id, claimCode: null, claimExpiresAt: null });
+    this.claimMisses.delete(connection.id);
+    this.store.setContactAccess(contact.id, "allowed");
+    this.log(
+      `${connection.platform}: ${inbound.sender.name} claimed ${connection.botName ?? connection.id} as its owner`,
+    );
+    const message = this.store.insertInbound({
+      chatId: chat.id,
+      platformId: inbound.platformId,
+      senderId: inbound.sender.id,
+      senderName: inbound.sender.name,
+      body: inbound.text,
+      attachments: [],
+      replyTo: null,
+      triggers: true,
+      createdAt: inbound.sentAt,
+    });
+    if (message) this.store.moveInbound([message.id], "reply");
+    // What the new owner wrote before claiming waited as a stranger's; it goes through now.
+    this.admit(connection.agentId, this.heldIn(connection.agentId, { contact }));
+    const name = this.store.agent(connection.agentId)?.name ?? "";
+    this.note(connection.id, chat, accessText(connection.platform).claimed(name), inbound.platformId);
+    return true;
+  }
+
+  /**
+   * A message from a person or group the owner has not let in yet was held. The first time for that
+   * person or group, the sender hears once that the agent asks first, and the owner is told in
+   * their own chat with the bot. The console lists it under "Needs you" either way.
+   */
+  private asked(connection: Connection, chat: Chat, group: Chat | undefined, contact: Contact, message: Message): void {
+    const held = this.heldIn(connection.agentId, group ? { group: group.id } : { contact });
+    if (held.length !== 1) return;
+    this.log(
+      `${connection.platform}: holding a message from ${group ? `group ${group.id}` : `contact ${contact.id}`} for the owner`,
+    );
+    const text = accessText(connection.platform);
+    this.note(connection.id, chat, text.askNote, message.platformId ?? undefined);
+    const ownerId = connection.ownerId;
+    if (!ownerId) return;
+    const note = text.askOwner({
+      agent: this.store.agent(connection.agentId)?.name ?? "",
+      sender: contact.alias || contact.name,
+      group: group ? (group.name ?? "") : null,
+      body: message.body,
+    });
+    const ownerChat = this.store.directChatWith(connection.id, ownerId);
+    if (ownerChat) this.note(connection.id, ownerChat, note);
+    else
+      void this.live
+        .get(connection.id)
+        ?.messageUser?.(ownerId, note)
+        .catch((error) => this.log(`owner notice failed: ${(error as Error).message}`));
+  }
+
+  /**
+   * A line of Mingle's own in a chat, like the greeting a new bot sends its owner: not something
+   * the agent said, so it is not recorded as the agent's message, answers nothing, and does not
+   * count as the agent's first reply. Best effort.
+   */
+  private note(connectionId: string, chat: Chat, text: string, replyTo?: string): void {
+    const live = this.live.get(connectionId);
+    if (!live) return;
+    const ref: ChatRef = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
+    void live
+      .send({ chat: ref, text, ...(replyTo ? { replyTo } : {}) })
+      .then((result) => {
+        if (result.kind === "failed") this.log(`note to ${chat.id} failed: ${result.code}`);
+      })
+      .catch((error) => this.log(`note to ${chat.id} failed: ${(error as Error).message}`));
+  }
+
+  /** Held messages of one person's direct chats, or of one group and its threads. */
+  private heldIn(agentId: string, of: { contact: Contact } | { group: string }): Message[] {
+    return this.store
+      .heldMessages(agentId)
+      .filter((m) =>
+        "group" in of
+          ? m.chat.id === of.group || m.chat.parentId === of.group
+          : m.chat.kind === "dm" && m.connectionId === of.contact.connectionId && m.senderId === of.contact.platformId,
+      );
+  }
+
+  /** Held messages go to the agent in their order, as if they had just arrived. */
+  private admit(agentId: string, messages: readonly Message[]): void {
+    const moved = new Set(
+      this.store.moveInbound(
+        messages.map((m) => m.id),
+        "admit",
+      ),
+    );
+    if (moved.size === 0) return;
+    // A paused agent does not take them later either, like anything else that came in meanwhile.
+    if (this.paused.has(agentId)) {
+      this.store.moveInbound([...moved], "pause");
+      return;
+    }
+    for (const message of messages) {
+      if (!moved.has(message.id)) continue;
+      const chat = this.store.chat(message.chatId);
+      const live = chat && this.live.get(chat.connectionId);
+      if (live) this.reopenReply(agentId, message, live);
+      this.runtimes.get(agentId)?.enqueueMessage(message.id);
+    }
+  }
+
+  /**
+   * The owner lets a person or a group put the agent to work, or turns them away (docs/spec.md 4.7).
+   * What they sent meanwhile goes to the agent, or stays on record unanswered. Returns how many
+   * held messages that settled. A bot's owner can always talk to the agent, so is not changed here.
+   */
+  setAccess(idOrSlug: string, target: { contact: string } | { chat: string }, access: "allowed" | "blocked"): number {
+    const agent = this.agent(idOrSlug);
+    let held: Message[];
+    if ("contact" in target) {
+      const contact = this.store.agentContact(agent.id, target.contact);
+      if (!contact) throw notFound("contact", target.contact);
+      if (this.store.connection(contact.connectionId)?.ownerId === contact.platformId) {
+        throw new MingleError("contact_is_owner", "the bot's owner can always talk to the agent", 409);
+      }
+      this.store.setContactAccess(contact.id, access);
+      held = this.heldIn(agent.id, { contact });
+    } else {
+      const chat = this.store.agentChat(agent.id, target.chat);
+      if (chat?.kind !== "group") throw notFound("chat", target.chat);
+      this.store.setChatAccess(chat.id, access);
+      held = this.heldIn(agent.id, { group: chat.id });
+    }
+    this.log(
+      `${agent.name}: owner ${access === "allowed" ? "allowed" : "refused"} ${"contact" in target ? target.contact : target.chat}`,
+    );
+    if (access === "allowed") {
+      this.admit(agent.id, held);
+      return held.length;
+    }
+    return this.store.moveInbound(
+      held.map((m) => m.id),
+      "refuse",
+    ).length;
+  }
+
+  /** Ask the owner about new people and groups on every chat app, not only public ones. */
+  setAskAll(idOrSlug: string, on: boolean): void {
+    this.store.setAskAll(this.agent(idOrSlug).id, on);
   }
 
   /**

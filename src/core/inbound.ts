@@ -19,11 +19,15 @@ import type { InboundState } from "../store/store.ts";
  *   retry:   waiting, failed, unanswered ──▶ received
  *   ignore:  waiting, failed, unanswered ──▶ ignored
  *   pause:   received, delivered, waiting ──▶ ignored
+ *   admit:   held ──▶ received
+ *   refuse:  held ──▶ ignored
  *
  * `replied` and `ignored` are final. `failed` and `unanswered` wait for the owner (retry or
  * ignore in the console) or for the agent to answer later; `received` and `delivered` move
  * on by themselves (delivery, the end of the turn); `waiting` moves on by itself at its
- * retry time (or sooner, when the owner retries or ignores it).
+ * retry time (or sooner, when the owner retries or ignores it). `held` is a message from someone
+ * the owner has not let in yet (docs/spec.md 4.7): it never reaches the agent until the owner
+ * allows that person or group (admit) or turns them away (refuse).
  */
 export type InboundEvent =
   /** Handed to the agent's session. */
@@ -45,7 +49,11 @@ export type InboundEvent =
   /** The owner dismisses it. */
   | "ignore"
   /** The owner paused the agent: what it had not answered yet will not be answered (docs/spec.md 4.11). */
-  | "pause";
+  | "pause"
+  /** The owner let its sender or group in: to the inbox, as if it had just arrived. */
+  | "admit"
+  /** The owner turned its sender or group away. */
+  | "refuse";
 
 export const INBOUND: Readonly<
   Record<InboundEvent, { readonly from: readonly InboundState[]; readonly to: InboundState }>
@@ -66,6 +74,8 @@ export const INBOUND: Readonly<
   // Failed and unanswered messages stay for the owner to retry or ignore after resuming.
   // Waiting ones were in hand when the owner paused; like received ones, they are not answered later.
   pause: { from: ["received", "delivered", "waiting"], to: "ignored" },
+  admit: { from: ["held"], to: "received" },
+  refuse: { from: ["held"], to: "ignored" },
 };
 
 export const FINAL_INBOUND: readonly InboundState[] = ["replied", "ignored"];

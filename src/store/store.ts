@@ -7,7 +7,16 @@ import { searchTerms } from "../core/terms.ts";
 
 export type AgentStatus = "offline" | "idle" | "thinking" | "working" | "error" | "paused";
 export type ConnectionStateKind = "awaiting_credentials" | "awaiting_approval" | "connected" | "reconnecting" | "error";
-export type InboundState = "received" | "delivered" | "waiting" | "replied" | "unanswered" | "failed" | "ignored";
+export type InboundState =
+  | "received"
+  | "delivered"
+  | "waiting"
+  | "replied"
+  | "unanswered"
+  | "failed"
+  | "ignored"
+  /** From someone the owner has not let in yet (docs/spec.md 4.7). */
+  | "held";
 export type OutboundState = "pending" | "sent" | "failed" | "uncertain";
 export type TaskStatus = "todo" | "in_progress" | "done" | "closed";
 
@@ -26,8 +35,13 @@ export interface Agent {
   statusFailure: string | null;
   /** Whether this agent has ever successfully sent a message. */
   hasReplied: boolean;
+  /** Ask the owner about new people and groups on every chat app, not only public ones (docs/spec.md 4.7). */
+  askAll: boolean;
   createdAt: number;
 }
+
+/** Whether a person or group may put the agent to work: null until decided (docs/spec.md 4.7). */
+export type Access = "allowed" | "blocked" | null;
 
 /** An agent's environment variable as stored: its name only. */
 export interface EnvName {
@@ -45,6 +59,9 @@ export interface Connection {
   stateDetail: string | null;
   secretRef: string | null;
   ownerId: string | null;
+  /** The one-time code that makes whoever sends it the owner, while the bot has none (docs/spec.md 4.7). */
+  claimCode: string | null;
+  claimExpiresAt: number | null;
 }
 
 /** One person as one bot sees them: the agent's address book (docs/spec.md 3). */
@@ -56,6 +73,7 @@ export interface Contact {
   name: string | null;
   /** The name the owner or the agent gave them. Wins over `name`. */
   alias: string | null;
+  access: Access;
   updatedAt: number;
 }
 
@@ -72,6 +90,8 @@ export interface Chat {
   name: string | null;
   /** The chat this thread belongs to, whose messages are its background. */
   parentId: string | null;
+  /** Groups only: whether the owner let this group in. */
+  access: Access;
 }
 
 export interface Attachment {
@@ -236,6 +256,10 @@ export class Store {
     this.db.prepare(`UPDATE agents SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...values, this.now(), id);
   }
 
+  setAskAll(id: string, on: boolean): void {
+    this.db.prepare("UPDATE agents SET ask_all = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
+  }
+
   setAvatar(id: string, file: string | null): void {
     this.db.prepare("UPDATE agents SET avatar = ?, updated_at = ? WHERE id = ?").run(file, this.now(), id);
   }
@@ -360,7 +384,9 @@ export class Store {
 
   updateConnection(
     id: string,
-    patch: Partial<Pick<Connection, "botId" | "botName" | "state" | "stateDetail" | "ownerId">>,
+    patch: Partial<
+      Pick<Connection, "botId" | "botName" | "state" | "stateDetail" | "ownerId" | "claimCode" | "claimExpiresAt">
+    >,
   ): void {
     const columns: Record<string, string> = {
       botId: "bot_id",
@@ -368,6 +394,8 @@ export class Store {
       state: "state",
       stateDetail: "state_detail",
       ownerId: "owner_id",
+      claimCode: "claim_code",
+      claimExpiresAt: "claim_expires_at",
     };
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length === 0) return;
@@ -503,6 +531,74 @@ export class Store {
     return rows.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform, owner: r.is_owner === 1 }));
   }
 
+  setContactAccess(id: string, access: Access): void {
+    this.db.prepare("UPDATE contacts SET access = ?, updated_at = ? WHERE id = ?").run(access, this.now(), id);
+  }
+
+  setChatAccess(id: string, access: Access): void {
+    this.db.prepare("UPDATE chats SET access = ?, updated_at = ? WHERE id = ?").run(access, this.now(), id);
+  }
+
+  /**
+   * The people and groups whose access is decided, for the owner to change their mind: everyone but
+   * the bots' owners, who can always talk to the agent. Most recently changed first.
+   */
+  decidedAccess(agentId: string): {
+    contacts: (Contact & { platform: Platform })[];
+    groups: (Chat & { platform: Platform })[];
+  } {
+    const contacts = this.db
+      .prepare(
+        `SELECT k.*, n.platform FROM contacts k JOIN connections n ON n.id = k.connection_id
+         WHERE n.agent_id = ? AND k.access IS NOT NULL AND (n.owner_id IS NULL OR n.owner_id <> k.platform_id)
+         ORDER BY k.updated_at DESC`,
+      )
+      .all(agentId) as Row[];
+    const groups = this.db
+      .prepare(
+        `SELECT c.*, n.platform FROM chats c JOIN connections n ON n.id = c.connection_id
+         WHERE n.agent_id = ? AND c.kind = 'group' AND c.access IS NOT NULL
+         ORDER BY c.updated_at DESC`,
+      )
+      .all(agentId) as Row[];
+    return {
+      contacts: contacts.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform })),
+      groups: groups.map((r) => ({ ...toChat(r), platform: String(r.platform) as Platform })),
+    };
+  }
+
+  /** This agent's messages waiting for the owner to let their sender or group in, oldest first. */
+  heldMessages(agentId: string): (Message & { chat: Chat; connectionId: string; platform: Platform })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT m.*, n.platform, c.connection_id FROM messages m JOIN chats c ON c.id = m.chat_id
+         JOIN connections n ON n.id = c.connection_id
+         WHERE n.agent_id = ? AND m.state = 'held' ORDER BY m.created_at, m.rowid`,
+      )
+      .all(agentId) as Row[];
+    return rows.map((r) => {
+      const message = toMessage(r);
+      return {
+        ...message,
+        chat: this.chat(message.chatId) as Chat,
+        connectionId: String(r.connection_id),
+        platform: String(r.platform) as Platform,
+      };
+    });
+  }
+
+  /** The direct chat this bot has with this person, if they ever wrote to it there. */
+  directChatWith(connectionId: string, platformUserId: string): Chat | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT c.* FROM chats c WHERE c.connection_id = ? AND c.kind = 'dm'
+         AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id AND m.direction = 'in' AND m.sender_id = ?)
+         ORDER BY c.updated_at DESC LIMIT 1`,
+      )
+      .get(connectionId, platformUserId) as Row | undefined;
+    return row && toChat(row);
+  }
+
   /** Give a contact a name, or clear it with null to go back to the platform's. */
   setContactAlias(id: string, alias: string | null): Contact | undefined {
     this.db.prepare("UPDATE contacts SET alias = ?, updated_at = ? WHERE id = ?").run(alias, this.now(), id);
@@ -521,6 +617,8 @@ export class Store {
     attachments: Omit<Attachment, "id">[];
     replyTo: string | null;
     triggers: boolean;
+    /** A trigger from someone the owner has not let in yet: kept as `held` (docs/spec.md 4.7). */
+    held?: boolean;
     createdAt: number;
   }): Message | undefined {
     const id = this.mint("messages", "m", 5);
@@ -540,7 +638,7 @@ export class Store {
         attachments.length ? JSON.stringify(attachments) : null,
         input.replyTo,
         input.triggers ? 1 : 0,
-        input.triggers ? "received" : "ignored",
+        input.triggers ? (input.held ? "held" : "received") : "ignored",
         input.createdAt,
       );
     return result.changes ? this.message(id) : undefined;
@@ -1036,6 +1134,7 @@ function toAgent(r: Row): Agent {
     statusDetail: str(r.status_detail),
     statusFailure: str(r.status_failure),
     hasReplied: Number(r.has_replied) === 1,
+    askAll: Number(r.ask_all) === 1,
     createdAt: Number(r.created_at),
   };
 }
@@ -1051,6 +1150,8 @@ function toConnection(r: Row): Connection {
     stateDetail: str(r.state_detail),
     secretRef: str(r.secret_ref),
     ownerId: str(r.owner_id),
+    claimCode: str(r.claim_code),
+    claimExpiresAt: r.claim_expires_at == null ? null : Number(r.claim_expires_at),
   };
 }
 
@@ -1061,6 +1162,7 @@ function toContact(r: Row): Contact {
     platformId: String(r.platform_id),
     name: str(r.name),
     alias: str(r.alias),
+    access: access(r.access),
     updatedAt: Number(r.updated_at),
   };
 }
@@ -1073,6 +1175,7 @@ function toChat(r: Row): Chat {
     kind: String(r.kind) as ChatKind,
     name: str(r.name),
     parentId: str(r.parent_id),
+    access: access(r.access),
   };
 }
 
@@ -1120,6 +1223,10 @@ function toReminder(r: Row): Reminder {
     lastFiredAt: r.last_fired_at === null || r.last_fired_at === undefined ? null : Number(r.last_fired_at),
     createdAt: Number(r.created_at),
   };
+}
+
+function access(value: SQLInputValue | undefined): Access {
+  return value === "allowed" || value === "blocked" ? value : null;
 }
 
 /** SQLITE_CONSTRAINT (19) or its extended codes, e.g. UNIQUE (2067/1555). */

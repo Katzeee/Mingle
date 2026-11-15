@@ -110,9 +110,12 @@ describe("message flow", () => {
   });
 
   it("lets the owner stop the current turn with /stop", async () => {
-    current = await rig(async (t) => {
-      await t.tool("Bash", "long job", () => sleep(10_000, t.signal));
-    });
+    current = await rig(
+      async (t) => {
+        await t.tool("Bash", "long job", () => sleep(10_000, t.signal));
+      },
+      { owner: "u1" },
+    );
     const { channel } = current;
     const dm = { platformId: "7", kind: "dm" as const, name: "Zhang San" };
     channel.receive({ text: "start the long job", chat: dm });
@@ -189,7 +192,7 @@ describe("message flow", () => {
 
   it("stops the background work a turn left running, so it does not answer after /stop", async () => {
     const { harness, log } = backgroundHarness({ stopTask: true });
-    current = await rig(async () => {}, { harnessAdapter: harness });
+    current = await rig(async () => {}, { harnessAdapter: harness, owner: "u1" });
     const { channel, mingle } = current;
     const dm = { platformId: "7", kind: "dm" as const, name: "Zhang San" };
     const job = channel.receive({ text: "run a 90 second job, then say TASK-DONE", chat: dm });
@@ -208,7 +211,7 @@ describe("message flow", () => {
   it("aborts a turn the harness begins on its own after /stop and refuses its replies", async () => {
     const refusals: string[] = [];
     const { harness, log } = backgroundHarness({ stopTask: false, onCliResult: (e) => refusals.push(e) });
-    current = await rig(async () => {}, { harnessAdapter: harness });
+    current = await rig(async () => {}, { harnessAdapter: harness, owner: "u1" });
     const { channel, mingle } = current;
     const dm = { platformId: "7", kind: "dm" as const, name: "Zhang San" };
     channel.receive({ text: "run a 90 second job, then say TASK-DONE", chat: dm });
