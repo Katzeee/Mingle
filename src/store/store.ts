@@ -202,7 +202,11 @@ export class Store {
          GROUP BY c.connection_id, m.sender_id`,
       )
       .all() as Row[];
-    for (const r of senders) this.touchContact(String(r.connection_id), String(r.sender_id), str(r.name));
+    // They were talking to the agent before Mingle asked about anyone: they stay let in (docs/spec.md 4.7).
+    for (const r of senders) {
+      const contact = this.touchContact(String(r.connection_id), String(r.sender_id), str(r.name));
+      this.setContactAccess(contact.id, "allowed");
+    }
     const owners = this.db.prepare("SELECT id, owner_id FROM connections WHERE owner_id IS NOT NULL").all() as Row[];
     for (const r of owners) this.touchContact(String(r.id), String(r.owner_id), null);
   }

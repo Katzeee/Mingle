@@ -92,6 +92,8 @@ try {
   const pauseAgent = await admin("POST", "/v1/admin/agents", { name: "Nova", harness, role: "" });
   // One agent on two WeChat accounts (MING-55): two owners, one named, one not.
   const sharedAgent = await admin("POST", "/v1/admin/agents", { name: "嘟嘟", harness, role: "" });
+  // Bots whose owner the platform did not report, waiting to be claimed with a code (docs/spec.md 4.7).
+  const claimAgent = await admin("POST", "/v1/admin/agents", { name: "Iris", harness, role: "" });
 
   // Seed chats and history straight into the database.
   const db = new DatabaseSync(join(home, "mingle.db"));
@@ -374,11 +376,15 @@ try {
   insert("UPDATE contacts SET access = 'allowed' WHERE id = 'u5ok'");
   insert("UPDATE contacts SET access = 'blocked', name = 'spam_account_0412' WHERE id = 'u6no'");
   insert("UPDATE chats SET access = 'allowed' WHERE id = 'c1'");
-  // Poppy's bot did not say who its owner is: the first step shows the code to claim it.
+  // Iris's bots did not say who their owner is: the first steps show the code to claim one; the other's expired.
+  conn("n12", claimAgent.id, "telegram", "@iris_weekend_bot", "connected", null, null);
+  conn("n13", claimAgent.id, "slack", "iris", "connected", null, null);
   insert(
-    "UPDATE connections SET owner_id = NULL, claim_code = '482913', claim_expires_at = ? WHERE id = 'n5'",
-    now + 9 * 60_000,
+    "UPDATE connections SET claim_code = '482913', claim_expires_at = ? WHERE id = 'n12'",
+    // Long enough to outlast the whole review run; real codes last ten minutes.
+    now + 6 * 3_600_000,
   );
+  insert("UPDATE agents SET status = 'idle' WHERE id = ?", claimAgent.id);
   insert("UPDATE agents SET status = 'idle', has_replied = 1 WHERE id = ?", sharedAgent.id);
   insert("UPDATE agents SET status = 'idle' WHERE id = ?", idleAgent.id);
   insert("UPDATE agents SET status = 'thinking', status_detail = 'Reading the route notes' WHERE id = ?", busyAgent.id);
@@ -411,6 +417,7 @@ try {
     ["no-bot", `/a/${lonelyAgent.slug}`],
     ["paused", `/a/${pausedAgent.slug}`],
     ["shared-wechat", `/a/${sharedAgent.slug}`],
+    ["claim", `/a/${claimAgent.slug}`],
   ];
   const checkPlatformCounts = (dom, zh, expected) => {
     const buttons = [...dom.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map((match) => match[0]);
@@ -458,6 +465,10 @@ try {
       assert.ok(dom.includes(zh ? "还没有收到" : "hasn't replied yet"), "idle unanswered agent missing quiet copy");
       assert.ok(!dom.includes(zh ? "正在回复" : "got it and is answering"), "idle agent shows replying");
       assert.ok(!dom.includes('class="spin'), "inactive agent shows a spinner");
+    },
+    claim: (dom) => {
+      assert.ok(dom.includes("482913"), "unclaimed bot missing its claim code");
+      assert.ok(dom.includes("t.me/iris_weekend_bot?start=482913"), "telegram claim missing its deep link");
     },
     "onboard-busy": (dom, zh) => {
       assert.ok(dom.includes(zh ? "正在回复" : "got it and is answering"), "thinking agent missing replying");

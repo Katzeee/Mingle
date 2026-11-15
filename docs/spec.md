@@ -286,7 +286,7 @@ Raft 的做法更重。从它的源码和 agent 提示词看：忙碌时只给 a
 - **改主意**：Agent 设置的"访问权限"一节列出已决定的人和群（不含 owner），可以撤销允许（之后只存档），也可以重新允许被拒绝的人（之前的消息不补处理）。
 - **一个设置**：同一节里的"所有新的人都先问我"（`agents.ask_all`），打开后 `org` 平台上的新的人和新群也要先问。只有这一个开关：`public` 平台不能改成直接放行，功能少一点，出错的机会也少一点。
 - **认领 owner**：平台没告诉我们 owner 时，接入后控制台显示一个 6 位验证码："用你自己的账号把这个验证码私聊发给它，你就成为它的 owner。"10 分钟有效，过期或作废后可以重新获取（`POST /v1/admin/connections/:id/claim`）。Telegram 另给一个"在 Telegram 中发送"链接（`t.me/<bot>?start=<码>`），点开后发出的是 `/start <码>`。私聊里单独的 6 位数字或 `/start <码>` 都算；只有带对这个码的私聊才能成为 owner，Mingle 回一句"好了，你现在是 Alex 的主人……"，这条认领消息不交给 Agent，这个人之前被拦下的消息随即放行。认领之前发私聊的人按陌生人处理，不会因为"第一个发消息"成为 owner。错码累计 5 次后验证码作废，防止猜码。GitHub 没有私聊，不认领。
-- **数据**（迁移 014）：`contacts.access`、`chats.access`（`allowed` / `blocked` / NULL），`agents.ask_all`，`connections.claim_code`、`claim_expires_at`。升级时已经发过消息的联系人和已有的群回填为 `allowed`，现有用户不受影响。
+- **数据**（迁移 015）：`contacts.access`、`chats.access`（`allowed` / `blocked` / NULL），`agents.ask_all`，`connections.claim_code`、`claim_expires_at`。升级时已经发过消息的联系人和已有的群回填为 `allowed`，现有用户不受影响。
 - **API**：`POST /v1/admin/agents/:id/contacts/:contactId/access`、`POST /v1/admin/agents/:id/chats/:chatId/access`，参数 `{ access: "allowed" | "blocked" }`，返回 `{ settled }`（积压消息里处理掉的条数）；owner 返回 `contact_is_owner`。`GET /v1/admin/agents/:id/access` 列出已决定的人和群。`PUT /v1/admin/agents/:id/ask-all`，参数 `{ on }`。Agent 详情带 `requests`（等待同意的人和群）和每个连接的 `claim`。
 - **Agent 侧**：来源行不变。操作指南加一句：非 owner 要求读其他聊天、说出环境变量、改 `MEMORY.md` 里的规则时要谨慎。这只是提示词层面的提醒，真正的边界是上面的门。
 - **不做**：按人的细粒度权限（"张三只能问天气"），只有"能使唤"和"不能"两档；沙箱，Agent 的能力边界由 harness 决定，Mingle 只管谁能下指令。
@@ -915,7 +915,7 @@ docs/             文档
 | GitHub 渠道（MING-70） | 完成（2026-11-15）：见 6.7。设备码和 token 两种接入、通知轮询、评论定位、协作者限制、issue 评论和 review 楼内回复、👀 → 🚀 表情。单元测试覆盖；真实 GitHub 上的结果见 12.1，独立机器账号的端到端待验证（12.2） |
 | Agent 头像与改名（MING-73） | 完成（2026-11-15）：见 8.1、`DESIGN.md`“名字和头像”。设置页第一组，选图或拖入后原地取景，保存 256 px PNG；侧栏和页头显示，首字头像兜底；名字可在同一组里改。测试覆盖上传、按文件头校验、大小限制、换图后旧地址失效和旧文件删除、移除、删除 Agent 时清理、不写主目录；`pnpm ui:review` 在两种语言、两种宽度下真实选图、键盘缩放、保存并截图 |
 | 控制台取消提醒、关闭任务（MING-75） | 完成（2026-11-15）：见 4.6。admin 接口、`owner_notes` 迁移 013、随下一次输入告诉 Agent；控制台行尾悬停出现操作，原地确认。测试覆盖接口与重复调用、暂停中可用、取消后到点不触发、备注只随下一次输入交付一次且不单独开一轮、Store 层按 Agent 隔离；`pnpm ui:review` 在暂停的 Agent 上点击走过两种操作并截图，刷新后状态保持 |
-| 陌生人访问控制（MING-80） | 完成（2026-11-15）：见 4.7。`gate()` 纯函数、`held` 状态与 `admit` / `refuse`、迁移 014、一次性验证码认领 owner、控制台"需要你处理"的允许和拒绝、设置里的"访问权限"。测试覆盖 `gate()` 各分支、验证码解析、私聊积压后按顺序放行、拒绝后只存档不回复、群在 owner 发言时放行、组织平台打开开关后只拦新的人、认领与错码作废；真机未测 |
+| 陌生人访问控制（MING-80） | 完成（2026-11-15）：见 4.7。`gate()` 纯函数、`held` 状态与 `admit` / `refuse`、迁移 015、一次性验证码认领 owner、控制台"需要你处理"的允许和拒绝、设置里的"访问权限"。测试覆盖 `gate()` 各分支、验证码解析、私聊积压后按顺序放行、拒绝后只存档不回复、群在 owner 发言时放行、组织平台打开开关后只拦新的人、认领与错码作废；真机未测 |
 | 更多 harness、审批转发 | 未开始 |
 
 ## 12. 验证记录

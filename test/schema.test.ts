@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -206,10 +206,54 @@ describe("contacts", () => {
         const contacts = store.agentContacts("a_1");
         const byPlatformId = Object.fromEntries(contacts.map((k) => [k.platformId, k]));
         expect(Object.keys(byPlatformId).sort()).toEqual(["42", "her@im.wechat", "me@im.wechat"]);
-        expect(byPlatformId["42"]).toMatchObject({ name: "Zhang San", alias: null, owner: false });
+        expect(byPlatformId["42"]).toMatchObject({ name: "Zhang San", alias: null, owner: false, access: "allowed" });
         expect(byPlatformId["me@im.wechat"]).toMatchObject({ name: null, owner: true, connectionId: "n_1" });
         expect(byPlatformId["her@im.wechat"]).toMatchObject({ name: null, owner: true, connectionId: "n_2" });
+        // Everyone who wrote stays let in; the group too (docs/spec.md 4.7).
+        expect(byPlatformId["me@im.wechat"]?.access).toBe("allowed");
+        expect(store.chat("c2")?.access).toBe("allowed");
         expect(contacts.every((k) => /^u[2-9a-hjkmnp-z]{4}$/.test(k.id))).toBe(true);
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets in everyone already talking to an agent when access control arrives, and nobody else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mingle-schema-"));
+    const path = join(dir, "mingle.db");
+    try {
+      const db = new DatabaseSync(path);
+      db.exec(schema);
+      for (let v = 2; v <= 13; v++) {
+        const file = readdirSync(new URL("../src/store/migrations/", import.meta.url)).find((f) =>
+          f.startsWith(`${String(v).padStart(3, "0")}_`),
+        ) as string;
+        db.exec(readFileSync(new URL(`../src/store/migrations/${file}`, import.meta.url), "utf8"));
+      }
+      db.exec(`
+        PRAGMA user_version = 13;
+        INSERT INTO agents (id, slug, name, harness, created_at, updated_at) VALUES ('a_1', 'alex', 'Alex', 'claude', 0, 0);
+        INSERT INTO connections (id, agent_id, platform, state, owner_id, created_at, updated_at) VALUES ('n_1', 'a_1', 'telegram', 'connected', '1', 0, 0);
+        INSERT INTO contacts (id, connection_id, platform_id, name, created_at, updated_at) VALUES ('u1', 'n_1', '1', 'Owner', 0, 0);
+        INSERT INTO contacts (id, connection_id, platform_id, name, created_at, updated_at) VALUES ('u2', 'n_1', '2', 'Zhang', 0, 0);
+        INSERT INTO contacts (id, connection_id, platform_id, name, created_at, updated_at) VALUES ('u3', 'n_1', '3', 'Never wrote', 0, 0);
+        INSERT INTO chats (id, connection_id, platform_id, kind, created_at, updated_at) VALUES ('c1', 'n_1', '-100', 'group', 0, 0);
+        INSERT INTO chats (id, connection_id, platform_id, kind, created_at, updated_at) VALUES ('c2', 'n_1', '2', 'dm', 0, 0);
+        INSERT INTO messages (id, chat_id, direction, platform_id, sender_id, sender_name, body, state, created_at) VALUES ('m1', 'c1', 'in', 'p1', '2', 'Zhang', 'hi', 'replied', 1);
+      `);
+      db.close();
+
+      const store = new Store(path);
+      try {
+        expect(store.contact("u2")?.access).toBe("allowed");
+        expect(store.contact("u3")?.access).toBeNull();
+        expect(store.chat("c1")?.access).toBe("allowed");
+        expect(store.chat("c2")?.access).toBeNull();
+        expect(store.agent("a_1")?.askAll).toBe(false);
+        expect(store.connection("n_1")).toMatchObject({ claimCode: null, claimExpiresAt: null });
       } finally {
         store.close();
       }

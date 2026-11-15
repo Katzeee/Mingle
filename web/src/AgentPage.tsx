@@ -800,7 +800,7 @@ function ClaimCode({ connection, onChanged }: { connection: ConnectionView; onCh
             </a>
           ) : null}
           <span className="text-caption text-ink3">
-            {t("connection.claimLeft", { minutes: String(Math.max(1, Math.ceil(left / 60_000))) })}
+            {t("connection.claimLeft", { minutes: String(Math.min(10, Math.max(1, Math.ceil(left / 60_000)))) })}
           </span>
         </div>
       ) : (
