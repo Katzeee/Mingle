@@ -32,6 +32,8 @@ import type {
 
 const REGISTRATION_BASE = "https://oapi.dingtalk.com";
 const API_BASE = "https://api.dingtalk.com";
+/** Device-registration source identifier, as in dsh-im's device-auth.mjs. */
+const REGISTRATION_SOURCE = "DING_DWS_CLAW";
 /** DingTalk's shared AI card template (streaming markdown in msgContent). */
 const AI_CARD_TEMPLATE = "02fcf2f4-5e02-4a85-b672-46d1f715543e.schema";
 const THINKING = "🤔思考中";
@@ -164,7 +166,7 @@ export function dingtalkApi(fetchImpl: Fetch = fetch) {
             body: JSON.stringify(body),
             ...(signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) } : {}),
           });
-        const init = await post<{ nonce?: string }>("/app/registration/init", { source: "MINGLE" });
+        const init = await post<{ nonce?: string }>("/app/registration/init", { source: REGISTRATION_SOURCE });
         if (!init.nonce) throw new Error("DingTalk returned no nonce");
         const begun = await post<{
           device_code?: string;

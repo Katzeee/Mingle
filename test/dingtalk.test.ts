@@ -81,7 +81,7 @@ describe("dingtalk messages", () => {
 });
 
 describe("dingtalk onboarding", () => {
-  it("registers with Mingle's own source and returns the app credentials", async () => {
+  it("registers with DingTalk's device-registration source and returns the app credentials", async () => {
     let polls = 0;
     const http = fakeHttp({
       "/app/registration/init": () => ({ errcode: 0, nonce: "n1" }),
@@ -110,7 +110,7 @@ describe("dingtalk onboarding", () => {
       qrContent: "https://open-dev.dingtalk.com/openapp/registration/openClaw?user_code=AB",
     });
     expect(events[1]).toMatchObject({ credentials: { clientId: "ding1", clientSecret: "sec", name: "Alex" } });
-    expect(http.calls[0]?.body).toEqual({ source: "MINGLE" });
+    expect(http.calls[0]?.body).toEqual({ source: "DING_DWS_CLAW" });
   });
 });
 
