@@ -455,8 +455,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const catalog = await mingle.brainCatalog(c.req.query("fresh") === "1");
     return c.json(
       catalog.map((brain) => {
-        const installJob = mingle.brains.activeInstall(brain.id);
-        return { ...brain, ...(installJob ? { installJob } : {}) };
+        const installJob = mingle.brains.active(brain.id, "install");
+        const upgradeJob = mingle.brains.active(brain.id, "upgrade");
+        return { ...brain, ...(installJob ? { installJob } : {}), ...(upgradeJob ? { upgradeJob } : {}) };
       }),
     );
   });
@@ -467,6 +468,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
     c.json((await mingle.options.harness.installPlan?.(c.req.param("id"))) ?? { kind: "unsupported", detail: "" }),
   );
   app.post("/v1/admin/brains/:id/install", (c) => c.json(mingle.brains.install(c.req.param("id"))));
+  app.get("/v1/admin/brains/:id/update", async (c) =>
+    c.json(
+      (await mingle.options.harness.updateCheck?.(c.req.param("id")).catch(() => undefined)) ?? { kind: "unknown" },
+    ),
+  );
+  app.post("/v1/admin/brains/:id/upgrade", (c) => c.json(mingle.brains.upgrade(c.req.param("id"))));
   app.post("/v1/admin/brains/:id/sign-in", (c) => c.json(mingle.brains.signIn(c.req.param("id"))));
   app.get("/v1/admin/jobs/:id", (c) => c.json(mingle.brains.get(c.req.param("id"))));
   app.post("/v1/admin/jobs/:id/answer", async (c) => {

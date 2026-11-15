@@ -91,6 +91,61 @@ describe("harness list", () => {
   });
 });
 
+describe("harness updates", () => {
+  const codexWith = (overrides: Partial<Runtime>): Runtime => ({
+    ...defaultRuntimes.require("codex"),
+    installation: async () => ({ kind: "available", via: "executable", command: "codex", version: "0.1.0" }),
+    ...overrides,
+  });
+  const harnessOf = (runtime: Runtime) => oarHarness({ require: () => runtime, list: () => [runtime] });
+
+  it("reports a newer version only on the updater's own verdict", async () => {
+    const check = vi.fn();
+    const harness = harnessOf(codexWith({ checkUpdate: check }));
+    check.mockResolvedValueOnce({
+      kind: "ok",
+      installed: "0.1.0",
+      latest: "0.2.0",
+      updateAvailable: true,
+      source: "x",
+    });
+    expect(await harness.updateCheck?.("codex")).toEqual({ kind: "available", installed: "0.1.0", latest: "0.2.0" });
+    check.mockResolvedValueOnce({
+      kind: "ok",
+      installed: "0.3.0",
+      latest: "0.2.0",
+      updateAvailable: false,
+      source: "x",
+    });
+    expect(await harness.updateCheck?.("codex")).toEqual({ kind: "current", version: "0.3.0" });
+    check.mockResolvedValueOnce({ kind: "unavailable", reason: "package_manager" });
+    expect(await harness.updateCheck?.("codex")).toEqual({ kind: "unknown" });
+    check.mockRejectedValueOnce(new Error("offline"));
+    expect(await harness.updateCheck?.("codex")).toEqual({ kind: "unknown" });
+    expect((await harness.catalog?.())?.[0]?.canUpdate).toBe(true);
+  });
+
+  it("judges an update by the version, not the updater's exit", async () => {
+    const upgrade = vi.fn();
+    const harness = harnessOf(codexWith({ upgrade }));
+    upgrade.mockResolvedValueOnce({ kind: "upgraded", from: "0.1.0", to: "0.2.0", output: "" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: true });
+    upgrade.mockResolvedValueOnce({ kind: "unchanged", version: "0.1.0", output: "done\n" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: false, detail: "done" });
+    upgrade.mockResolvedValueOnce({ kind: "failed", exitCode: 1, output: "EACCES" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: false, detail: "EACCES" });
+    upgrade.mockResolvedValueOnce({ kind: "unsupported", reason: "requires_terminal" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: false, detail: "requires_terminal" });
+  });
+
+  it("offers no update for a harness without its own updater", async () => {
+    const { checkUpdate: _check, upgrade: _upgrade, ...rest } = codexWith({});
+    const harness = harnessOf(rest);
+    expect(await harness.updateCheck?.("codex")).toEqual({ kind: "unknown" });
+    expect((await harness.catalog?.())?.[0]?.canUpdate).toBe(false);
+  });
+});
+
 describe("opencode version gate", () => {
   it.each(["1.19.5", "opencode v1.19.5", "1.19.5-beta.1"])("enables OpenCode %s", async (version) => {
     const { runtime } = opencodeAt(version);

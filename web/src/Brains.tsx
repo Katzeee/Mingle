@@ -1,12 +1,13 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { api, type BrainStatus, type InstallPlan, type Job, type SignInState } from "./api.ts";
+import { api, type BrainStatus, type InstallPlan, type Job, type SignInState, type UpdateInfo } from "./api.ts";
 import { useCached } from "./cache.ts";
 import { type MessageKey, useI18n } from "./i18n.ts";
 import { Button, HarnessIcon, Input, LinkButton, Problem, StatusDot, Waiting } from "./ui.tsx";
 
 /**
  * Every harness OAR drives, installed or not. One that is missing can be installed from here
- * with its vendor's own installer, and one that is signed out signed in with its own login.
+ * with its vendor's own installer, one that is signed out signed in with its own login, and
+ * one its own updater says is behind updated with that updater.
  */
 
 /** Poll a job until it ends. */
@@ -206,38 +207,67 @@ export function useSignIn(brain: BrainStatus | undefined) {
   return { state, reread: () => void reload() };
 }
 
+/** Whether the harness's own updater has a newer version. Asks its update source, so it is re-read when shown. */
+function useUpdate(brain: BrainStatus) {
+  const id = brain.installed && brain.canUpdate && !brain.disabled ? brain.id : null;
+  const { value, reload } = useCached<UpdateInfo>(
+    id === null ? null : `update:${id}`,
+    () => api.updateCheck(id ?? ""),
+    { kind: "unknown" },
+  );
+  return { update: value, recheck: () => void reload() };
+}
+
+/** Resume a job the catalog reports running, and remember the start function once set. */
+function useResumableJob(resumeId: string | undefined) {
+  // Set once: a finished job refreshes the catalog, which drops the running job; the
+  // remembered start function must keep polling, not POST again or forget the outcome.
+  const [start, setStart] = useState<(() => Promise<Job>) | null>(() => (resumeId ? () => api.job(resumeId) : null));
+  // A row drawn from the cached catalog learns of a running job only when the fresh one arrives.
+  useEffect(() => {
+    if (resumeId) setStart((current) => current ?? (() => api.job(resumeId)));
+  }, [resumeId]);
+  return [start, setStart] as const;
+}
+
 /** One harness as a settings row: installed or not, signed in or not, and what to do about it. */
 export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: () => void }) {
   const { t } = useI18n();
   const { state, reread } = useSignIn(brain);
   const [open, setOpen] = useState(false);
-  const resumeId = brain.installJob?.id;
-  // Set once: a finished install refreshes the catalog, which drops installJob; the
-  // remembered start function must keep polling, not POST again or forget the outcome.
-  const [startInstall, setStartInstall] = useState<(() => Promise<Job>) | null>(() =>
-    resumeId ? () => api.job(resumeId) : null,
-  );
-  // A row drawn from the cached catalog learns of a running install only when the fresh one arrives.
-  useEffect(() => {
-    if (resumeId) setStartInstall((current) => current ?? (() => api.job(resumeId)));
-  }, [resumeId]);
+  const { update, recheck } = useUpdate(brain);
+  const [startInstall, setStartInstall] = useResumableJob(brain.installJob?.id);
   const installJob = useJob(startInstall, (job) => job.state === "done" && onChanged(), brain.installJob);
+  const [startUpgrade, setStartUpgrade] = useResumableJob(brain.upgradeJob?.id);
+  const upgradeJob = useJob(
+    startUpgrade,
+    (job) => {
+      if (job.state !== "done") return;
+      recheck();
+      onChanged();
+    },
+    brain.upgradeJob,
+  );
   const installing = installJob?.state === "running";
+  const updating = upgradeJob?.state === "running";
+  const busy = installing || updating;
   const expanded = open || installing || installJob?.state === "failed";
   const signedOut = brain.installed && state?.kind === "signed_out" && brain.canSignIn;
   const status = installing
     ? t("brain.installing", { name: brain.name })
-    : !brain.installed
-      ? brain.unsupported
-        ? t("brain.notHere")
-        : t("brain.notInstalled")
-      : state === null
-        ? (brain.version ?? "")
-        : state.kind === "signed_in"
-          ? [brain.version, state.account, state.plan].filter(Boolean).join(" · ")
-          : state.kind === "signed_out"
-            ? t("brain.signedOutShort")
-            : (brain.version ?? "");
+    : updating
+      ? t("brain.updating", { name: brain.name })
+      : !brain.installed
+        ? brain.unsupported
+          ? t("brain.notHere")
+          : t("brain.notInstalled")
+        : state === null
+          ? (brain.version ?? "")
+          : state.kind === "signed_in"
+            ? [brain.version, state.account, state.plan].filter(Boolean).join(" · ")
+            : state.kind === "signed_out"
+              ? t("brain.signedOutShort")
+              : (brain.version ?? "");
   const action =
     installing || installJob?.state === "failed"
       ? "install"
@@ -248,6 +278,7 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
         : signedOut
           ? "signIn"
           : null;
+  const latest = !action && !updating && update?.kind === "available" ? update.latest : null;
   return (
     <div className="flex flex-col gap-3 px-4 py-3">
       <div className="flex items-center gap-3">
@@ -255,10 +286,10 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="font-medium">{brain.name}</span>
           <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">
-            {brain.installed && !installing ? (
+            {brain.installed && !busy ? (
               <StatusDot state={state?.kind === "signed_out" ? "awaiting_approval" : "connected"} />
             ) : null}
-            <span className={installing ? "selectable whitespace-normal wrap-anywhere" : "selectable truncate"}>
+            <span className={busy ? "selectable whitespace-normal wrap-anywhere" : "selectable truncate"}>
               {status}
             </span>
           </span>
@@ -267,8 +298,21 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
           <Button small onClick={() => setOpen(true)}>
             {t(action === "install" ? "brain.install" : "brain.signIn")}
           </Button>
+        ) : latest ? (
+          <Button small onClick={() => setStartUpgrade(() => () => api.upgrade(brain.id))}>
+            {t("brain.updateTo", { version: latest })}
+          </Button>
         ) : null}
       </div>
+      {upgradeJob?.state === "failed" && !action ? (
+        <div className="pl-10">
+          <Problem title={t("brain.updateFailed")} tone="red">
+            <span className="selectable font-mono text-caption whitespace-pre-wrap wrap-anywhere">
+              {upgradeJob.detail}
+            </span>
+          </Problem>
+        </div>
+      ) : null}
       {expanded && action === "install" ? (
         <div className="pl-10">
           <InstallBrain
