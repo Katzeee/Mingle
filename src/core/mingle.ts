@@ -15,14 +15,15 @@ import type {
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
 import type { SecretStore } from "../platform/secrets.ts";
-import { type Agent, type Connection, type Message, type Reminder, Store } from "../store/store.ts";
+import { type Agent, type Connection, type Handoff, type Message, type Reminder, Store } from "../store/store.ts";
 import { VERSION } from "../version.ts";
 import { Brains } from "./brains.ts";
 import { coldRebuildFor } from "./cold.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
 import { MingleError, notFound } from "./errors.ts";
 import { formatReminder, renderMessage } from "./format.ts";
-import { createHome, memorySize, writeRole } from "./home.ts";
+import { checkHandoff, handoffPrompt } from "./handoff.ts";
+import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
 import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stored } from "./link.ts";
 import { LiveReplies, pausedNote, stopNote } from "./live.ts";
@@ -1385,6 +1386,39 @@ export class Mingle {
     );
     this.log(`${agent.name}: owner closed task ${task.id}`);
     return true;
+  }
+
+  // ---------------------------------------------------------------- handoffs
+
+  /**
+   * Hand the agent what another conversation knows (docs/spec.md 4.12). It reaches the agent as an
+   * input of its own: now when idle, after the current turn when busy, on resume when paused.
+   */
+  handoff(
+    idOrSlug: string,
+    body: unknown,
+    via: Handoff["via"],
+  ): { handoff: Handoff; name: string; state: "idle" | "busy" | "paused" } {
+    const agent = this.agent(idOrSlug);
+    const handoff = this.store.addHandoff(agent.id, checkHandoff(body), via);
+    const runtime = this.runtimes.get(agent.id);
+    runtime?.enqueueHandoff(handoff.id);
+    this.log(`${agent.name}: handoff ${handoff.id} (${via}, ${Buffer.byteLength(handoff.body, "utf8")} bytes)`);
+    return {
+      handoff,
+      name: agent.name,
+      state: this.paused.has(agent.id) || !runtime ? "paused" : runtime.busy ? "busy" : "idle",
+    };
+  }
+
+  handoffs(idOrSlug: string, limit = 30): Handoff[] {
+    return this.store.handoffs(this.agent(idOrSlug).id, limit);
+  }
+
+  /** What the owner gives the other conversation, with this computer's CLI path in the command. */
+  handoffPrompt(idOrSlug: string): string {
+    const agent = this.agent(idOrSlug);
+    return handoffPrompt(agent, readRole(this.homeDir(agent)), this.cliPath);
   }
 
   // --------------------------------------------------------------------- cli

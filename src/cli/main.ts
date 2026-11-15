@@ -128,6 +128,10 @@ function print(data: unknown, text: () => string): void {
   console.log(jsonMode ? JSON.stringify(data, null, 2) : text());
 }
 
+function kilobytes(bytes: number): string {
+  return `${Math.max(0.1, Math.round(bytes / 102.4) / 10)} KB`;
+}
+
 function time(ms: number | null): string {
   if (ms === null) return "-";
   const d = new Date(ms);
@@ -419,6 +423,38 @@ async function adminCommand(group: string, action: string | undefined, args: str
     );
     return true;
   }
+  if (group === "handoff") {
+    // mingle handoff prompt <agent>   |   mingle handoff <agent>   (the handoff on standard input)
+    if (action === "prompt" && args[0]) {
+      const result = await adminClient()<{ text: string }>("GET", `/v1/admin/agents/${args[0]}/handoff-prompt`);
+      print(result, () => result.text.trimEnd());
+      return true;
+    }
+    const agent = need(action, "agent_required", "usage: mingle handoff <agent> <<'HANDOFF' ... HANDOFF");
+    // An agent's own session speaks as that agent; it does not hand another one work as the owner.
+    if (process.env.MINGLE_TOKEN) {
+      throw new CliError("handoff_from_agent", "a handoff comes from the owner's own conversation, not from an agent");
+    }
+    const body = await readStdin();
+    if (!body.trim()) {
+      throw new CliError("handoff_empty", "write the handoff and pass it on standard input, e.g. with a heredoc");
+    }
+    const result = await adminClient()<{
+      handoff: { id: string; size: number };
+      name: string;
+      state: "idle" | "busy" | "paused";
+    }>("POST", `/v1/admin/agents/${agent}/handoffs`, { body, via: "command" });
+    const when = {
+      idle: `${result.name} reads it now`,
+      busy: `${result.name} is working; it reads this when it finishes`,
+      paused: `${result.name} is paused; it reads this when resumed`,
+    }[result.state];
+    print(
+      result,
+      () => `Handed off to ${result.name} (${result.handoff.id}, ${kilobytes(result.handoff.size)}). ${when}.`,
+    );
+    return true;
+  }
   if (group === "disconnect") {
     const id = need(action, "connection_required", "usage: mingle disconnect <connection-id>");
     await adminClient()("DELETE", `/v1/admin/connections/${id}`);
@@ -689,6 +725,8 @@ For the owner:
   mingle agent reset <agent>               start it over in a new session; memory and files stay
   mingle agent diagnostics <agent>         versions, brain, session and status, to share when asking for help
   mingle agent delete <agent> [--remove-home]
+  mingle handoff <agent>                   hand it what another conversation knows, on standard input
+  mingle handoff prompt <agent>            the prompt to give that conversation
   mingle connect <agent> telegram          bot token on standard input
   mingle disconnect <connection-id>
 

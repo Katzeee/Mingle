@@ -19,6 +19,7 @@ import {
   type Connection,
   type Contact,
   contactName,
+  type Handoff,
   type Message,
   type TaskStatus,
 } from "../store/store.ts";
@@ -601,6 +602,21 @@ export function createApi(mingle: Mingle): Hono<Env> {
     c.json({ changed: mingle.closeTask(c.req.param("id"), c.req.param("taskId")) }),
   );
 
+  /** Handoffs from another conversation (docs/spec.md 4.12). The body is the owner's text; never logged. */
+  app.post("/v1/admin/agents/:id/handoffs", async (c) => {
+    const body = await c.req.json<{ body?: unknown; via?: unknown }>();
+    const via = body.via === "paste" ? "paste" : "command";
+    const { handoff, name, state } = mingle.handoff(c.req.param("id"), body.body, via);
+    return c.json({ handoff: handoffView(handoff), name, state });
+  });
+
+  app.get("/v1/admin/agents/:id/handoffs", (c) => {
+    const limit = clamp(Number(c.req.query("limit") ?? 30), 1, 200);
+    return c.json(mingle.handoffs(c.req.param("id"), limit).map(handoffView));
+  });
+
+  app.get("/v1/admin/agents/:id/handoff-prompt", (c) => c.json({ text: mingle.handoffPrompt(c.req.param("id")) }));
+
   app.post("/v1/admin/agents/:id/open-home", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
@@ -785,6 +801,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
 function resolveFiles(home: string, files: readonly string[] | undefined): string[] | undefined {
   if (!files?.length) return undefined;
   return files.map((f) => (isAbsolute(f) ? f : resolve(home, f)));
+}
+
+/** A handoff for the console: its text, where it came from, its size in bytes and whether the agent has it. */
+function handoffView(h: Handoff) {
+  return {
+    id: h.id,
+    body: h.body,
+    via: h.via,
+    state: h.state,
+    size: Buffer.byteLength(h.body, "utf8"),
+    createdAt: h.createdAt,
+    deliveredAt: h.deliveredAt,
+  };
 }
 
 function clamp(n: number, min: number, max: number): number {

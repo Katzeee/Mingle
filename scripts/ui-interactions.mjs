@@ -48,6 +48,14 @@ const LOCALES = {
     diagCopied: "Copied",
     diagTitle: "Mingle diagnostic info",
     resume: "Resume",
+    handoffTitle: "Handoff",
+    handoffOpen: "Hand off",
+    handoffCopy: "Copy",
+    handoffPaste: "Paste",
+    handoffSend: "Hand to Alex",
+    handoffWaiting: "Waiting for that conversation to run the command",
+    handoffCopyFailed: "Could not copy. Select the prompt and copy it yourself.",
+    handoffFeed: "You handed Alex a handoff",
     paused: "Paused",
     pausedCard: "is paused",
     appLoading: "Loading your agents…",
@@ -102,6 +110,14 @@ const LOCALES = {
     diagCopied: "已复制",
     diagTitle: "Mingle diagnostic info",
     resume: "恢复",
+    handoffTitle: "交接",
+    handoffOpen: "交接",
+    handoffCopy: "复制",
+    handoffPaste: "粘贴内容",
+    handoffSend: "交给 Alex",
+    handoffWaiting: "等待那段对话运行命令",
+    handoffCopyFailed: "没能复制，请选中提示词自己复制。",
+    handoffFeed: "你交给 Alex 一份交接",
     paused: "已暂停",
     pausedCard: "已暂停",
     appLoading: "正在加载 Agent…",
@@ -1134,6 +1150,88 @@ export async function reviewInteractions({
         await resetScenario(localeName, labels, width);
         passed++;
         console.log(`reset ${localeName} ${width}: passed`);
+      }
+    }
+
+    // --- hand off from another conversation: copy the prompt, or paste (MING-81) ---
+    /** A button by its exact text inside the Handoff section only (Copy also names the diagnostics button). */
+    const handoffButton = (title, wanted) => {
+      const section = [...document.querySelectorAll("section")].find(
+        (s) => s.querySelector("h2")?.textContent.trim() === title,
+      );
+      const el = section && [...section.querySelectorAll("button")].find((b) => b.textContent.trim() === wanted);
+      if (!el) return null;
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      return r.width && r.height ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    };
+    const handoffScenario = async (localeName, labels, width) => {
+      const tag = `handoff ${localeName} ${width}`;
+      await metrics(width);
+      await goto(`/a/${slug}`, labels);
+      await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
+      await clickEl(await settled("handoff button", handoffButton, labels.handoffTitle, labels.handoffOpen));
+      await until("prompt", () =>
+        [...document.querySelectorAll("pre")].some((p) => p.textContent.includes(" handoff ")),
+      );
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+      await shot(`${localeName}-${width}-handoff-copy`);
+      await clickEl(await settled("copy prompt", handoffButton, labels.handoffTitle, labels.handoffCopy));
+      // Headless Chrome may refuse the clipboard; then the panel says to copy by hand and does not wait.
+      const copied = await until(
+        "copied or refused",
+        (waiting, refused) => {
+          if (document.body.textContent.includes(waiting)) return "copied";
+          return [...document.querySelectorAll("p")].some((p) => p.textContent.trim() === refused) ? "refused" : null;
+        },
+        labels.handoffWaiting,
+        labels.handoffCopyFailed,
+      );
+      if (copied === "copied") await shot(`${localeName}-${width}-handoff-waiting`);
+      // What the other conversation's `mingle handoff` does.
+      const response = await fetch(`${url}/v1/admin/agents/${slug}/handoffs`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          via: "command",
+          body: `## Weekend route planning (${localeName} ${width}) — handed off from a Claude Code session in ~/hiking/a-very-long-directory-name-for-checking-truncation\n- Candidates: Xiangshan north loop (12 km), Fenghuangling (9 km)\n- Files: ~/hiking/routes/2026-11/`,
+        }),
+      });
+      assert(response.ok, `${tag}: handoff refused (${response.status})`);
+      if (copied === "copied") {
+        await until("received", () => !!document.querySelector('span[role="status"].text-green'));
+      }
+      await until(
+        "listed",
+        (mark) => [...document.querySelectorAll("span")].some((s) => s.textContent.startsWith(mark)),
+        `Weekend route planning (${localeName} ${width})`,
+      );
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+      await shot(`${localeName}-${width}-handoff-received`);
+
+      await clickEl(await settled("paste tab", handoffButton, labels.handoffTitle, labels.handoffPaste));
+      await until("paste box", () => document.activeElement?.tagName === "TEXTAREA");
+      await send("Input.insertText", {
+        text: "周末徒步群的路线规划，目前的进展：\n1. 候选路线三条：香山北线、凤凰岭、百望山\n2. 张三膝盖不好，避开长下坡\n3. 相关文件：~/hiking/routes/2026-11/*.gpx",
+      });
+      await until("size shown", () => /KB/.test(document.body.textContent));
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+      await shot(`${localeName}-${width}-handoff-paste`);
+      await clickEl(await settled("send", handoffButton, labels.handoffTitle, labels.handoffSend));
+      await until("sent", () => !!document.querySelector('p[role="status"].text-green'));
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+      await shot(`${localeName}-${width}-handoff-sent`);
+
+      await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.activity));
+      await until("feed entry", (text) => document.body.textContent.includes(text), labels.handoffFeed);
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+      await shot(`${localeName}-${width}-handoff-activity`);
+    };
+    for (const [localeName, labels] of Object.entries(LOCALES)) {
+      for (const width of [1440, 560]) {
+        await handoffScenario(localeName, labels, width);
+        passed++;
+        console.log(`handoff ${localeName} ${width}: passed`);
       }
     }
 
