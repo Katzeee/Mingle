@@ -608,7 +608,7 @@ stateDiagram-v2
 
 - **身份**：Agent 用一个自己的 GitHub 账号（GitHub 允许每人额外注册一个用于自动化的机器账号）。控制台建议的用户名是 Agent 的 slug 加 `-agent`。不用 GitHub App：App 不能被 @ 成通知，收评论只能靠 webhook，需要公网地址。也不用人自己的账号：别人 @ 的是人，Agent 用人的身份回复会冒名。
 - **接入**：渠道只用 REST API，代码在 `src/channels/github/`。`git` / `gh` 由 Agent 背后的 harness 自己在干活时使用，Mingle 不管。
-- **登录**：OAuth Device Flow。控制台显示 8 位验证码，"复制验证码并打开 GitHub"按钮把码放进剪贴板并打开 `github.com/login/device`；用户以 Agent 的账号登录、粘贴、点 Authorize，Mingle 每几秒自己查一次，授权后自动连上。scope 是 `notifications repo`：通知 API 只认 classic 权限模型，fine-grained token 和 GitHub App token 都读不了通知。Device Flow 需要 Mingle 注册的 OAuth App 的公开 client ID（不需要 secret），由 `MINGLE_GITHUB_CLIENT_ID` 提供；没有时控制台改为粘贴 classic token 的引导（链接预填 token 名和两个 scope），有时也可以点"改用 token"。粘贴的 token 先查 `X-OAuth-Scopes`，缺 scope 或没有这个头（fine-grained）时直接报 `insufficient_scope`，不等到连上以后才失败。
+- **登录**：OAuth Device Flow。控制台显示 8 位验证码，"复制验证码并打开 GitHub"按钮把码放进剪贴板并打开 `github.com/login/device`；用户以 Agent 的账号登录、粘贴、点 Authorize，Mingle 每几秒自己查一次，授权后自动连上。scope 是 `notifications repo`：通知 API 只认 classic 权限模型，fine-grained token 和 GitHub App token 都读不了通知。Device Flow 用 Mingle 注册的 OAuth App（2026-11-15 注册，已开启 Device Flow），代码里内置它的公开 client ID，不需要 secret；`MINGLE_GITHUB_CLIENT_ID` 可以换成别的 App，设为空时控制台只给粘贴 classic token 的引导（链接预填 token 名和两个 scope）。验证码页上也可以点"改用 token"。粘贴的 token 先查 `X-OAuth-Scopes`，缺 scope 或没有这个头（fine-grained）时直接报 `insufficient_scope`，不等到连上以后才失败。
 - **收 @**：轮询 `GET /notifications?participating=true`，带上次的 `ETag`（`If-None-Match`），没有变化时返回 304，不计入限额；间隔取 `X-Poll-Interval`（实测 60 秒）和 60 秒中较大的一个，出错时指数退避到最多 15 分钟。只处理 `reason` 为 `mention`、`team_mention`、`comment`（Agent 评论过的楼有新动静）、`author`（Agent 自己开的 issue / PR）的通知，其他的保持未读，不动。
 - **定位评论**：通知只说明哪个 issue / PR 有动静。先把这一条标记已读（`PATCH /notifications/threads/{id}`），再读它上次已读（`last_read_at`，从未读过时往前 7 天）之后的内容：issue 或 PR 正文、issue 评论、PR 行内 review 评论和 review 总结。先标已读再读，读的过程中新来的评论会让它重新变成未读，下一轮还能拿到，不会漏；读失败的楼留在内存里下一轮重试。消息去重靠 Mingle 已有的 `platform_id`。
 - **什么算 @ 它**：正文里有完整的 `@用户名`（不算邮箱和更长的用户名）；`team_mention` 时有 `@org/team`；或者是 Agent 自己开的 review 楼里的回复（相当于聊天里回复它）。楼里其他协作者的评论存为不触发的背景消息（4.2），Agent 可以用 `message read` 看到。
@@ -871,7 +871,7 @@ docs/             文档
 | 个人账号接入（MING-52） | 完成（2026-11-14）：原则见 1.4、6.6，各平台评估见 6.6。iMessage 自聊形态在真机上跑通（12.1）；专用 Apple ID 形态没有测试环境，不开放 |
 | 多微信号与通讯录（MING-55） | 完成（2026-11-14）：见 4.2、6.1。`contacts` 表和迁移 006，消息头带 `user=`，`mingle contact list / name`，控制台连接行给 owner 起名、动态按名字显示；请求微信二维码时带上本机已有的 token。测试覆盖迁移补建、名字优先级、两个 owner 在同一平台时不显示"你"、Agent 用 CLI 起名后消息头和动态更新、`local_token_list` 和 `already_connected`。手机端提示待实测（12.2） |
 | 群聊背景消息（MING-62） | 完成（2026-11-15）：见 4.2。来源行的 `unseen` 和 `in`、`message read --since`、Slack 存下没 @ 它的频道消息，迁移 010 加 `chats.parent_id`。测试覆盖计数（含线程和所属频道）、`--since`、Slack 映射和不触发；Slack 真机未复测 |
-| GitHub 渠道（MING-70） | 完成（2026-11-15）：见 6.7。设备码和 token 两种接入、通知轮询、评论定位、协作者限制、issue 评论和 review 楼内回复、👀 → 🚀 表情。单元测试覆盖；真实 GitHub 上的结果见 12.1，独立机器账号的端到端和 Device Flow 待验证（12.2） |
+| GitHub 渠道（MING-70） | 完成（2026-11-15）：见 6.7。设备码和 token 两种接入、通知轮询、评论定位、协作者限制、issue 评论和 review 楼内回复、👀 → 🚀 表情。单元测试覆盖；真实 GitHub 上的结果见 12.1，独立机器账号的端到端待验证（12.2） |
 | 更多 harness、审批转发 | 未开始 |
 
 ## 12. 验证记录
@@ -1007,7 +1007,7 @@ docs/             文档
 | iMessage 专用 Apple ID 形态 | 别人私聊、群聊 @ | 第二个 Apple ID 和一个单独的 macOS 用户或一台 Mac；开放前必须真机跑通 |
 | Windows、Linux 实机 | 安装、托盘（左键开窗、右键菜单、首次关窗提示）、开机自启、保持唤醒、自动更新；凭据走 DPAPI、Secret Service；Codex 在 PowerShell 里按指南调用 `mingle` | 一台 Windows 和一台 Linux 桌面机 |
 | 自动更新未覆盖路径 | 更早正式版（含 0.1.0）的升级、原生更新器实际选择增量包、界面“重启以更新”按钮；0.1.6 → 0.1.7 的 macOS 下载、验签、退出替换和数据保留已通过；0.1.7 → 0.1.8、0.1.8 → 0.1.9、0.1.9 → 0.1.10、0.1.10 → 0.1.11 的签名增量包重建与旧数据启动已通过，这四次原生自动更新流程未测（12.1） | 保留旧版的隔离安装和可操作原生窗口的测试环境 |
-| GitHub 机器账号端到端 | 用独立的机器账号：Device Flow 授权、别人 `@` 它后通知到达和标记已读、非协作者 `@` 不触发；组织成员关系不公开时 `author_association` 是否仍为 `MEMBER` | Mingle 的 OAuth App client ID（`MINGLE_GITHUB_CLIENT_ID`），一个机器账号 |
+| GitHub 机器账号端到端 | 用独立的机器账号：Device Flow 授权完整走一遍、别人 `@` 它后通知到达和标记已读、非协作者 `@` 不触发；组织成员关系不公开时 `author_association` 是否仍为 `MEMBER` | 一个机器账号（OAuth App 已注册，用它的 client ID 向 GitHub 申请设备码已实测成功） |
 | 离线补推 | Telegram、Discord、个人微信、QQ、企业微信、钉钉断开期间是否补推；飞书和 Slack 的更多断连条件 | 各平台已接入的机器人；飞书一次约 5 分钟恢复补推、Slack 一次约 2 分钟断连未补推但恢复后新消息可回复，均见 12.1，不外推为平台保证 |
 | 冷启动重建上下文（MING-64） | 一个真实 Agent 连续数日的冷轮 cache-write 与回答质量对照，以及实际触发的频率；截断提示改动后，Agent 是否会自己去读原文 | 用 `MINGLE_COLD_START=<agent>` 在日常使用的 Agent 上跑几天，按 `cold turn` 日志对比。一次短时对照见 12.1：缓存写入少 88%，但长文档里的细节会丢，所以保持默认关闭 |
 

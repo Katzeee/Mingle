@@ -30,7 +30,8 @@ rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const daemon = spawn(process.execPath, ["dist/cli/main.js", "start", "--port", String(PORT), "--no-open"], {
-  env: { ...process.env, MINGLE_HOME: home },
+  // No OAuth App: the GitHub page shows the token guide instead of asking GitHub for a code.
+  env: { ...process.env, MINGLE_HOME: home, MINGLE_GITHUB_CLIENT_ID: "" },
   stdio: "ignore",
 });
 
@@ -315,7 +316,7 @@ try {
     ["connect-slack", `/a/${long.slug}/connect/slack`],
     ["connect-discord", `/a/${long.slug}/connect/discord`],
     ["connect-telegram", `/a/${alex.slug}/connect/telegram`],
-    // The token guide; signing in with a code needs Mingle's OAuth App and a live call to GitHub.
+    // The token guide. Signing in with a code asks GitHub for a live code, so it is checked by hand.
     ["connect-github", `/a/${long.slug}/connect/github`],
     // Live checks of this Mac's own permissions; read-only, they never make macOS ask anything.
     ...(process.platform === "darwin" ? [["connect-imessage", `/a/${alex.slug}/connect/imessage`]] : []),
