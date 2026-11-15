@@ -179,6 +179,8 @@ export async function until<T>(check: () => T | undefined | false, timeoutMs = 1
 
 export interface Rig {
   mingle: Mingle;
+  /** MINGLE_HOME of this Mingle. */
+  home: string;
   url: string;
   /** Call the admin API as the console does. */
   admin(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }>;
@@ -263,6 +265,7 @@ export async function rig(
   await mingle.addConnection(agent.id, "telegram", { token: "fake" });
   return {
     mingle,
+    home,
     url: server.url,
     channel,
     agentId: agent.id,

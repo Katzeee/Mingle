@@ -120,6 +120,21 @@ export interface ContactEntry {
   accounts: ContactAccount[];
 }
 
+/** What the owner handed the agent from another conversation (docs/spec.md 4.12). */
+export interface HandoffView {
+  id: string;
+  body: string;
+  via: "command" | "paste";
+  state: "waiting" | "delivered";
+  /** In bytes. */
+  size: number;
+  createdAt: number;
+  deliveredAt: number | null;
+}
+
+/** The most a handoff may hold, in bytes: the server refuses more. */
+export const HANDOFF_MAX_BYTES = 200 * 1024;
+
 export interface Activity {
   id: string;
   direction: "in" | "out";
@@ -318,6 +333,14 @@ export const api = {
   unlinkContact: (id: string, contact: string) =>
     call<{ ok: true }>("POST", `/v1/admin/agents/${id}/people/unlink`, { contact }),
   activity: (id: string) => call<Activity[]>("GET", `/v1/admin/agents/${id}/activity?limit=30`),
+  handoffs: (id: string) => call<HandoffView[]>("GET", `/v1/admin/agents/${id}/handoffs?limit=30`),
+  handoff: (id: string, body: string) =>
+    call<{ handoff: HandoffView; state: "idle" | "busy" | "paused" }>("POST", `/v1/admin/agents/${id}/handoffs`, {
+      body,
+      via: "paste",
+    }),
+  /** What to give the other conversation so it hands off with a command. */
+  handoffPrompt: (id: string) => call<{ text: string }>("GET", `/v1/admin/agents/${id}/handoff-prompt`),
   work: (id: string) => call<{ tasks: Task[]; reminders: Reminder[] }>("GET", `/v1/admin/agents/${id}/work`),
   /** Stop a reminder for good; the agent hears it with its next input. */
   cancelReminder: (id: string, reminderId: string) => call("DELETE", `/v1/admin/agents/${id}/reminders/${reminderId}`),

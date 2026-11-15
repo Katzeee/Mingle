@@ -7,12 +7,14 @@ import {
   ApiError,
   api,
   type ConnectionView,
+  type HandoffView,
   type Harness,
   type Reminder,
   type Task,
 } from "./api.ts";
 import { Contacts } from "./Contacts.tsx";
 import { fetchCached, peek, remember, useCached } from "./cache.ts";
+import { HandoffItem, HandoffSection } from "./Handoff.tsx";
 import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
 import { ModelPicker } from "./NewAgent.tsx";
 import { online, useOnline } from "./online.ts";
@@ -62,6 +64,9 @@ export function AgentPage({
   // The last activity and work seen for an agent show at once when its page opens again.
   const [activity, setActivity] = useState<Activity[] | null>(() => peek<Activity[]>(`activity:${agent.id}`) ?? null);
   const [work, setWork] = useState<WorkData | null>(() => peek<WorkData>(`work:${agent.id}`) ?? null);
+  const [handoffs, setHandoffs] = useState<HandoffView[] | null>(
+    () => peek<HandoffView[]>(`handoffs:${agent.id}`) ?? null,
+  );
   const [activityError, setActivityError] = useState(false);
   const [workError, setWorkError] = useState(false);
   const activityPending = useRef(false);
@@ -70,8 +75,17 @@ export function AgentPage({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tab, setTab] = useState<"activity" | "settings">("activity");
   const connectionsRef = useRef<HTMLElement>(null);
+  const handoffRef = useRef<HTMLDivElement>(null);
+  const [handoffRequest, setHandoffRequest] = useState(0);
   const [manageRequest, setManageRequest] = useState<{ n: number; connectionId?: string }>({ n: 0 });
   const [landed, setLanded] = useState<string | undefined>();
+
+  // From the getting-started card: land on the handoff section of the settings.
+  useLayoutEffect(() => {
+    if (handoffRequest === 0) return;
+    handoffRef.current?.scrollIntoView({ block: "start" });
+    handoffRef.current?.focus({ preventScroll: true });
+  }, [handoffRequest]);
 
   // From the side panel: land on the settings connections (or the one bot clicked), even when already there.
   useLayoutEffect(() => {
@@ -96,7 +110,12 @@ export function AgentPage({
     if (activityPending.current) return;
     activityPending.current = true;
     try {
-      setActivity(await fetchCached(`activity:${agent.id}`, () => api.activity(agent.id), true));
+      const [items, handed] = await Promise.all([
+        fetchCached(`activity:${agent.id}`, () => api.activity(agent.id), true),
+        fetchCached(`handoffs:${agent.id}`, () => api.handoffs(agent.id), true),
+      ]);
+      setActivity(items);
+      setHandoffs(handed);
       setActivityError(false);
     } catch {
       setActivityError(true);
@@ -140,6 +159,7 @@ export function AgentPage({
   useEffect(() => {
     setActivity(peek<Activity[]>(`activity:${agent.id}`) ?? null);
     setWork(peek<WorkData>(`work:${agent.id}`) ?? null);
+    setHandoffs(peek<HandoffView[]>(`handoffs:${agent.id}`) ?? null);
     setActivityError(false);
     setWorkError(false);
     setConfirmDelete(false);
@@ -147,6 +167,7 @@ export function AgentPage({
     setNotice(null);
     setTab("activity");
     setManageRequest({ n: 0 });
+    setHandoffRequest(0);
     setLanded(undefined);
   }, [agent.id]);
   usePolling(refresh, 2500);
@@ -311,6 +332,9 @@ export function AgentPage({
                 <RoleEditor agent={agent} onSaved={onChanged} />
                 <Brain agent={agent} onSaved={onChanged} />
                 <AgentEnv agent={agent} />
+                <div ref={handoffRef} tabIndex={-1} className="rounded-card focus:outline-none">
+                  <HandoffSection agent={agent} handoffs={handoffs} onSent={() => void refreshActivity()} />
+                </div>
                 <Section title={t("agent.lifecycle")}>
                   <Group>
                     <GroupRow className="flex-wrap">
@@ -379,6 +403,10 @@ export function AgentPage({
                     agent={agent}
                     heard={(activity ?? []).some((m) => m.direction === "in")}
                     onConnect={connect}
+                    onHandoff={() => {
+                      setTab("settings");
+                      setHandoffRequest((n) => n + 1);
+                    }}
                   />
                 ) : null}
                 {agent.connections.some((c) => c.state === "connected") ? <KeepOnline /> : null}
@@ -390,8 +418,14 @@ export function AgentPage({
                     activityError ? null : (
                       <Waiting>{t("agent.activityLoading")}</Waiting>
                     )
-                  ) : activity.length > 0 ? (
-                    <ActivityList items={activity} onRetry={retry} onIgnore={ignore} />
+                  ) : activity.length > 0 || (handoffs ?? []).length > 0 ? (
+                    <ActivityList
+                      agent={agent}
+                      items={activity}
+                      handoffs={handoffs ?? []}
+                      onRetry={retry}
+                      onIgnore={ignore}
+                    />
                   ) : activityError ? null : (
                     <div className="flex flex-col items-start gap-3 rounded-card border border-line bg-bg2 p-5">
                       <svg
@@ -450,7 +484,17 @@ export function AgentPage({
 }
 
 /** Until the agent has answered someone: the steps that get it there, and where it is. */
-function GettingStarted({ agent, heard, onConnect }: { agent: AgentView; heard: boolean; onConnect: () => void }) {
+function GettingStarted({
+  agent,
+  heard,
+  onConnect,
+  onHandoff,
+}: {
+  agent: AgentView;
+  heard: boolean;
+  onConnect: () => void;
+  onHandoff: () => void;
+}) {
   const { t } = useI18n();
   const connected = agent.connections.find((c) => c.state === "connected");
   const any = agent.connections.length > 0;
@@ -488,6 +532,12 @@ function GettingStarted({ agent, heard, onConnect }: { agent: AgentView; heard: 
           )}
         </Step>
       </Steps>
+      <p className="border-t border-line pt-3 text-small text-ink2">
+        {t("handoff.startHint", { name: agent.name })}{" "}
+        <button type="button" className="text-accent hover:underline" onClick={onHandoff}>
+          {t("handoff.startAction", { name: agent.name })}
+        </button>
+      </p>
     </section>
   );
 }
@@ -1480,18 +1530,30 @@ function MessageActions({
 }
 
 function ActivityList({
+  agent,
   items,
+  handoffs,
   onRetry,
   onIgnore,
 }: {
+  agent: AgentView;
   items: Activity[];
+  handoffs: HandoffView[];
   onRetry: (ids: string[]) => Promise<void>;
   onIgnore: (ids: string[]) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  // Handoffs go in among the messages by time, no further back than the messages shown reach.
+  const oldest = items.length >= 30 ? Math.min(...items.map((m) => m.createdAt)) : 0;
+  const rows: ({ kind: "message"; at: number; m: Activity } | { kind: "handoff"; at: number; h: HandoffView })[] = [
+    ...items.map((m) => ({ kind: "message" as const, at: m.createdAt, m })),
+    ...handoffs.filter((h) => h.createdAt >= oldest).map((h) => ({ kind: "handoff" as const, at: h.createdAt, h })),
+  ].sort((a, b) => b.at - a.at);
   return (
     <Group>
-      {items.map((m) => {
+      {rows.map((row) => {
+        if (row.kind === "handoff") return <HandoffItem key={row.h.id} handoff={row.h} agent={agent} />;
+        const m = row.m;
         // "You" only when it cannot be two people: two WeChat accounts are each an owner.
         const who =
           m.sender ??

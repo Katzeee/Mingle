@@ -10,7 +10,7 @@ import {
   isCold,
   RECENT_ACTIONS,
 } from "./cold.ts";
-import { renderMessage } from "./format.ts";
+import { formatHandoff, renderMessage } from "./format.ts";
 import { MEMORY_LIMIT, memoryHint, memoryHintDue, memorySize, readRole } from "./home.ts";
 import { renderManual } from "./manual.ts";
 
@@ -116,7 +116,10 @@ export function holdUntil(why: FailureInfo, holds: number, now: number): number 
   }
 }
 
-type Pending = { readonly kind: "message"; readonly id: string } | { readonly kind: "text"; readonly text: string };
+type Pending =
+  | { readonly kind: "message"; readonly id: string }
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "handoff"; readonly id: string };
 
 /**
  * One agent, one long-lived harness session (docs/spec.md 4.1–4.3).
@@ -208,6 +211,7 @@ export class AgentRuntime {
       })
       .catch((error) => this.fail(error));
     for (const message of this.deps.store.undelivered(this.agentId)) this.enqueueMessage(message.id);
+    for (const handoff of this.deps.store.waitingHandoffs(this.agentId)) this.enqueueHandoff(handoff.id);
   }
 
   enqueueMessage(messageId: string): void {
@@ -237,6 +241,13 @@ export class AgentRuntime {
   /** Input that is not a chat message: a reminder firing, or a note from Mingle itself. */
   enqueueText(text: string): void {
     this.pending.push({ kind: "text", text });
+    this.schedule();
+  }
+
+  /** What the owner handed over from another conversation (docs/spec.md 4.12): an input of its own. */
+  enqueueHandoff(id: string): void {
+    if (this.pending.some((p) => p.kind === "handoff" && p.id === id)) return;
+    this.pending.push({ kind: "handoff", id });
     this.schedule();
   }
 
@@ -343,7 +354,13 @@ export class AgentRuntime {
     const taken = this.running ? this.pending.filter((p) => p.kind === "message") : this.pending.slice();
     this.pending = this.running ? this.pending.filter((p) => p.kind !== "message") : [];
     // A message settled while it waited (answered, or queued twice) is not delivered again.
-    const batch = taken.filter((p) => p.kind === "text" || this.deps.store.message(p.id)?.state === "received");
+    const batch = taken.filter((p) =>
+      p.kind === "text"
+        ? true
+        : p.kind === "handoff"
+          ? this.deps.store.handoff(p.id)?.state === "waiting"
+          : this.deps.store.message(p.id)?.state === "received",
+    );
     if (batch.length === 0) return;
     if (this.blocked && Date.now() >= this.blocked.until) this.unblock();
     if (this.holdBatch(batch)) return;
@@ -382,7 +399,14 @@ export class AgentRuntime {
     );
     const messageIds = [...delivered];
     const text = batch
-      .flatMap((p) => (p.kind === "text" ? [p.text] : delivered.has(p.id) ? [this.render(p.id)] : []))
+      .flatMap((p) => {
+        if (p.kind === "text") return [p.text];
+        if (p.kind === "handoff") {
+          const handoff = this.deps.store.handoff(p.id);
+          return handoff ? [formatHandoff(handoff)] : [];
+        }
+        return delivered.has(p.id) ? [this.render(p.id)] : [];
+      })
       .filter(Boolean)
       .join("\n\n");
     if (!text) {
@@ -409,6 +433,7 @@ export class AgentRuntime {
       this.agentId,
       notes.map((n) => n.id),
     );
+    this.deps.store.markHandoffsDelivered(batch.flatMap((p) => (p.kind === "handoff" ? [p.id] : [])));
     this.deps.log?.(`${this.agentId}: delivered ${messageIds.join(",") || "note"} (${result.outcome})`);
   }
 
@@ -470,7 +495,7 @@ export class AgentRuntime {
    */
   private lose(batch: readonly Pending[], error: unknown): void {
     if (this.disposed) return;
-    this.pending.unshift(...batch.filter((p) => p.kind === "text"));
+    this.pending.unshift(...batch.filter((p) => p.kind !== "message"));
     this.settleLost(
       batch.flatMap((p) => (p.kind === "message" ? [p.id] : [])),
       { failure: failureOf(error) },
@@ -526,7 +551,7 @@ export class AgentRuntime {
       until,
     );
     if (held.length > 0) this.deps.onSettled?.(held, "waiting", { ...why, retryAt: until });
-    this.pending.unshift(...batch.filter((p) => p.kind === "text"));
+    this.pending.unshift(...batch.filter((p) => p.kind !== "message"));
     return true;
   }
 

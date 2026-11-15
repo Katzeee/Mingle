@@ -29,6 +29,17 @@ export interface Agent {
   createdAt: number;
 }
 
+/** What the owner handed an agent from another conversation (docs/spec.md 4.12). */
+export interface Handoff {
+  id: string;
+  agentId: string;
+  body: string;
+  via: "command" | "paste";
+  state: "waiting" | "delivered";
+  createdAt: number;
+  deliveredAt: number | null;
+}
+
 /** An agent's environment variable as stored: its name only. */
 export interface EnvName {
   name: string;
@@ -1180,6 +1191,46 @@ export class Store {
     return rows.map((r) => ({ id: Number(r.id), body: String(r.body) }));
   }
 
+  // ---------------------------------------------------------------- handoffs
+
+  addHandoff(agentId: string, body: string, via: Handoff["via"]): Handoff {
+    const id = this.mint("handoffs", "h", 4);
+    this.db
+      .prepare("INSERT INTO handoffs (id, agent_id, body, via, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(id, agentId, body, via, this.now());
+    return this.handoff(id) as Handoff;
+  }
+
+  handoff(id: string): Handoff | undefined {
+    const row = this.db.prepare("SELECT * FROM handoffs WHERE id = ?").get(id) as Row | undefined;
+    return row && toHandoff(row);
+  }
+
+  /** Newest first. */
+  handoffs(agentId: string, limit: number): Handoff[] {
+    const rows = this.db
+      .prepare("SELECT * FROM handoffs WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(agentId, limit) as Row[];
+    return rows.map(toHandoff);
+  }
+
+  /** Not yet delivered, oldest first. */
+  waitingHandoffs(agentId: string): Handoff[] {
+    const rows = this.db
+      .prepare("SELECT * FROM handoffs WHERE agent_id = ? AND state = 'waiting' ORDER BY created_at, rowid")
+      .all(agentId) as Row[];
+    return rows.map(toHandoff);
+  }
+
+  /** The agent's session accepted them. */
+  markHandoffsDelivered(ids: readonly string[]): void {
+    const mark = this.db.prepare(
+      "UPDATE handoffs SET state = 'delivered', delivered_at = ? WHERE id = ? AND state = 'waiting'",
+    );
+    const t = this.now();
+    for (const id of ids) mark.run(t, id);
+  }
+
   /** The agent was told these. */
   deleteOwnerNotes(agentId: string, ids: readonly number[]): void {
     const remove = this.db.prepare("DELETE FROM owner_notes WHERE id = ? AND agent_id = ?");
@@ -1203,6 +1254,18 @@ function toAgent(r: Row): Agent {
     statusFailure: str(r.status_failure),
     hasReplied: Number(r.has_replied) === 1,
     createdAt: Number(r.created_at),
+  };
+}
+
+function toHandoff(r: Row): Handoff {
+  return {
+    id: String(r.id),
+    agentId: String(r.agent_id),
+    body: String(r.body),
+    via: String(r.via) as Handoff["via"],
+    state: String(r.state) as Handoff["state"],
+    createdAt: Number(r.created_at),
+    deliveredAt: r.delivered_at == null ? null : Number(r.delivered_at),
   };
 }
 

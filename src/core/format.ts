@@ -1,5 +1,13 @@
 import type { Platform } from "../channels/channel.ts";
-import { type Chat, type Contact, contactName, type Message, type Reminder, type Store } from "../store/store.ts";
+import {
+  type Chat,
+  type Contact,
+  contactName,
+  type Handoff,
+  type Message,
+  type Reminder,
+  type Store,
+} from "../store/store.ts";
 import { searchTerms } from "./terms.ts";
 
 /** ISO 8601 in local time with offset, minute precision: 2026-11-11T14:02+08:00. */
@@ -130,4 +138,9 @@ export function formatReminder(reminder: Reminder, at: number, source?: string):
     .split("\n")
     .map((line) => `> ${line}`)
     .join("\n")}`;
+}
+
+/** A handoff as it reaches the agent (docs/spec.md 4.12): one header line, then the owner's text. */
+export function formatHandoff(handoff: Handoff): string {
+  return `[handoff=${handoff.id} from=owner via=${handoff.via} time=${localTime(handoff.createdAt)}]\n${handoff.body.trim()}`;
 }
