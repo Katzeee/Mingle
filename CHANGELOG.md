@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.13
+
+- Strangers can no longer put your agent to work without asking. On public chat apps (Telegram, Discord, QQ), a new person's first DM, or the first @mention in a new group, is held for your approval under "Needs you" before it reaches the agent. Approving delivers the held messages in order; declining keeps them on record only. The decided people and groups can be revoked or re-allowed from Settings → "Access", where one switch extends the same approval to organization apps. Everyone already talking to your agent, and every existing group, stays allowed.
+- Owning a bot on Telegram, Slack, DingTalk and WeCom is no longer "first DM wins": the console shows a 6-digit claim code (valid 10 minutes, regenerable), and only a DM carrying it makes you the owner. Messages sent before claiming are treated as a stranger's.
+- Other bots' messages no longer wake the agent. They are saved as background the agent can read, marked `bot`, and only an explicit @mention in the message body triggers a reply. Five back-and-forth rounds with a bot in one chat stops the loop until a person speaks. A direct message from a bot never triggers.
+- A person can be recognized across chat apps: link their accounts together in Settings → "Contacts" or with `mingle contact link`, add a short note, and find every account with `mingle contact info`. Only the owner's links carry access decisions — approving one account approves the whole person; agent-made links pass no permissions.
+- You can hand an agent what another conversation knows: Settings → "Handoff" copies a prompt for a temporary Claude Code, Codex or web chat to write a handoff, sent with `mingle handoff <agent>` or pasted directly (up to 200 KB). The agent files it into its own memory and tasks; nothing is announced in your chat apps.
+
 ## 0.1.12
 
 - Agents can be renamed and given a picture from Settings → "Name and picture": choose or drop an image, frame it in place, and save it as a 256 px PNG. Chat-app bot pictures are not synced.
