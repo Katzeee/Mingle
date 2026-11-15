@@ -143,7 +143,12 @@ describe("handoffs", () => {
     expect(fromAgent.stderr).toContain("handoff_from_agent");
 
     const prompt = await ownerCli(r, ["handoff", "prompt", "alex"], "");
-    expect(prompt.stdout).toContain(`"${join(r.home, "bin", "mingle")}" handoff alex <<'HANDOFF'`);
+    // The command as this system's shell takes it: a heredoc, or a PowerShell here-string on Windows.
+    expect(prompt.stdout).toContain(
+      process.platform === "win32"
+        ? `'@ | & "${r.mingle.cliPath}" handoff alex`
+        : `"${r.mingle.cliPath}" handoff alex <<'HANDOFF'`,
+    );
     expect(prompt.stdout).toContain('its role: "You help a group of friends plan weekend hikes."');
     expect(r.mingle.handoffs(r.agentId)).toHaveLength(1);
   });
