@@ -409,6 +409,9 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
     };
   };
 
+  /** The newest version each harness's updater last named: what an update offered goes to. */
+  const latest = new Map<string, string>();
+
   return {
     async available() {
       return (await this.catalog?.())?.filter((h) => h.installed) ?? [];
@@ -488,6 +491,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         .checkUpdate(await installation(runtime), { timeoutMs: 15_000 })
         .catch(() => undefined);
       if (check?.kind !== "ok") return { kind: "unknown" };
+      latest.set(id, check.latest);
       return check.updateAvailable
         ? { kind: "available", installed: check.installed, latest: check.latest }
         : { kind: "current", version: check.installed };
@@ -499,7 +503,10 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
       const result = await runtime.upgrade(await installation(runtime), { timeoutMs: 10 * 60_000 });
       const tail = (output: string) => output.trim().split("\n").slice(-6).join("\n");
       if (result.kind === "upgraded" || result.kind === "current") return { ok: true };
-      // Updaters can exit 0 without touching this copy; the version it reports decides.
+      // Updaters can exit 0 without touching this copy; the version it reports decides. A copy
+      // already at the version the update was offered for (updated meanwhile, while the check
+      // that precedes the updater could not reach its source) is up to date, not a failure.
+      if (result.kind === "unchanged" && result.version === latest.get(id)) return { ok: true };
       if (result.kind === "unchanged") return { ok: false, detail: tail(result.output) || `still ${result.version}` };
       if (result.kind === "failed") return { ok: false, detail: tail(result.output) };
       return { ok: false, detail: result.detail ?? result.reason };

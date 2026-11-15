@@ -138,6 +138,25 @@ describe("harness updates", () => {
     expect(await harness.upgrade?.("codex")).toEqual({ ok: false, detail: "requires_terminal" });
   });
 
+  it("counts an update as done when the copy is already at the offered version", async () => {
+    const check = vi.fn();
+    const upgrade = vi.fn();
+    const harness = harnessOf(codexWith({ checkUpdate: check, upgrade }));
+    check.mockResolvedValueOnce({
+      kind: "ok",
+      installed: "0.1.0",
+      latest: "0.2.0",
+      updateAvailable: true,
+      source: "x",
+    });
+    await harness.updateCheck?.("codex");
+    // Updated meanwhile; the updater's own check could not reach its source, so it ran anyway.
+    upgrade.mockResolvedValueOnce({ kind: "unchanged", version: "0.2.0", output: "Update ran successfully!\n" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: true });
+    upgrade.mockResolvedValueOnce({ kind: "unchanged", version: "0.1.0", output: "Update ran successfully!\n" });
+    expect(await harness.upgrade?.("codex")).toEqual({ ok: false, detail: "Update ran successfully!" });
+  });
+
   it("offers no update for a harness without its own updater", async () => {
     const { checkUpdate: _check, upgrade: _upgrade, ...rest } = codexWith({});
     const harness = harnessOf(rest);
