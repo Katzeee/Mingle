@@ -136,6 +136,10 @@ export interface SlackEvent {
   channel_type?: string;
   user?: string;
   bot_id?: string;
+  /** A bot's display name, on messages bots post. */
+  bot_profile?: { name?: string };
+  /** The name a legacy bot or webhook posted under (`bot_message`). */
+  username?: string;
   text?: string;
   ts: string;
   thread_ts?: string;
@@ -496,6 +500,9 @@ function parseChat(platformId: string): { channel: string; thread?: string } {
   return thread ? { channel, thread } : { channel };
 }
 
+/** Message subtypes that are conversation: files, thread replies sent to the channel too, and bots' posts. */
+const KEPT_SUBTYPES = new Set(["file_share", "thread_broadcast", "bot_message"]);
+
 /**
  * Map a Slack event to Mingle's shape. Exported for tests.
  * Channel messages are addressed to the bot when they @ it or continue a thread it is in. A
@@ -510,8 +517,11 @@ export async function toInbound(
   threads: Set<string>,
 ): Promise<InboundMessage | undefined> {
   if (event.type !== "message") return undefined;
-  if (event.subtype && event.subtype !== "file_share" && event.subtype !== "thread_broadcast") return undefined;
-  if (!event.user || event.bot_id || event.user === botUserId) return undefined;
+  if (event.subtype && !KEPT_SUBTYPES.has(event.subtype)) return undefined;
+  // Other bots (apps, legacy bots, webhooks) are kept and marked; the core decides what they may wake.
+  const isBot = Boolean(event.bot_id) || event.subtype === "bot_message";
+  const sender = event.user ?? (isBot ? event.bot_id : undefined);
+  if (!sender || sender === botUserId) return undefined;
 
   const dm = event.channel_type === "im" || event.channel.startsWith("D");
   const raw = event.text ?? "";
@@ -552,12 +562,19 @@ export async function toInbound(
   return {
     platformId: event.ts,
     chat,
-    sender: { id: event.user, name: await nameOf(event.user), isBot: false },
+    sender: {
+      id: sender,
+      name: isBot
+        ? (event.bot_profile?.name ?? event.username ?? (event.user ? await nameOf(event.user) : ""))
+        : await nameOf(sender),
+      isBot,
+    },
     text,
     attachments,
     // A reply in someone else's thread keeps its place in the channel's conversation.
     ...(!addressed && thread ? { replyTo: thread } : {}),
     addressedToBot: addressed,
+    mentioned,
     sentAt: Math.round(Number(event.ts) * 1000),
   };
 }

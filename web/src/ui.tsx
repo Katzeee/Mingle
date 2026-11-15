@@ -693,6 +693,12 @@ export const EyeIcon = (p: { className?: string; off?: boolean }) => (
     {p.off ? <path d="M2.5 13.5 13.5 2.5" /> : null}
   </Icon>
 );
+/** A handoff: something carried over from elsewhere, to the line it stops at. */
+export const HandoffIcon = (p: { className?: string }) => (
+  <Icon {...p}>
+    <path d="M2.5 8h8M7.5 4.5 11 8l-3.5 3.5M13.5 3v10" />
+  </Icon>
+);
 export const ChatIcon = (p: { className?: string }) => (
   <Icon {...p}>
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2Z" />

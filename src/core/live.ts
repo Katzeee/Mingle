@@ -7,6 +7,7 @@ import type {
   SendResult,
 } from "../channels/channel.ts";
 import type { Failure } from "../harness/harness.ts";
+import { MAX_BOT_HOPS } from "./trigger.ts";
 
 /**
  * What a person sees between sending a message and getting the answer:
@@ -41,6 +42,7 @@ const TEXT = {
     askOwnerGroup: (group: string, who: string, name: string, preview: string) =>
       `${name} 被拉进了群「${group}」，${who} 在群里 @ 了它：「${preview}」\n在电脑上打开 Mingle，在「需要你处理」里允许或拒绝这个群。`,
     claimed: (name: string) => `好了，你现在是 ${name} 的主人。直接在这里给我发消息，或者把我拉进群里 @ 我。`,
+    botBrake: (bot: string, n: number) => `我和 ${bot} 已经来回 ${n} 轮了，先停下。需要我继续的话，请 @ 我。`,
     failed: "处理时出错了，请稍后再发一次。",
     nothingToStop: "现在没有在处理的事。",
     failures: {
@@ -86,6 +88,8 @@ const TEXT = {
     askOwnerGroup: (group: string, who: string, name: string, preview: string) =>
       `${name} was added to the group "${group}", where ${who} mentioned it: "${preview}"\nOpen Mingle on your computer to allow or decline the group under Needs you.`,
     claimed: (name: string) => `Done: you're ${name}'s owner now. Message me here, or add me to a group and @ me.`,
+    botBrake: (bot: string, n: number) =>
+      `${bot} and I have gone back and forth ${n} times, so I'm stopping here. @ me if you want me to go on.`,
     failed: "Something went wrong. Send it again in a moment.",
     nothingToStop: "Nothing to stop.",
     failures: {
@@ -165,6 +169,16 @@ export function accessText(platform: Platform): {
 /** What Mingle tells a chat that writes to a paused agent, in the chat's language. */
 export function pausedNote(platform: Platform, name: string): string {
   return TEXT[langFor(platform)].pausedNote(name);
+}
+
+/**
+ * What Mingle says, once, when bots have had their turns in a chat (docs/spec.md 4.2). Names the
+ * other bot in plain text, never as a mention, so it does not wake it.
+ */
+export function botBrakeNote(platform: Platform, bot: string): string {
+  const name = bot.replace(/^@+/, "").trim();
+  const t = TEXT[langFor(platform)];
+  return t.botBrake(name || (langFor(platform) === "zh" ? "另一个机器人" : "Another bot"), MAX_BOT_HOPS);
 }
 
 /** What to tell the person when the agent could not answer: what happened, and what helps. */

@@ -544,6 +544,7 @@ export function toInbound(message: DingtalkMessage): InboundMessage | undefined 
     attachments,
     // In groups DingTalk only forwards messages that @ the bot.
     addressedToBot: dm || message.isInAtList !== false,
+    mentioned: !dm && message.isInAtList !== false,
     sentAt: message.createAt ?? Date.now(),
   };
 }

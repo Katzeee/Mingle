@@ -438,6 +438,7 @@ export function toInbound(
     attachments,
     ...(message.replyToMessageId ? { replyTo: message.replyToMessageId } : {}),
     addressedToBot: dm || message.mentionedBot,
+    mentioned: message.mentionedBot,
     sentAt: message.createTime,
   };
 }

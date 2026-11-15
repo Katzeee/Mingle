@@ -20,6 +20,8 @@ import {
   type Chat,
   type Connection,
   type Contact,
+  contactName,
+  type Handoff,
   type Message,
   type Reminder,
   Store,
@@ -31,14 +33,16 @@ import { coldRebuildFor } from "./cold.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
 import { MingleError, notFound } from "./errors.ts";
 import { formatReminder, renderMessage } from "./format.ts";
-import { createHome, memorySize, writeRole } from "./home.ts";
+import { checkHandoff, handoffPrompt } from "./handoff.ts";
+import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
 import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stored } from "./link.ts";
-import { accessText, LiveReplies, pausedNote, stopNote } from "./live.ts";
+import { accessText, botBrakeNote, LiveReplies, pausedNote, stopNote } from "./live.ts";
 import { Outbox } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
+import { BotHops, trigger } from "./trigger.ts";
 
 export interface OnboardingSession {
   readonly id: string;
@@ -116,6 +120,8 @@ export class Mingle {
   private readonly pauseNoted = new Set<string>();
   /** Wrong claim codes each ownerless bot took since its code was issued (docs/spec.md 4.7). */
   private readonly claimMisses = new Map<string, number>();
+  /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
+  private readonly botHops = new BotHops();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -1168,12 +1174,21 @@ export class Mingle {
 
   // ------------------------------------------------------------------- inbox
 
+  /** The sender is one of this computer's agents, on a bot that is online now. */
+  private isLocalBot(platform: Platform, senderId: string): boolean {
+    for (const [id, live] of this.live) {
+      if (this.store.connection(id)?.platform !== platform) continue;
+      if (live.bot.id === senderId || live.bot.senderId === senderId) return true;
+    }
+    return false;
+  }
+
   /** One inbound message from a chat app (docs/spec.md 4.2, 4.3, 7.1). */
   receive(connectionId: string, inbound: InboundMessage): void {
     const connection = this.store.connection(connectionId);
     if (!connection) return;
-    // Other bots are ignored until there are rules against bot-to-bot loops (docs/spec.md 13).
-    if (inbound.sender.isBot) return;
+    // A bot by the platform's word, or one of this computer's agents (a GitHub agent is a plain user account).
+    const knownBot = inbound.sender.isBot || this.isLocalBot(connection.platform, inbound.sender.id);
     const parent = inbound.chat.parent
       ? this.store.upsertChat({
           connectionId,
@@ -1189,24 +1204,35 @@ export class Mingle {
       name: inbound.chat.name,
       parentId: parent?.id,
     });
-    const contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
-    if (!connection.ownerId && chat.kind === "dm" && this.claim(connection, chat, contact, inbound)) return;
+    let contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
+    if (!connection.ownerId && chat.kind === "dm" && !knownBot && this.claim(connection, chat, contact, inbound))
+      return;
     const ownerId = connection.ownerId;
+    const owner = inbound.sender.id === ownerId;
+    if (knownBot && !owner && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
+    // The owner is a person, whatever was marked.
+    const bot = !owner && contact.isBot;
     const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
     const replyTo = quoted?.id ?? null;
-    // A reply to something the agent said is addressed to it, even where the platform does not say so.
-    const triggers = chat.kind === "dm" || inbound.addressedToBot || quoted?.direction === "out";
+    const decision = trigger({
+      dm: chat.kind === "dm",
+      bot,
+      // A reply to something the agent said is addressed to it, even where the platform does not say so.
+      addressed: inbound.addressedToBot || quoted?.direction === "out",
+      mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
+      hops: this.botHops.hops(chat.id),
+    });
+    const triggers = decision === "wake";
     // Who may put the agent to work (docs/spec.md 4.7). Only a trigger needs letting in: background
     // is stored as it always was.
     const group = chat.kind === "dm" ? undefined : (parent ?? chat);
-    const isOwner = inbound.sender.id === ownerId;
     const verdict = triggers
       ? gate({
           trust: this.channel(connection.platform).trust ?? "public",
           askAll: this.store.agent(connection.agentId)?.askAll ?? false,
-          isOwner,
+          isOwner: owner,
           chatKind: chat.kind,
-          contact: contact.access,
+          contact: contact.access ?? this.linkedAccess(contact),
           group: group?.access ?? null,
         })
       : "deliver";
@@ -1228,7 +1254,17 @@ export class Mingle {
       held: verdict === "ask",
       createdAt: inbound.sentAt,
     });
-    if (!message || !triggers || verdict === "drop") return; // Duplicate, not addressed to the agent, or refused.
+    if (!message) return; // The platform delivered it before.
+    if (!bot) this.botHops.person(chat.id);
+    else if (triggers) this.botHops.woke(chat.id);
+    else if (decision === "brake" && this.botHops.braked(chat.id)) {
+      // Said once, without quoting or naming the bot as a mention: that would only wake it again.
+      const name = contactName(contact) ?? inbound.sender.name;
+      void this.outbox
+        .send(connection.agentId, { chatId: chat.id, text: botBrakeNote(connection.platform, name), notice: true })
+        .catch((error) => this.log(`bot brake note failed: ${(error as Error).message}`));
+    }
+    if (!triggers || verdict === "drop") return; // Background, or someone the owner refused.
     if (verdict === "ask") {
       this.asked(connection, chat, group, contact, message);
       return;
@@ -1239,7 +1275,7 @@ export class Mingle {
     if (group && group.access === null) {
       this.store.setChatAccess(group.id, "allowed");
       // The owner using the agent in a group lets the group in: what waited there goes through too.
-      if (isOwner) this.admit(connection.agentId, this.heldIn(connection.agentId, { group: group.id }));
+      if (owner) this.admit(connection.agentId, this.heldIn(connection.agentId, { group: group.id }));
     }
 
     const live = this.live.get(connectionId);
@@ -1379,6 +1415,18 @@ export class Mingle {
       .catch((error) => this.log(`note to ${chat.id} failed: ${(error as Error).message}`));
   }
 
+  /** The other accounts the owner said belong to the same person as this one; none for an agent's link. */
+  private ownerLinked(contact: Contact): Contact[] {
+    if (!contact.personId || contact.linkedBy !== "owner") return [];
+    return this.store.personContacts(contact.personId).filter((k) => k.id !== contact.id && k.linkedBy === "owner");
+  }
+
+  /** What the owner decided for this person on their other accounts, when not for this one: refused wins. */
+  private linkedAccess(contact: Contact): "allowed" | "blocked" | null {
+    const decided = this.ownerLinked(contact).map((k) => k.access);
+    return decided.includes("blocked") ? "blocked" : decided.includes("allowed") ? "allowed" : null;
+  }
+
   /** Held messages of one person's direct chats, or of one group and its threads. */
   private heldIn(agentId: string, of: { contact: Contact } | { group: string }): Message[] {
     return this.store
@@ -1427,8 +1475,15 @@ export class Mingle {
       if (this.store.connection(contact.connectionId)?.ownerId === contact.platformId) {
         throw new MingleError("contact_is_owner", "the bot's owner can always talk to the agent", 409);
       }
-      this.store.setContactAccess(contact.id, access);
-      held = this.heldIn(agent.id, { contact });
+      // The owner said these accounts are one person: the answer is for all of them (docs/spec.md 4.7).
+      // A link the agent made carries nothing, or a stranger could talk it into one.
+      const accounts = [contact, ...this.ownerLinked(contact)];
+      held = [];
+      for (const account of accounts) {
+        if (this.store.connection(account.connectionId)?.ownerId === account.platformId) continue;
+        this.store.setContactAccess(account.id, access);
+        held.push(...this.heldIn(agent.id, { contact: account }));
+      }
     } else {
       const chat = this.store.agentChat(agent.id, target.chat);
       if (chat?.kind !== "group") throw notFound("chat", target.chat);
@@ -1603,6 +1658,39 @@ export class Mingle {
     );
     this.log(`${agent.name}: owner closed task ${task.id}`);
     return true;
+  }
+
+  // ---------------------------------------------------------------- handoffs
+
+  /**
+   * Hand the agent what another conversation knows (docs/spec.md 4.12). It reaches the agent as an
+   * input of its own: now when idle, after the current turn when busy, on resume when paused.
+   */
+  handoff(
+    idOrSlug: string,
+    body: unknown,
+    via: Handoff["via"],
+  ): { handoff: Handoff; name: string; state: "idle" | "busy" | "paused" } {
+    const agent = this.agent(idOrSlug);
+    const handoff = this.store.addHandoff(agent.id, checkHandoff(body), via);
+    const runtime = this.runtimes.get(agent.id);
+    runtime?.enqueueHandoff(handoff.id);
+    this.log(`${agent.name}: handoff ${handoff.id} (${via}, ${Buffer.byteLength(handoff.body, "utf8")} bytes)`);
+    return {
+      handoff,
+      name: agent.name,
+      state: this.paused.has(agent.id) || !runtime ? "paused" : runtime.busy ? "busy" : "idle",
+    };
+  }
+
+  handoffs(idOrSlug: string, limit = 30): Handoff[] {
+    return this.store.handoffs(this.agent(idOrSlug).id, limit);
+  }
+
+  /** What the owner gives the other conversation, with this computer's CLI path in the command. */
+  handoffPrompt(idOrSlug: string): string {
+    const agent = this.agent(idOrSlug);
+    return handoffPrompt(agent, readRole(this.homeDir(agent)), this.cliPath);
   }
 
   // --------------------------------------------------------------------- cli

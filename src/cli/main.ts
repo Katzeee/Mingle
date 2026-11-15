@@ -108,6 +108,77 @@ function adminClient() {
     request<T>(runtime.url, runtime.adminToken, method, path, body);
 }
 
+interface ContactRow {
+  id: string;
+  platform: string;
+  name: string | null;
+  platformName: string | null;
+  owner: boolean;
+  bot: boolean;
+  person: string | null;
+}
+
+interface ContactInfo {
+  person: { id: string; name: string | null; note: string | null } | null;
+  accounts: {
+    id: string;
+    platform: string;
+    name: string | null;
+    platformName: string | null;
+    owner: boolean;
+    bot: boolean;
+    linkedBy: "owner" | "agent" | null;
+    chats: { id: string; kind: string; name: string | null }[];
+  }[];
+}
+
+const marks = (k: { owner: boolean; bot: boolean }) => `${k.owner ? "  owner" : ""}${k.bot ? "  bot" : ""}`;
+
+/** One line per account; accounts of one person under the person's line. */
+function contactList(contacts: readonly ContactRow[]): string {
+  const line = (k: ContactRow, indent: string) => {
+    const given = k.name && k.name !== k.platformName && k.platformName ? `  (${k.platformName} on ${k.platform})` : "";
+    return `${indent}${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${marks(k)}`;
+  };
+  const out: string[] = [];
+  const done = new Set<string>();
+  for (const k of contacts) {
+    if (!k.person) {
+      out.push(line(k, ""));
+      continue;
+    }
+    if (done.has(k.person)) continue;
+    done.add(k.person);
+    const members = contacts.filter((m) => m.person === k.person);
+    out.push(
+      `${k.person}  ${k.name ? JSON.stringify(k.name) : "no name"}  ${members.length} account${members.length > 1 ? "s" : ""}`,
+    );
+    for (const m of members) out.push(line({ ...m, name: m.platformName }, "  "));
+  }
+  return out.join("\n");
+}
+
+function contactInfo(found: ContactInfo): string {
+  const out: string[] = [];
+  const name = found.person?.name ?? found.accounts[0]?.name;
+  out.push(`${found.person ? `${found.person.id}  ` : ""}${name ? JSON.stringify(name) : "no name"}`);
+  for (const k of found.accounts) {
+    const by = k.linkedBy === "owner" ? "  linked by your owner" : k.linkedBy === "agent" ? "  linked by you" : "";
+    out.push(
+      `  ${k.id}  ${k.platform}  ${k.platformName ? JSON.stringify(k.platformName) : "no name"}${marks(k)}${by}`,
+    );
+    const dm = k.chats.find((c) => c.kind === "dm");
+    if (dm) out.push(`    direct chat: ${dm.id}`);
+    const groups = k.chats.filter((c) => c.kind !== "dm");
+    if (groups.length) {
+      out.push(`    also in: ${groups.map((c) => (c.name ? `${c.id} ${JSON.stringify(c.name)}` : c.id)).join(", ")}`);
+    }
+    if (!dm && !groups.length) out.push("    no chat yet");
+  }
+  out.push(found.person?.note ? `note:\n${found.person.note}` : "no note");
+  return out.join("\n");
+}
+
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
   const chunks: Buffer[] = [];
@@ -126,6 +197,10 @@ let jsonMode = false;
 
 function print(data: unknown, text: () => string): void {
   console.log(jsonMode ? JSON.stringify(data, null, 2) : text());
+}
+
+function kilobytes(bytes: number): string {
+  return `${Math.max(0.1, Math.round(bytes / 102.4) / 10)} KB`;
 }
 
 function time(ms: number | null): string {
@@ -256,30 +331,50 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "contact list": {
-      const contacts = await call()<
-        { id: string; platform: string; name: string | null; platformName: string | null; owner: boolean }[]
-      >("GET", "/v1/agent/contacts");
-      print(contacts, () =>
-        contacts.length
-          ? contacts
-              .map((k) => {
-                const given =
-                  k.name && k.name !== k.platformName && k.platformName ? `  (${k.platformName} on ${k.platform})` : "";
-                return `${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${k.owner ? "  owner" : ""}`;
-              })
-              .join("\n")
-          : "no contacts yet: nobody has messaged you",
-      );
+      const contacts = await call()<ContactRow[]>("GET", "/v1/agent/contacts");
+      print(contacts, () => (contacts.length ? contactList(contacts) : "no contacts yet: nobody has messaged you"));
+      return true;
+    }
+    case "contact info": {
+      const id = need(args[0], "contact_required", "usage: mingle contact info <user-or-person-id>");
+      const found = await call()<ContactInfo>("GET", `/v1/agent/contacts/${id}`);
+      print(found, () => contactInfo(found));
       return true;
     }
     case "contact name": {
-      const usage = 'usage: mingle contact name <user-id> "name" | mingle contact name <user-id> --clear';
+      const usage = 'usage: mingle contact name <user-or-person-id> "name" | mingle contact name <id> --clear';
       const id = need(args[0], "contact_required", usage);
       const name = flags.clear ? null : need(args.slice(1).join(" ").trim(), "name_required", usage);
       const contact = await call()<{ id: string; name: string | null }>("PATCH", `/v1/agent/contacts/${id}`, { name });
       print(contact, () =>
         contact.name ? `${contact.id} is now ${JSON.stringify(contact.name)}` : `${contact.id} has no name now`,
       );
+      return true;
+    }
+    case "contact link": {
+      const usage = "usage: mingle contact link <user-id> <user-id>";
+      const ids = [need(args[0], "contacts_required", usage), need(args[1], "contacts_required", usage)];
+      const found = await call()<ContactInfo>("POST", "/v1/agent/contacts/link", { ids });
+      print(found, () => `linked as ${found.person?.id}\n${contactInfo(found)}`);
+      return true;
+    }
+    case "contact unlink": {
+      const id = need(args[0], "contact_required", "usage: mingle contact unlink <user-id>");
+      const result = await call()<{ ok: true }>("POST", `/v1/agent/contacts/${id}/unlink`);
+      print(result, () => `${id} is on its own again`);
+      return true;
+    }
+    case "contact note": {
+      const usage =
+        "usage: mingle contact note <user-or-person-id> <<'NOTE' ... NOTE | mingle contact note <id> --clear";
+      const id = need(args[0], "contact_required", usage);
+      const note = flags.clear ? null : need((await readStdin()).trim(), "note_required", usage);
+      const result = await call()<{ person: string | null; note: string | null }>(
+        "PUT",
+        `/v1/agent/contacts/${id}/note`,
+        { note },
+      );
+      print(result, () => (result.note ? `saved the note on ${result.person}` : `${id} has no note now`));
       return true;
     }
     case "file get": {
@@ -416,6 +511,38 @@ async function adminCommand(group: string, action: string | undefined, args: str
       connection,
       () =>
         `connected ${connection.bot} (${connection.id}). Send it a direct message from your own account to become its owner.`,
+    );
+    return true;
+  }
+  if (group === "handoff") {
+    // mingle handoff prompt <agent>   |   mingle handoff <agent>   (the handoff on standard input)
+    if (action === "prompt" && args[0]) {
+      const result = await adminClient()<{ text: string }>("GET", `/v1/admin/agents/${args[0]}/handoff-prompt`);
+      print(result, () => result.text.trimEnd());
+      return true;
+    }
+    const agent = need(action, "agent_required", "usage: mingle handoff <agent> <<'HANDOFF' ... HANDOFF");
+    // An agent's own session speaks as that agent; it does not hand another one work as the owner.
+    if (process.env.MINGLE_TOKEN) {
+      throw new CliError("handoff_from_agent", "a handoff comes from the owner's own conversation, not from an agent");
+    }
+    const body = await readStdin();
+    if (!body.trim()) {
+      throw new CliError("handoff_empty", "write the handoff and pass it on standard input, e.g. with a heredoc");
+    }
+    const result = await adminClient()<{
+      handoff: { id: string; size: number };
+      name: string;
+      state: "idle" | "busy" | "paused";
+    }>("POST", `/v1/admin/agents/${agent}/handoffs`, { body, via: "command" });
+    const when = {
+      idle: `${result.name} reads it now`,
+      busy: `${result.name} is working; it reads this when it finishes`,
+      paused: `${result.name} is paused; it reads this when resumed`,
+    }[result.state];
+    print(
+      result,
+      () => `Handed off to ${result.name} (${result.handoff.id}, ${kilobytes(result.handoff.size)}). ${when}.`,
     );
     return true;
   }
@@ -689,13 +816,15 @@ For the owner:
   mingle agent reset <agent>               start it over in a new session; memory and files stay
   mingle agent diagnostics <agent>         versions, brain, session and status, to share when asking for help
   mingle agent delete <agent> [--remove-home]
+  mingle handoff <agent>                   hand it what another conversation knows, on standard input
+  mingle handoff prompt <agent>            the prompt to give that conversation
   mingle connect <agent> telegram          bot token on standard input
   mingle disconnect <connection-id>
 
 For agents (inside a session):
   mingle message reply <msg> | send --to <chat> | read <chat> | search <words>
   mingle chat list | info <chat>
-  mingle contact list | name <user> "name"
+  mingle contact list | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
   mingle task create | list | update
   mingle reminder set | list | snooze | cancel

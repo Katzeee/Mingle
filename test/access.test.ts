@@ -157,6 +157,30 @@ describe("who can put the agent to work (docs/spec.md 4.7)", () => {
   });
 });
 
+describe("access across one person's accounts (docs/spec.md 4.7)", () => {
+  it("carries the owner's answer to accounts the owner linked, never to ones the agent linked", async () => {
+    current = await rig(async () => {}, { trust: "public" });
+    const { channel, mingle, agentId } = current;
+    const saw = (text: string) => current?.turns.some((t) => t.input.includes(text)) ?? false;
+    channel.receive({ text: "hello from one", chat: dm("7"), sender: stranger });
+    await until(() => mingle.store.heldMessages(agentId).length === 1);
+    const one = mingle.store.agentContacts(agentId).find((k) => k.platformId === "s1");
+    // Two more accounts of someone, unknown so far.
+    const two = mingle.store.touchContact(one?.connectionId as string, "s2", "Mallory (work)");
+    const three = mingle.store.touchContact(one?.connectionId as string, "s3", "Mallory?");
+    await current.admin("POST", `/v1/admin/agents/${agentId}/people/link`, { contacts: [one?.id, two.id] });
+    mingle.store.linkContacts(agentId, [two.id, three.id], "agent");
+    await current.admin("POST", `/v1/admin/agents/${agentId}/contacts/${one?.id}/access`, { access: "allowed" });
+    await until(() => saw("hello from one"));
+
+    channel.receive({ text: "hello from two", chat: dm("8"), sender: { id: "s2", name: "Mallory", isBot: false } });
+    await until(() => saw("hello from two"));
+    channel.receive({ text: "hello from three", chat: dm("9"), sender: { id: "s3", name: "Mallory", isBot: false } });
+    await until(() => mingle.store.heldMessages(agentId).some((m) => m.body === "hello from three"));
+    expect(saw("hello from three")).toBe(false);
+  });
+});
+
 describe("claiming a bot whose owner the platform did not name (docs/spec.md 4.7)", () => {
   type View = { connections: { id: string; owner: boolean; claim: { code: string | null } | null }[] };
   const view = async (r: Rig) => (await r.admin("GET", `/v1/admin/agents/${r.agentId}`)).json as View;

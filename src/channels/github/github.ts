@@ -348,6 +348,7 @@ export function githubChannel(options: GitHubOptions = {}): Channel {
               attachments: [],
               ...(extra.replyTo ? { replyTo: extra.replyTo } : {}),
               addressedToBot: Boolean(extra.addressed) || mentionsMe(body),
+              mentioned: mentionsMe(body),
               sentAt: time,
             },
           });
@@ -537,7 +538,7 @@ export function githubChannel(options: GitHubOptions = {}): Channel {
 }
 
 function identity(user: GhUser): BotIdentity {
-  return { id: String(user.id), name: `@${user.login}` };
+  return { id: String(user.id), name: `@${user.login}`, senderId: user.login };
 }
 
 /** `https://api.github.com/repos/o/r/issues/12` → `o/r` and 12. Pull requests come as `/pulls/12`. */
