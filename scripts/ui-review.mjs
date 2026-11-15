@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { crc32, deflateSync } from "node:zlib";
 
 const run = promisify(execFile);
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -62,6 +63,12 @@ try {
       "Research assistant for the reading club. Summarises long articles, keeps a running list of recommended books with short reviews, answers questions about previous discussions, and posts a weekly digest every Sunday evening.",
   });
   const helper = await admin("POST", "/v1/admin/agents", { name: "小助手", harness, role: "" });
+  // A picture for Alex (docs/spec.md 8.1), so the sidebar and header show a real image, not the initial.
+  await fetch(`${url}/v1/admin/agents/${alex.id}/avatar`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${adminToken}`, "content-type": "image/png" },
+    body: gradientPng(256),
+  });
   // Environment variables: two stored in the system credential store (removed again at the
   // end, since this is the real Keychain), and one whose value is missing (name only, below).
   for (const name of ["DAILY_WEBHOOK_URL", "GITHUB_TOKEN"]) {
@@ -501,4 +508,37 @@ try {
   daemon.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 500));
   rmSync(home, { recursive: true, force: true });
+}
+
+/** A soft diagonal gradient as a PNG, written by hand so the review needs no image library. */
+function gradientPng(size) {
+  const rows = Buffer.alloc(size * (size * 3 + 1));
+  for (let y = 0; y < size; y++) {
+    rows[y * (size * 3 + 1)] = 0;
+    for (let x = 0; x < size; x++) {
+      const t = (x + y) / (2 * size);
+      const at = y * (size * 3 + 1) + 1 + x * 3;
+      rows[at] = Math.round(255 - 120 * t);
+      rows[at + 1] = Math.round(170 + 40 * t);
+      rows[at + 2] = Math.round(120 + 120 * t);
+    }
+  }
+  const chunk = (type, data) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length, 0);
+    head.write(type, 4, "ascii");
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, "ascii"), data])), 0);
+    return Buffer.concat([head, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(rows)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
 }

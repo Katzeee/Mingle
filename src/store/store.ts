@@ -15,6 +15,8 @@ export interface Agent {
   id: string;
   slug: string;
   name: string;
+  /** The picture's file name under ~/.mingle/avatars/, or null for the generated initial. */
+  avatar: string | null;
   harness: string;
   model: string | null;
   sessionId: string | null;
@@ -232,6 +234,10 @@ export class Store {
     }
     if (!sets.length) return;
     this.db.prepare(`UPDATE agents SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...values, this.now(), id);
+  }
+
+  setAvatar(id: string, file: string | null): void {
+    this.db.prepare("UPDATE agents SET avatar = ?, updated_at = ? WHERE id = ?").run(file, this.now(), id);
   }
 
   /** The last MEMORY.md size hint given to this agent (docs/spec.md 4.5), if any. */
@@ -999,6 +1005,7 @@ function toAgent(r: Row): Agent {
     id: String(r.id),
     slug: String(r.slug),
     name: String(r.name),
+    avatar: str(r.avatar),
     harness: String(r.harness),
     model: str(r.model),
     sessionId: str(r.session_id),

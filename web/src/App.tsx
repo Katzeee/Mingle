@@ -244,7 +244,7 @@ function Sidebar({
               aria-current={on ? "page" : undefined}
               className={`${row} min-h-[46px] py-1.5`}
             >
-              <Avatar name={a.name} size={28} />
+              <Avatar name={a.name} src={a.avatar} size={28} />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate font-medium">{a.name}</span>
                 <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">

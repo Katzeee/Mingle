@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
@@ -11,7 +11,7 @@ import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
 import { readRole } from "../core/home.ts";
 import { renderManual } from "../core/manual.ts";
-import type { Mingle } from "../core/mingle.ts";
+import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
 import {
@@ -50,6 +50,22 @@ export function createApi(mingle: Mingle): Hono<Env> {
   });
 
   app.get("/v1/health", (c) => c.json({ ok: true, version: VERSION }));
+
+  /**
+   * An agent's picture, for <img> tags that cannot send the admin token. The file name is
+   * random and only served while it is current; other sites may not embed it.
+   */
+  app.get("/v1/avatars/:file", (c) => {
+    const path = mingle.avatarPath(c.req.param("file"));
+    if (!path || !existsSync(path)) return c.body(null, 404);
+    const ext = path.slice(path.lastIndexOf(".") + 1);
+    return c.body(readFileSync(path), 200, {
+      "content-type": ext === "jpg" ? "image/jpeg" : `image/${ext}`,
+      "cache-control": "private, max-age=31536000, immutable",
+      "cross-origin-resource-policy": "same-origin",
+      "x-content-type-options": "nosniff",
+    });
+  });
 
   // ------------------------------------------------------------------ agent
 
@@ -352,6 +368,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const shared = sharedOwners(connections);
     return {
       ...agent,
+      avatar: agent.avatar ? `/v1/avatars/${agent.avatar}` : null,
       harnessName: mingle.harnessName(agent.id),
       home: mingle.homeDir(agent),
       role: readRole(mingle.homeDir(agent)),
@@ -608,6 +625,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
     }
     return c.json(agentView(await mingle.updateAgent(c.req.param("id"), body)));
   });
+
+  /** The picture as the raw request body: PNG, JPEG or WebP, judged by its bytes. */
+  app.put("/v1/admin/agents/:id/avatar", async (c) => {
+    const id = c.req.param("id");
+    mingle.agent(id);
+    if (Number(c.req.header("content-length") ?? 0) > AVATAR_MAX_BYTES) {
+      throw new MingleError("avatar_too_large", "use an image under 2 MB", 413);
+    }
+    const image = new Uint8Array(await c.req.arrayBuffer());
+    return c.json(agentView(mingle.setAvatar(id, image)));
+  });
+
+  app.delete("/v1/admin/agents/:id/avatar", (c) => c.json(agentView(mingle.clearAvatar(c.req.param("id")))));
 
   app.put("/v1/admin/agents/:id/role", async (c) => {
     const { role } = await c.req.json<{ role: string }>();
