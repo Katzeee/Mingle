@@ -119,6 +119,7 @@ erDiagram
 
 - 私聊：每条消息都触发。
 - 群聊：@ Agent，或回复它发出的消息时触发。
+- 其他机器人：只有正文里明确 @ 它才触发，见下文"机器人之间"。
 
 触发的消息包上一行来源信息后交给 Agent。每条消息和每个聊天都有 Mingle 分配的短 ID，Agent 用它们来回复和发送：
 
@@ -148,6 +149,23 @@ erDiagram
 [msg=m9c1d chat=c31 im=slack group="C0123:1731.42" in=c30 from="张三" user=u7k2p time=2026-11-15T10:20+08:00 unseen=7]
 @Alex 你怎么看？
 ```
+
+**机器人之间（MING-80）。** 群里常有别的机器人：CI 通知、部署机器人、别人家的 Agent，也可能是本机的另一个 Agent。以前核心直接丢掉所有机器人的消息，结果是 Agent 看不到"刚才部署机器人报的错"，两个 Agent 也没法协作；而 GitHub 上 Agent 用的是普通用户账号，这一刀又切不到，两个 Agent 互相 @ 会没完没了。现在的规则，从轻到重：
+
+1. **其他机器人的话存为背景，不触发。** 和群里没 @ 它的消息一样，状态 `ignored`，`message read`、`message search` 都能看到，来源行带 `bot` 标记，计入 `unseen`。
+2. **只有正文里明确 @ 它才触发。** 回复它的消息不算，私聊不算，平台自动带上的回复提醒也不算（Discord 回复默认会提醒原作者，并把他列进 `mentions`；只认正文里的 `<@id>`）。机器人之间的"回复"很容易自动发生，写出名字才是有意的交接。适配器用 `InboundMessage.mentioned` 报告"正文里 @ 了它"；报不出来的平台（个人微信、企业微信、QQ、iMessage），群里发给它的消息按 @ 算。
+3. **熔断。** 在每个聊天里，数从上一次有人说话起、由机器人触发的轮数。满 5 轮后，这个聊天里机器人的 @ 不再触发，直到有人说话（不管是不是对 Agent 说），计数清零。熔断时 Mingle 以 Agent 的名义在聊天里说一次"我和 Bob 已经来回 5 轮了，先停下。需要我继续的话，请 @ 我。"（按聊天的语言）：不引用、不 @ 对方，免得再把它唤醒；这条说明不算 Agent 的回复，不改变聊天里任何消息的状态。阈值写死，不给入口。计数在内存里，重启清零：重启本身就是一次打断。
+
+**怎么认出机器人**（联系人的 `is_bot`，迁移 014）：
+
+- 平台的标记：Discord 的 `author.bot`、Telegram 的 `is_bot`、GitHub 的 `type: Bot`、Slack 的 `bot_id` 和 `bot_message`（Slack 适配器以前自己丢掉这些消息，现在照常报给核心）。
+- 本机所有在线 Agent 的机器人身份：发送者是本机另一个连接的机器人（`BotIdentity.id`，或 `senderId`：GitHub 上消息里的是登录名，`id` 是数字 ID）。这补上了 GitHub 用户账号的缺口，也覆盖本机多个 Agent 同在一个群。飞书的 open_id 按应用区分，同一个机器人在两个应用眼里 ID 不同，认不出来。
+- owner 在控制台手动标记（`PATCH /v1/admin/agents/:id/contacts/:contactId`，参数 `{ bot }`），用于别人家的 Agent 用的是普通账号的情况。
+- 前两种认出后自动记到联系人上，之后一直算机器人。owner 永远是人：不能被标记，也不会按机器人处理；机器人也不会因为先发私聊而成为 owner。
+
+操作指南加一句：回复机器人时，除非需要它接着做事，否则不要 @ 它；要把事交给另一个 Agent，@ 它一次，说清要什么。
+
+不做多 Agent 编排（指定谁负责、轮流发言），只保证"能协作、不失控"。
 
 ### 4.3 多人同时 @ 与插话
 
@@ -432,7 +450,7 @@ MSG
 
 | 命令 | 作用 |
 |---|---|
-| `mingle contact list` | 通讯录：联系人 ID、平台、名字、是否 owner |
+| `mingle contact list` | 通讯录：联系人 ID、平台、名字、是否 owner、是否机器人 |
 | `mingle contact name <联系人ID> <名字>` | 给人起名，之后的消息头和控制台都用它；`--clear` 改回平台给的名字 |
 
 **文件**
@@ -619,7 +637,7 @@ stateDiagram-v2
 - **收 @**：轮询 `GET /notifications?participating=true`，带上次的 `ETag`（`If-None-Match`），没有变化时返回 304，不计入限额；间隔取 `X-Poll-Interval`（实测 60 秒）和 60 秒中较大的一个，出错时指数退避到最多 15 分钟。只处理 `reason` 为 `mention`、`team_mention`、`comment`（Agent 评论过的楼有新动静）、`author`（Agent 自己开的 issue / PR）的通知，其他的保持未读，不动。
 - **定位评论**：通知只说明哪个 issue / PR 有动静。先把这一条标记已读（`PATCH /notifications/threads/{id}`），再读它上次已读（`last_read_at`，从未读过时往前 7 天）之后的内容：issue 或 PR 正文、issue 评论、PR 行内 review 评论和 review 总结。先标已读再读，读的过程中新来的评论会让它重新变成未读，下一轮还能拿到，不会漏；读失败的楼留在内存里下一轮重试。消息去重靠 Mingle 已有的 `platform_id`。
 - **什么算 @ 它**：正文里有完整的 `@用户名`（不算邮箱和更长的用户名）；`team_mention` 时有 `@org/team`；或者是 Agent 自己开的 review 楼里的回复（相当于聊天里回复它）。楼里其他协作者的评论存为不触发的背景消息（4.2），Agent 可以用 `message read` 看到。
-- **安全**：只处理 `author_association` 为 `OWNER`、`MEMBER`、`COLLABORATOR` 的内容。公开仓库里其他人的 @ 和评论一律丢弃，连背景消息也不存，避免陌生人往 Agent 的上下文里塞指令。Agent 自己发的内容不处理，不会自己触发自己；其他机器人（`type: Bot`）照旧被核心忽略。
+- **安全**：只处理 `author_association` 为 `OWNER`、`MEMBER`、`COLLABORATOR` 的内容。公开仓库里其他人的 @ 和评论一律丢弃，连背景消息也不存，避免陌生人往 Agent 的上下文里塞指令。Agent 自己发的内容不处理，不会自己触发自己。其他机器人（`type: Bot`、本机的其他 Agent、owner 标记的账号）按 4.2 的"机器人之间"处理：存为背景，只有正文里 @ 它才触发，自己开的 review 楼里的回复也不算，连续 5 轮后熔断。
 - **回复**：issue 和 PR 对话用 `POST issues/{n}/comments`；回复行内 review 评论时用 `POST pulls/{n}/comments/{root}/replies`，落在原 review 楼里（GitHub 只接受楼的第一条评论 ID，所以消息 ID 里带上楼的根）。
 - **Channel 映射**：issue / PR 是 `ChatRef(kind: "thread")`，`platformId` 为 `owner/repo#n`，名字带标题。消息 ID：`i:<n>`（正文）、`ic:<id>`（issue 评论）、`rc:<id>@<root>`（行内 review 评论）、`rv:<id>`（review 总结，不能加表情）。Markdown 原生，单条上限 65536；API 不能上传附件，带文件时文字照发、报 `files_dropped`，只有文件时发送失败（`files_unsupported`）。
 - **不开实时回复。** 原设计是先发一条"正在思考"再 PATCH 编辑。GitHub 的邮件和推送通知在评论创建时发出、带的是当时的正文，之后的编辑不会再通知，所以订阅者收到的会是"正在思考…"而不是答案，编辑记录里还会留下一串进度。改为只用 👀 表示处理中，答案作为一条新评论发出。
@@ -710,7 +728,7 @@ flowchart TD
 | `agents` | 名字、slug、头像、harness、模型、权限模式、当前会话 ID、冷启动替换掉的上一个会话 ID（4.1）、状态 |
 | `connections` | 所属 Agent、平台、机器人身份、连接状态、凭据引用 |
 | `chats` | 所属连接、平台侧 ID、类型（群 / 私聊 / 话题）、名称、线程所属的群（4.2） |
-| `contacts` | 所属连接、平台侧用户 ID、平台给的名字、owner 或 Agent 起的名字。升级时从已有消息的发送者和 owner 补建 |
+| `contacts` | 所属连接、平台侧用户 ID、平台给的名字、owner 或 Agent 起的名字、是否机器人（4.2）。升级时从已有消息的发送者和 owner 补建 |
 | `messages` | 所属聊天、方向、发送者、内容、附件引用、平台消息 ID、时间、处理状态 |
 | `tasks` | 所属 Agent、标题、状态、来源聊天 |
 | `reminders` | 所属 Agent、内容、触发规则、下次触发时间 |
@@ -1023,10 +1041,10 @@ docs/             文档
 | Windows、Linux 实机 | 安装、托盘（左键开窗、右键菜单、首次关窗提示）、开机自启、保持唤醒、自动更新；凭据走 DPAPI、Secret Service；Codex 在 PowerShell 里按指南调用 `mingle` | 一台 Windows 和一台 Linux 桌面机 |
 | 自动更新未覆盖路径 | 更早正式版（含 0.1.0）的升级、原生更新器实际选择增量包、界面“重启以更新”按钮；0.1.6 → 0.1.7 的 macOS 下载、验签、退出替换和数据保留已通过；0.1.7 → 0.1.8、0.1.8 → 0.1.9、0.1.9 → 0.1.10、0.1.10 → 0.1.11 的签名增量包重建与旧数据启动已通过，这四次原生自动更新流程未测（12.1） | 保留旧版的隔离安装和可操作原生窗口的测试环境 |
 | GitHub 机器账号端到端 | 用独立的机器账号：别人 `@` 它后通知到达和标记已读、非协作者 `@` 不触发；组织成员关系不公开时 `author_association` 是否仍为 `MEMBER` | 一个独立机器账号及另一个有仓库权限的发言账号（Device Flow 已用维护者账号完成真实授权，见 12.1） |
+| 其他机器人的消息 | 飞书、钉钉、企业微信、QQ 会不会把群里其他机器人的消息推给机器人；会的话在适配器里报告正确的 `isBot`（目前写死 `false`，依赖本机身份和 owner 标记）。Telegram 据官方文档机器人收不到其他机器人的消息，Slack 其他应用的消息是否都带 `bot_id`，也待真机确认（4.2） | 各平台的群里放两个机器人 |
 | 离线补推 | Telegram、Discord、个人微信、QQ、企业微信、钉钉断开期间是否补推；飞书和 Slack 的更多断连条件 | 各平台已接入的机器人；飞书一次约 5 分钟恢复补推、Slack 一次约 2 分钟断连未补推但恢复后新消息可回复，均见 12.1，不外推为平台保证 |
 | 冷启动重建上下文（MING-64） | 一个真实 Agent 连续数日的冷轮 cache-write 与回答质量对照，以及实际触发的频率；截断提示改动后，Agent 是否会自己去读原文 | 用 `MINGLE_COLD_START=<agent>` 在日常使用的 Agent 上跑几天，按 `cold turn` 日志对比。一次短时对照见 12.1：缓存写入少 88%，但长文档里的细节会丢，所以保持默认关闭 |
 
 ## 13. 未决问题
 
-- **多个 Agent 同在一个群**：互相 @ 时的防循环规则。
 - **长任务末尾的插话**：消息恰好在一轮结束的瞬间插入时，harness 可能接受了却不处理。聊天消息由"未回复提醒"兜底；提醒和系统通知改为等到下一轮再投递。真实 harness 上是否会出现，待长期使用观察。

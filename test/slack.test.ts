@@ -96,6 +96,24 @@ describe("slack messages", () => {
     expect(
       await toInbound({ ...chatter, bot_id: "B1", user: "UBOT", text: "<@UBOT>" }, "UBOT", names, threads),
     ).toBeUndefined();
+    // Other bots are kept and marked; whether they wake the agent is the core's call.
+    expect(
+      await toInbound(
+        { ...chatter, ts: "4.0", bot_id: "B2", user: "UB2", bot_profile: { name: "CI" }, text: "build red" },
+        "UBOT",
+        names,
+        threads,
+      ),
+    ).toMatchObject({ sender: { id: "UB2", name: "CI", isBot: true }, addressedToBot: false, mentioned: false });
+    const { user: _user, ...anonymous } = chatter;
+    expect(
+      await toInbound(
+        { ...anonymous, ts: "5.0", subtype: "bot_message", bot_id: "B3", username: "deploy", text: "<@UBOT> shipped" },
+        "UBOT",
+        names,
+        threads,
+      ),
+    ).toMatchObject({ sender: { id: "B3", name: "deploy", isBot: true }, mentioned: true });
     expect(
       await toInbound({ ...chatter, subtype: "message_changed", text: "<@UBOT>" }, "UBOT", names, threads),
     ).toBeUndefined();

@@ -9,6 +9,8 @@ export interface SendRequest {
   /** Mingle message ID to quote. */
   readonly replyTo?: string | undefined;
   readonly files?: readonly string[] | undefined;
+  /** Mingle's own word in the chat, not the agent's answer: it settles none of the chat's messages. */
+  readonly notice?: boolean;
 }
 
 export interface SendReport {
@@ -103,14 +105,14 @@ export class Outbox {
       if (result.kind === "uncertain") {
         store.setOutboundResult(record.id, "uncertain", null);
         sent.push(store.message(record.id) as Message);
-        this.markAnswered(chat.id, quoted);
+        if (!request.notice) this.markAnswered(chat.id, quoted);
         return { messages: sent, state: "uncertain", degraded: [...degraded] };
       }
       const why = result.detail ? ` (${connection.platform}: ${result.detail})` : "";
       if (result.textSent) {
         // The person has the text; only the files are missing. Say so, so nobody sends it twice.
         store.setOutboundResult(record.id, "sent", result.textSent.platformId);
-        this.markAnswered(chat.id, quoted);
+        if (!request.notice) this.markAnswered(chat.id, quoted);
         throw new MingleError(
           `send_${result.code}`,
           `the text was delivered but the file was not${why}: ${failureNext(result.code, "file")}. ` +
@@ -121,7 +123,7 @@ export class Outbox {
       store.setOutboundResult(record.id, "failed", null);
       throw new MingleError(`send_${result.code}`, `${failureNext(result.code, "message")}${why}`, 502);
     }
-    this.markAnswered(chat.id, quoted);
+    if (!request.notice) this.markAnswered(chat.id, quoted);
     return { messages: sent, state: "sent", degraded: [...degraded] };
   }
 

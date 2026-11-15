@@ -91,6 +91,7 @@ describe("discord messages", () => {
       text: "ask @Li Si about it",
       sender: { id: "U1", name: "San" },
       addressedToBot: true,
+      mentioned: true,
       sentAt: Date.parse("2026-11-12T10:00:00.000Z"),
     });
     expect(
@@ -106,6 +107,22 @@ describe("discord messages", () => {
         group,
       ),
     ).toMatchObject({ replyTo: "M0", addressedToBot: true });
+    // A reply pings its author, which lists them in `mentions`: a bot's reply is not a typed mention.
+    expect(
+      toInbound(
+        {
+          ...base,
+          type: 19,
+          author: { id: "U9", username: "bob", bot: true },
+          content: "done",
+          mentions: [{ id: "B1", username: "alex" }],
+          message_reference: { message_id: "M0" },
+          referenced_message: { author: { id: "B1", username: "alex" } },
+        },
+        "B1",
+        group,
+      ),
+    ).toMatchObject({ sender: { isBot: true }, addressedToBot: true, mentioned: false });
     expect(toInbound({ ...base, type: 7 }, "B1", group)).toBeUndefined();
     expect(toInbound({ ...base, author: { id: "B1", username: "alex" } }, "B1", group)).toBeUndefined();
     expect(toInbound({ ...dmBase, content: "hi" }, "B1", { platformId: "D1", kind: "dm" })).toMatchObject({

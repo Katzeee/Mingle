@@ -257,7 +257,14 @@ async function agentCommand(group: string, action: string | undefined, args: str
     }
     case "contact list": {
       const contacts = await call()<
-        { id: string; platform: string; name: string | null; platformName: string | null; owner: boolean }[]
+        {
+          id: string;
+          platform: string;
+          name: string | null;
+          platformName: string | null;
+          owner: boolean;
+          bot: boolean;
+        }[]
       >("GET", "/v1/agent/contacts");
       print(contacts, () =>
         contacts.length
@@ -265,7 +272,7 @@ async function agentCommand(group: string, action: string | undefined, args: str
               .map((k) => {
                 const given =
                   k.name && k.name !== k.platformName && k.platformName ? `  (${k.platformName} on ${k.platform})` : "";
-                return `${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${k.owner ? "  owner" : ""}`;
+                return `${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${k.owner ? "  owner" : ""}${k.bot ? "  bot" : ""}`;
               })
               .join("\n")
           : "no contacts yet: nobody has messaged you",

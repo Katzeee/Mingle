@@ -139,6 +139,11 @@ export type Credentials = Readonly<Record<string, string>>;
 export interface BotIdentity {
   readonly id: string;
   readonly name: string;
+  /**
+   * The `Sender.id` this bot has in other bots' messages, where that is not `id` (GitHub: the login,
+   * while `id` is the numeric user id). Lets the core recognize this computer's other agents.
+   */
+  readonly senderId?: string;
 }
 
 // ----------------------------------------------------------------- lifecycle
@@ -189,6 +194,13 @@ export interface InboundMessage {
   readonly replyTo?: string;
   /** True when the bot was @-mentioned, or the message replies to one the bot sent. */
   readonly addressedToBot: boolean;
+  /**
+   * The text itself @-mentions the bot by name. A reply to the bot, a direct message, or a mention
+   * the platform adds on its own (a reply ping) does not count. Other bots wake the agent only this
+   * way (docs/spec.md 4.2). Leave it out where the platform cannot tell; the core then counts a group
+   * message addressed to the bot as a mention.
+   */
+  readonly mentioned?: boolean;
   readonly sentAt: number;
 }
 
