@@ -13,6 +13,7 @@ type texts struct {
 	zh bool
 
 	starting, restarting, running, stopped   string
+	restartHint                              string
 	open, logs, openAtLogin, keepAwake, quit string
 	noChatApps                               string
 	quitTitle, quitButton, cancel            string
@@ -36,7 +37,8 @@ func zhTexts() texts {
 	return texts{
 		zh:             true,
 		starting:       "Mingle 正在启动…",
-		restarting:     "Mingle 已停止，正在重新启动。",
+		restarting:     "Mingle 已停止，正在重新启动…",
+		restartHint:    pick(isMac, "一直停在这里时，从菜单栏的 Mingle 图标打开“查看日志”。", "一直停在这里时，在托盘图标上点右键，打开“查看日志”。"),
 		running:        "Mingle 正在运行",
 		stopped:        "Mingle 已停止",
 		open:           "打开 Mingle",
@@ -59,7 +61,8 @@ func zhTexts() texts {
 func enTexts() texts {
 	return texts{
 		starting:       "Mingle is starting…",
-		restarting:     "Mingle stopped and is restarting.",
+		restarting:     "Mingle stopped and is restarting…",
+		restartHint:    pick(isMac, "If it stays here, choose Show Logs from the Mingle icon in the menu bar.", "If it stays here, right-click the icon in the notification area and choose Show Logs."),
 		running:        "Mingle is running",
 		stopped:        "Mingle has stopped",
 		open:           "Open Mingle",
@@ -274,4 +277,11 @@ func (t texts) failedTitle(agent string) string {
 		return agent + " 有消息没能回复"
 	}
 	return agent + " could not answer a message"
+}
+
+func pick(cond bool, yes, no string) string {
+	if cond {
+		return yes
+	}
+	return no
 }
