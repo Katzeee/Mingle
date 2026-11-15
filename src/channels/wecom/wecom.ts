@@ -121,6 +121,8 @@ export function wecomChannel(options: WecomOptions = {}): Channel {
 
   return {
     platform: "wecom",
+    // Only people in the organization can message the bot or add it to a group.
+    trust: "org",
     onboarding: { kind: "qr" },
     manualFields: [
       { key: "botId", labelKey: "wecom.botId", secret: false },

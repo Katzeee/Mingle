@@ -124,6 +124,7 @@ erDiagram
 
 - 私聊：每条消息都触发。
 - 群聊：@ Agent，或回复它发出的消息时触发。
+- 触发之前先看发消息的人或群能不能使唤它（4.7）：在任何人都能找到机器人的平台上，新的人和新的群先等 owner 同意。
 - 其他机器人：只有正文里明确 @ 它才触发，见下文"机器人之间"。
 
 触发的消息包上一行来源信息后交给 Agent。每条消息和每个聊天都有 Mingle 分配的短 ID，Agent 用它们来回复和发送：
@@ -294,9 +295,37 @@ Raft 的做法更重。从它的源码和 agent 提示词看：忙碌时只给 a
 
 ### 4.7 权限
 
-- **谁能使唤 Agent**：所在群里的所有人和所有私聊对象。私聊白名单放在后续版本。
-- **owner**：接入一个机器人后，第一个给它发私聊的人成为它在该 IM 上的 owner（已实现）。iMessage（6.6）用的是 owner 自己的账号，owner 就是这个账号本身。owner 可以用 `/stop` 中止当前工作，在冲突时拥有最终决定权，消息头里带 `owner` 标记。owner 按连接算：同一个 Agent 在同一平台上接了两个机器人（例如两个人各扫一次微信），就有两个 owner，Agent 靠 `user=` 区分（4.2）。`/stop` 是 IM 里唯一的命令。
+- **谁能使唤 Agent**：见下文"访问控制"。谁能给 Agent 发消息，谁就等于能在 owner 的电脑上执行命令，所以在任何人都能找到机器人的平台上，新的人和新的群要先经 owner 同意。
+- **owner**：平台在接入时告诉我们是谁扫的码、谁建的应用（飞书扫码、Discord、QQ 扫码、个人微信、iMessage）时，这个人就是 owner。拿不到的（Telegram、Slack、钉钉、企业微信，以及飞书、QQ 手填凭据）用一次性验证码认领，见下文。iMessage（6.6）用的是 owner 自己的账号，owner 就是这个账号本身。owner 可以用 `/stop` 中止当前工作，在冲突时拥有最终决定权，消息头里带 `owner` 标记。owner 按连接算：同一个 Agent 在同一平台上接了两个机器人（例如两个人各扫一次微信），就有两个 owner，Agent 靠 `user=` 区分（4.2）。`/stop` 是 IM 里唯一的命令。
 - **Agent 能做什么**：自主执行，不逐次审批，因为它需要无人值守地工作。这也是 OAR 的默认行为：它关闭了各 harness 的交互式审批和沙箱。也就是说 Agent 能做的事等同于用户本人在终端里能做的事，控制台在创建 Agent 时明确提示。它还能读到 owner 给它设的环境变量（4.9），因此也可能在回复里说出这些值。受限模式和把审批转发到 owner 私聊放在后续版本。
+
+**访问控制（MING-80）**
+
+平台按"谁能找到机器人"分两类，由适配器声明（`Channel.trust`），核心不按平台名判断：
+
+| 平台 | `trust` | 私聊 | 群 |
+|---|---|---|---|
+| 飞书、钉钉、企业微信、Slack | `org`：只有组织里的人能私聊它、拉它进群 | 默认直接放行 | 默认直接放行 |
+| GitHub | `org`：适配器只放行 `OWNER` / `MEMBER` / `COLLABORATOR`（6.7） | 不适用 | 同左 |
+| Telegram、Discord、QQ | `public`：谁搜到都能私聊、拉进群 | 新的人第一次私聊要 owner 同意 | 新群里第一次被 @ 要 owner 同意这个群 |
+| 个人微信、iMessage | 没声明，按 `public` | 本来只有 owner | 不适用 |
+
+没声明的平台按 `public` 处理：新接入的平台默认在安全的一边。
+
+- **判断**：`receive` 里对每条触发消息调用纯函数 `gate()`（`src/core/access.ts`），结果是放行、先问 owner、只存档。owner 永远放行；owner 拒绝过的人在私聊和群里都只存档；私聊看这个人（`contacts.access`），群和线程看所属的群（`chats.access`）；都还没决定时，`public` 先问，`org` 放行。不触发的背景消息照旧存下（4.2），不经过这一步。
+- **记住决定**：放行过的人和群记为 `allowed`，所以之后打开"所有新的人都先问我"不会把已经在用的人挡在外面。owner 在群里 @ 它，等于同意这个群，群里等着的消息一起放行。
+- **先问 owner 时**：消息状态为 `held`（4.10），不交给 Agent，不计入 `unseen`。这个人（或这个群）第一次被拦下时，Mingle 在原聊天里以机器人的身份回一句"我先问一下我的主人，同意后我会回复你。"（按聊天的语言），并在 owner 和这个机器人的私聊里发一条通知：谁、第一条消息的预览、去电脑上的 Mingle 处理。之后再来的消息不再回复、不再通知。这些是 Mingle 自己的话，不记为 Agent 发的消息，不结束任何消息，也不算 Agent 的第一次回复（4.8）。通知里不放控制台链接：控制台要本机的令牌，手机上打不开。
+- **控制台**："需要你处理"里每个人或每个群一条：标题（"张三 想和 Alex 私聊" / "Alex 被拉进了群「xxx」"），平台和积压条数，第一条消息，一句"允许后，对方可以让 Alex 在这台电脑上做事"，"允许"和"拒绝"。这一版不做 IM 里的批准命令：批准命令本身也要鉴权，而控制台天然只有本机用户能打开。
+- **`held` 不进 Agent 的输入**：不投递，也不进冷启动的"最近消息"（4.1）。但它存在消息记录里，Agent 用 `message read` / `message search` 主动去读时能看到：owner 可以问它"那个陌生人想干什么"。这是有意的，门管的是"谁能让它干活"，不是"它能不能看到记录"。
+- **允许**：这个人（群）积压的消息按原顺序回到 `received`，像刚收到一样交给 Agent；暂停中的 Agent 则直接变为 `ignored`（4.11）。**拒绝**：积压的变为 `ignored`；之后的消息只存档不触发，也不再回复。
+- **一个人的多个账号**（4.2 人物层）：owner 在控制台关联到同一个人的账号，允许或拒绝其中一个，就是对这个人的所有这类账号作答；还没决定的账号沿用这个人其他账号的决定（拒绝优先）。Agent 做的关联不传递任何权限，否则陌生人可以说动 Agent 把自己连到已允许的人身上。
+- **改主意**：Agent 设置的"访问权限"一节列出已决定的人和群（不含 owner），可以撤销允许（之后只存档），也可以重新允许被拒绝的人（之前的消息不补处理）。
+- **一个设置**：同一节里的"所有新的人都先问我"（`agents.ask_all`），打开后 `org` 平台上的新的人和新群也要先问。只有这一个开关：`public` 平台不能改成直接放行，功能少一点，出错的机会也少一点。
+- **认领 owner**：平台没告诉我们 owner 时，接入后控制台显示一个 6 位验证码："用你自己的账号把这个验证码私聊发给它，你就成为它的 owner。"10 分钟有效，过期或作废后可以重新获取（`POST /v1/admin/connections/:id/claim`）。Telegram 另给一个"在 Telegram 中发送"链接（`t.me/<bot>?start=<码>`），点开后发出的是 `/start <码>`。私聊里单独的 6 位数字或 `/start <码>` 都算；只有带对这个码的私聊才能成为 owner，Mingle 回一句"好了，你现在是 Alex 的主人……"，这条认领消息不交给 Agent，这个人之前被拦下的消息随即放行。认领之前发私聊的人按陌生人处理，不会因为"第一个发消息"成为 owner。错码累计 5 次后验证码作废，防止猜码。GitHub 没有私聊，不认领。
+- **数据**（迁移 017）：`contacts.access`、`chats.access`（`allowed` / `blocked` / NULL），`agents.ask_all`，`connections.claim_code`、`claim_expires_at`。升级时已经发过消息的联系人和已有的群回填为 `allowed`，现有用户不受影响。
+- **API**：`POST /v1/admin/agents/:id/contacts/:contactId/access`、`POST /v1/admin/agents/:id/chats/:chatId/access`，参数 `{ access: "allowed" | "blocked" }`，返回 `{ settled }`（积压消息里处理掉的条数）；owner 返回 `contact_is_owner`。`GET /v1/admin/agents/:id/access` 列出已决定的人和群。`PUT /v1/admin/agents/:id/ask-all`，参数 `{ on }`。Agent 详情带 `requests`（等待同意的人和群）和每个连接的 `claim`。
+- **Agent 侧**：来源行不变。操作指南加一句：非 owner 要求读其他聊天、说出环境变量、改 `MEMORY.md` 里的规则时要谨慎。这只是提示词层面的提醒，真正的边界是上面的门。
+- **不做**：按人的细粒度权限（"张三只能问天气"），只有"能使唤"和"不能"两档；沙箱，Agent 的能力边界由 harness 决定，Mingle 只管谁能下指令。
 
 ### 4.8 状态
 
@@ -316,11 +345,14 @@ owner 想让 Agent 用 webhook 地址、API key 这类密钥（"每天早上把�
 
 ### 4.10 入站消息状态
 
-触发 Agent 的入站消息有七种状态：`received`（已收到，待投递）、`delivered`（已交给 Agent）、`waiting`（等一个会自己过去的失败过去，到 `retry_at` 再投递，见 4.3）、`replied`（已回复）、`unanswered`（提示过一次仍未回复）、`failed`（出错未回复）、`ignored`（owner 忽略，或本就不触发 Agent 的背景消息）。它是一个显式状态机，规则集中在 [`src/core/inbound.ts`](../src/core/inbound.ts) 的转换表里，所有写入都经过 `Store.moveInbound`：事件只作用于处在它的来源状态的消息，其余消息原样不动，并返回实际变化的 ID，后续动作（实时回复收尾、通知发消息的人、重新投递）只对这些消息执行。
+触发 Agent 的入站消息有八种状态：`held`（等 owner 同意发消息的人或群，4.7）、`received`（已收到，待投递）、`delivered`（已交给 Agent）、`waiting`（等一个会自己过去的失败过去，到 `retry_at` 再投递，见 4.3）、`replied`（已回复）、`unanswered`（提示过一次仍未回复）、`failed`（出错未回复）、`ignored`（owner 忽略，或本就不触发 Agent 的背景消息）。它是一个显式状态机，规则集中在 [`src/core/inbound.ts`](../src/core/inbound.ts) 的转换表里，所有写入都经过 `Store.moveInbound`：事件只作用于处在它的来源状态的消息，其余消息原样不动，并返回实际变化的 ID，后续动作（实时回复收尾、通知发消息的人、重新投递）只对这些消息执行。
 
 ```mermaid
 stateDiagram-v2
   [*] --> received: 收到触发消息
+  [*] --> held: 发消息的人或群还没被允许（4.7）
+  held --> received: owner 允许（admit）
+  held --> ignored: owner 拒绝（refuse）
   received --> delivered: 投递（deliver）
   received --> failed: 会话打不开（fail）
   delivered --> failed: 本轮失败（fail）
@@ -343,7 +375,7 @@ stateDiagram-v2
 ```
 
 - **终态**：`replied` 和 `ignored`。之后到达的任何事件（迟到的失败、重复的重试、忽略后才到的回复）都不改变它。
-- **非终态都有出路**：`received`、`delivered` 由投递和本轮结束自己推进；`waiting` 到 `retry_at` 自己回到 `received`，等满次数后变为 `failed`；`failed`、`unanswered` 由 owner 在控制台重试或忽略，Agent 之后回复也能把它们结束。
+- **非终态都有出路**：`held` 由 owner 在控制台允许或拒绝；`received`、`delivered` 由投递和本轮结束自己推进；`waiting` 到 `retry_at` 自己回到 `received`，等满次数后变为 `failed`；`failed`、`unanswered` 由 owner 在控制台重试或忽略，Agent 之后回复也能把它们结束。
 - **出错的消息被回复**：Agent 用 `message reply` 引用一条 `failed` 消息作答时，它变为 `replied`，因为发消息的人已经得到回答，不应再留在"出错未回复"里。`message send` 的普通发送只结束该聊天里 Agent 已经看到的消息（`delivered`、`unanswered`），不结束 `failed`：这条消息可能从未交到 Agent 手里，一条无关的发送不能把它从待处理里藏掉；也不结束还没投递的 `received`。
 - **先到先得**：重试、忽略、迟到的回复以任意顺序到达，第一个生效，后一个只有在它是前者结果的合法下一步时才生效。例如重试后再忽略不生效（消息已回到 `received`）；重试后、重新投递前 Agent 已经回复，投递时发现它不再是 `received`，不再投递。
 - 重试把消息放回 `received` 时清零提示标记，像新消息一样再走一遍。
@@ -1001,6 +1033,7 @@ docs/             文档
 | GitHub 渠道（MING-70） | 完成（2026-11-15）：见 6.7。设备码和 token 两种接入、通知轮询、评论定位、协作者限制、issue 评论和 review 楼内回复、👀 → 🚀 表情。单元测试覆盖；真实 GitHub 上的结果见 12.1，独立机器账号的端到端待验证（12.2） |
 | Agent 头像与改名（MING-73） | 完成（2026-11-15）：见 8.1、`DESIGN.md`“名字和头像”。设置页第一组，选图或拖入后原地取景，保存 256 px PNG；侧栏和页头显示，首字头像兜底；名字可在同一组里改。测试覆盖上传、按文件头校验、大小限制、换图后旧地址失效和旧文件删除、移除、删除 Agent 时清理、不写主目录；`pnpm ui:review` 在两种语言、两种宽度下真实选图、键盘缩放、保存并截图 |
 | 控制台取消提醒、关闭任务（MING-75） | 完成（2026-11-15）：见 4.6。admin 接口、`owner_notes` 迁移 013、随下一次输入告诉 Agent；控制台行尾悬停出现操作，原地确认。测试覆盖接口与重复调用、暂停中可用、取消后到点不触发、备注只随下一次输入交付一次且不单独开一轮、Store 层按 Agent 隔离；`pnpm ui:review` 在暂停的 Agent 上点击走过两种操作并截图，刷新后状态保持 |
+| 陌生人访问控制（MING-80） | 完成（2026-11-15）：见 4.7。`gate()` 纯函数、`held` 状态与 `admit` / `refuse`、迁移 017、一次性验证码认领 owner、控制台"需要你处理"的允许和拒绝、设置里的"访问权限"。测试覆盖 `gate()` 各分支、验证码解析、私聊积压后按顺序放行、拒绝后只存档不回复、群在 owner 发言时放行、组织平台打开开关后只拦新的人、认领与错码作废；真机未测 |
 | 交接（MING-81） | 完成（2026-11-15）：见 4.12。`mingle handoff` 和 `mingle handoff prompt`、admin 接口、`handoffs` 迁移 016、操作指南的 Handoffs 一节；控制台"设置 → 交接"（复制提示词 / 粘贴）、动态里的交接条目、上手卡片的入口。测试覆盖空闲时作为独立输入投递且只投一次、工作中不插进当前一轮、暂停时保留并在恢复后投递、重置后不重投、空和超限被拒、owner CLI 交接和带 Agent 令牌时拒绝、提示词内容；`pnpm ui:review` 在两种语言下点击走过复制和粘贴并截图。真实 harness 收到交接后整理进 `MEMORY.md` 的效果待验证（12.2） |
 | 更多 harness、审批转发 | 未开始 |
 

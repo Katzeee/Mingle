@@ -414,8 +414,75 @@ export function createApi(mingle: Mingle): Hono<Env> {
         ownerContact: ownerContact(n.id, n.ownerId),
         ownerShared: shared.has(n.id),
         invite: inviteUrl(n.platform, n.botId, n.botName),
+        claim: claimView(n),
       })),
+      requests: accessRequests(agent.id),
     };
+  };
+
+  /**
+   * How the owner claims a bot the platform named no owner for (docs/spec.md 4.7): the code to send
+   * it, while one is valid, and where the platform has one, a link that sends it in one tap. Null
+   * when the bot has its owner, or nobody can message it directly.
+   */
+  const claimView = (n: Connection) => {
+    if (n.ownerId) return null;
+    let channel: ReturnType<typeof mingle.channel> | undefined;
+    try {
+      channel = mingle.channel(n.platform);
+    } catch {
+      return null;
+    }
+    if (channel.directMessages === false) return null;
+    const code = n.claimCode && (n.claimExpiresAt ?? 0) > Date.now() ? n.claimCode : null;
+    return {
+      code,
+      expiresAt: code ? n.claimExpiresAt : null,
+      url: code && n.botId ? (channel.claimUrl?.({ id: n.botId, name: n.botName ?? "" }, code) ?? null) : null,
+    };
+  };
+
+  /**
+   * People and groups waiting for the owner to let them in, one entry each, oldest first: who, on
+   * which chat app, and the first thing they sent, so the owner can tell who it is.
+   */
+  const accessRequests = (agentId: string) => {
+    const requests = new Map<
+      string,
+      {
+        kind: "contact" | "group";
+        id: string;
+        platform: Platform;
+        name: string | null;
+        sender: string | null;
+        preview: string;
+        count: number;
+        at: number;
+      }
+    >();
+    for (const m of store.heldMessages(agentId)) {
+      const contact = m.senderId ? store.contactByPlatformId(m.connectionId, m.senderId) : undefined;
+      const sender = contactName(contact) ?? (m.senderName && m.senderName !== m.senderId ? m.senderName : null);
+      const group = m.chat.kind === "dm" ? undefined : m.chat.parentId ? store.chat(m.chat.parentId) : m.chat;
+      const key = group ? `g:${group.id}` : `c:${contact?.id ?? m.senderId}`;
+      const known = requests.get(key);
+      if (known) {
+        known.count++;
+        continue;
+      }
+      if (!group && !contact) continue;
+      requests.set(key, {
+        kind: group ? "group" : "contact",
+        id: group ? group.id : (contact as { id: string }).id,
+        platform: m.platform,
+        name: group ? group.name : sender,
+        sender,
+        preview: [...m.body.replace(/\s+/g, " ").trim()].slice(0, 160).join(""),
+        count: 1,
+        at: m.createdAt,
+      });
+    }
+    return [...requests.values()];
   };
 
   /**
@@ -715,6 +782,49 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ person: id, name: person?.name ?? null, note: person?.note ?? null });
   });
 
+  /** Let a person in, or turn them away (docs/spec.md 4.7). What they sent meanwhile follows. */
+  app.post("/v1/admin/agents/:id/contacts/:contactId/access", async (c) => {
+    const settled = mingle.setAccess(c.req.param("id"), { contact: c.req.param("contactId") }, await accessBody(c));
+    return c.json({ settled });
+  });
+
+  /** The same for a group. */
+  app.post("/v1/admin/agents/:id/chats/:chatId/access", async (c) => {
+    const settled = mingle.setAccess(c.req.param("id"), { chat: c.req.param("chatId") }, await accessBody(c));
+    return c.json({ settled });
+  });
+
+  /** The people and groups the owner (or the default) let in or turned away, to change their mind. */
+  app.get("/v1/admin/agents/:id/access", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const decided = store.decidedAccess(agent.id);
+    return c.json([
+      ...decided.contacts.map((k) => ({
+        kind: "contact" as const,
+        id: k.id,
+        platform: k.platform,
+        name: contactName(k),
+        access: k.access,
+        updatedAt: k.updatedAt,
+      })),
+      ...decided.groups.map((g) => ({
+        kind: "group" as const,
+        id: g.id,
+        platform: g.platform,
+        name: g.name,
+        access: g.access,
+        updatedAt: 0,
+      })),
+    ]);
+  });
+
+  /** Ask about new people and groups on every chat app, not only the public ones. */
+  app.put("/v1/admin/agents/:id/ask-all", async (c) => {
+    const { on } = await c.req.json<{ on?: unknown }>();
+    mingle.setAskAll(c.req.param("id"), on === true);
+    return c.json(agentView(mingle.agent(c.req.param("id"))));
+  });
+
   app.get("/v1/admin/agents/:id/work", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     return c.json({ tasks: store.tasks(agent.id, false), reminders: store.reminders(agent.id) });
@@ -917,6 +1027,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ state: connection?.state ?? null, detail: connection?.stateDetail ?? null });
   });
 
+  /** A fresh claim code for a bot that has no owner yet; the old one stops working. */
+  app.post("/v1/admin/connections/:id/claim", (c) => {
+    if (!store.connection(c.req.param("id"))) throw notFound("connection", c.req.param("id"));
+    return c.json(mingle.issueClaim(c.req.param("id")));
+  });
+
   app.delete("/v1/admin/connections/:id", async (c) => {
     if (!store.connection(c.req.param("id"))) throw notFound("connection", c.req.param("id"));
     await mingle.removeConnection(c.req.param("id"));
@@ -924,6 +1040,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
   });
 
   return app;
+}
+
+async function accessBody(c: { req: { json<T>(): Promise<T> } }): Promise<"allowed" | "blocked"> {
+  const { access } = await c.req.json<{ access?: unknown }>();
+  if (access !== "allowed" && access !== "blocked") {
+    throw new MingleError("access_invalid", 'send { "access": "allowed" } or { "access": "blocked" }');
+  }
+  return access;
 }
 
 /** Relative file paths are relative to the agent's home, which is the harness's working directory. */

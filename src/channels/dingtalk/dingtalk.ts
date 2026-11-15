@@ -221,6 +221,8 @@ export function dingtalkChannel(options: DingtalkOptions = {}): Channel {
 
   return {
     platform: "dingtalk",
+    // Only people in the organization can message the bot or add it to a group.
+    trust: "org",
     onboarding: { kind: "qr", desktopLink: true },
     manualSetupUrl: "https://open-dev.dingtalk.com/",
     manualFields: [

@@ -75,6 +75,34 @@ export interface ConnectionView {
   ownerShared: boolean;
   /** Where to add the bot to a server, for platforms where that is a separate step. */
   invite: string | null;
+  /**
+   * How to become the owner of a bot the platform named none for: the code to send it (null once
+   * it expired or was guessed at), and a link that sends it in one tap. Null when it has its owner.
+   */
+  claim: { code: string | null; expiresAt: number | null; url: string | null } | null;
+}
+
+/** A person or group waiting for the owner to let them talk to the agent (docs/spec.md 4.7). */
+export interface AccessRequest {
+  kind: "contact" | "group";
+  id: string;
+  platform: Platform;
+  /** The person's or the group's name. */
+  name: string | null;
+  /** Who wrote; for a group, the person who @-mentioned the agent there. */
+  sender: string | null;
+  preview: string;
+  count: number;
+  at: number;
+}
+
+/** A person or group whose access is decided, to change it. */
+export interface AccessEntry {
+  kind: "contact" | "group";
+  id: string;
+  platform: Platform;
+  name: string | null;
+  access: "allowed" | "blocked";
 }
 
 export interface AgentView {
@@ -96,6 +124,9 @@ export interface AgentView {
   home: string;
   role: string;
   connections: ConnectionView[];
+  /** Ask about new people and groups on every chat app, not only the public ones. */
+  askAll: boolean;
+  requests: AccessRequest[];
 }
 
 /** One chat app account in the agent's address book. */
@@ -319,6 +350,15 @@ export const api = {
     call<{ ignored: string[] }>("POST", `/v1/admin/agents/${id}/messages/ignore`, { ids }),
   remove: (id: string) => call("DELETE", `/v1/admin/agents/${id}`),
   openHome: (id: string) => call("POST", `/v1/admin/agents/${id}/open-home`),
+  /** Let a person or group talk to the agent, or turn them away; what they sent meanwhile follows. */
+  setAccess: (id: string, kind: "contact" | "group", targetId: string, access: "allowed" | "blocked") =>
+    call<{ settled: number }>(
+      "POST",
+      `/v1/admin/agents/${id}/${kind === "contact" ? "contacts" : "chats"}/${targetId}/access`,
+      { access },
+    ),
+  access: (id: string) => call<AccessEntry[]>("GET", `/v1/admin/agents/${id}/access`),
+  setAskAll: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/ask-all`, { on }),
   contacts: (id: string) => call<ContactEntry[]>("GET", `/v1/admin/agents/${id}/contacts`),
   /** Name, note (on the person) or bot mark; fields left out stay. */
   editContact: (id: string, contactId: string, patch: { name?: string; note?: string; bot?: boolean }) =>
@@ -352,6 +392,9 @@ export const api = {
   disconnect: (connectionId: string) => call("DELETE", `/v1/admin/connections/${connectionId}`),
   /** Try an offline bot again now. */
   reconnect: (connectionId: string) => call("POST", `/v1/admin/connections/${connectionId}/reconnect`),
+  /** A fresh code for claiming a bot that has no owner yet. */
+  claim: (connectionId: string) =>
+    call<{ code: string; expiresAt: number }>("POST", `/v1/admin/connections/${connectionId}/claim`),
   startOnboarding: (id: string, platform: Platform) =>
     call<{ id: string }>("POST", `/v1/admin/agents/${id}/onboarding`, { platform }),
   onboarding: (id: string) => call<OnboardingState>("GET", `/v1/admin/onboarding/${id}`),

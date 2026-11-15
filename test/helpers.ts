@@ -14,6 +14,7 @@ import type {
   OutboundMessage,
   Platform,
   ReactionState,
+  Trust,
 } from "../src/channels/channel.ts";
 import type { InboundEvent } from "../src/core/inbound.ts";
 import { Mingle } from "../src/core/mingle.ts";
@@ -28,6 +29,10 @@ export const CLI_ENTRY = fileURLToPath(new URL("../src/cli/main.ts", import.meta
 export class FakeChannel implements Channel {
   readonly platform = "telegram" as const;
   readonly onboarding = { kind: "credentials" as const, fields: [] };
+  /** Most tests are about anything but access: everyone gets through unless a test asks otherwise. */
+  trust: Trust = "org";
+  /** The owner the platform reports on onboarding, if any (feishu and QQ do; Telegram does not). */
+  onboardOwner: string | undefined;
   readonly sent: (OutboundMessage & { platformId: string })[] = [];
   readonly acks: string[] = [];
   readonly reactions: string[] = [];
@@ -61,6 +66,7 @@ export class FakeChannel implements Channel {
       kind: "succeeded" as const,
       credentials: this.onboardCredentials,
       bot: { id: "bot1", name: "@alex_bot" },
+      ...(this.onboardOwner ? { ownerId: this.onboardOwner } : {}),
     };
   }
 
@@ -209,11 +215,17 @@ export async function rig(
     log?: (line: string) => void;
     /** `MINGLE_COLD_START`: which agents open a fresh session on a cold start. */
     coldStart?: string;
+    /** The bot's owner as the platform reports it on connecting; without it, the bot waits to be claimed. */
+    owner?: string;
+    /** Who the fake chat app says can reach its bots; "org" unless a test is about access. */
+    trust?: Trust;
   } = {},
 ): Promise<Rig> {
   const home = mkdtempSync(join(tmpdir(), "mingle-test-"));
   const channel = new FakeChannel();
   channel.liveEnabled = Boolean(options.live);
+  channel.onboardOwner = options.owner;
+  channel.trust = options.trust ?? "org";
   const turns: Rig["turns"] = [];
   const runtime = scriptedRuntime({
     id: "scripted",
@@ -310,6 +322,8 @@ export function driveInbound(store: Store, id: string, state: InboundState): voi
     unanswered: ["deliver", "give_up"],
     replied: ["deliver", "reply"],
     ignored: ["deliver", "fail", "ignore"],
+    // Only ever inserted so: no event leads to it.
+    held: [],
   };
   for (const event of path[state]) {
     if (store.moveInbound([id], event).length !== 1) throw new Error(`${id} could not ${event}`);

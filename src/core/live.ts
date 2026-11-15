@@ -35,6 +35,13 @@ const TEXT = {
     stopped: "已叫停。",
     paused: "已暂停，这条消息不会再回复。",
     pausedNote: (name: string) => `${name} 已暂停，暂时不回复消息。`,
+    askNote: "我先问一下我的主人，同意后我会回复你。",
+    someone: "有人",
+    askOwnerDm: (who: string, name: string, preview: string) =>
+      `${who} 想和 ${name} 私聊：「${preview}」\n在电脑上打开 Mingle，在「需要你处理」里允许或拒绝。`,
+    askOwnerGroup: (group: string, who: string, name: string, preview: string) =>
+      `${name} 被拉进了群「${group}」，${who} 在群里 @ 了它：「${preview}」\n在电脑上打开 Mingle，在「需要你处理」里允许或拒绝这个群。`,
+    claimed: (name: string) => `好了，你现在是 ${name} 的主人。直接在这里给我发消息，或者把我拉进群里 @ 我。`,
     botBrake: (bot: string, n: number) => `我和 ${bot} 已经来回 ${n} 轮了，先停下。需要我继续的话，请 @ 我。`,
     failed: "处理时出错了，请稍后再发一次。",
     nothingToStop: "现在没有在处理的事。",
@@ -74,6 +81,13 @@ const TEXT = {
     stopped: "Stopped.",
     paused: "Paused. This message won't get a reply.",
     pausedNote: (name: string) => `${name} is paused and not replying for now.`,
+    askNote: "Let me check with my owner first. I'll reply once they say yes.",
+    someone: "Someone",
+    askOwnerDm: (who: string, name: string, preview: string) =>
+      `${who} wants to talk to ${name}: "${preview}"\nOpen Mingle on your computer to allow or decline them under Needs you.`,
+    askOwnerGroup: (group: string, who: string, name: string, preview: string) =>
+      `${name} was added to the group "${group}", where ${who} mentioned it: "${preview}"\nOpen Mingle on your computer to allow or decline the group under Needs you.`,
+    claimed: (name: string) => `Done: you're ${name}'s owner now. Message me here, or add me to a group and @ me.`,
     botBrake: (bot: string, n: number) =>
       `${bot} and I have gone back and forth ${n} times, so I'm stopping here. @ me if you want me to go on.`,
     failed: "Something went wrong. Send it again in a moment.",
@@ -128,6 +142,28 @@ export function langFor(platform: Platform): Lang {
 export function stopNote(platform: Platform, stopped: boolean): string {
   const t = TEXT[langFor(platform)];
   return stopped ? t.stopped : t.nothingToStop;
+}
+
+/**
+ * What Mingle says about people the owner has not let in yet (docs/spec.md 4.7), in the chat's
+ * language: to them once, to the owner once, and to whoever claims the bot with its code.
+ */
+export function accessText(platform: Platform): {
+  readonly askNote: string;
+  askOwner(input: { agent: string; sender: string | null; group: string | null; body: string }): string;
+  claimed(agent: string): string;
+} {
+  const t = TEXT[langFor(platform)];
+  return {
+    askNote: t.askNote,
+    askOwner: ({ agent, sender, group, body }) => {
+      const who = sender || t.someone;
+      const flat = body.replace(/\s+/g, " ").trim();
+      const preview = flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
+      return group === null ? t.askOwnerDm(who, agent, preview) : t.askOwnerGroup(group, who, agent, preview);
+    },
+    claimed: t.claimed,
+  };
 }
 
 /** What Mingle tells a chat that writes to a paused agent, in the chat's language. */
