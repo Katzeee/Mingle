@@ -7,6 +7,7 @@ import type {
   SendResult,
 } from "../channels/channel.ts";
 import type { Failure } from "../harness/harness.ts";
+import { MAX_BOT_HOPS } from "./trigger.ts";
 
 /**
  * What a person sees between sending a message and getting the answer:
@@ -34,6 +35,7 @@ const TEXT = {
     stopped: "已叫停。",
     paused: "已暂停，这条消息不会再回复。",
     pausedNote: (name: string) => `${name} 已暂停，暂时不回复消息。`,
+    botBrake: (bot: string, n: number) => `我和 ${bot} 已经来回 ${n} 轮了，先停下。需要我继续的话，请 @ 我。`,
     failed: "处理时出错了，请稍后再发一次。",
     nothingToStop: "现在没有在处理的事。",
     failures: {
@@ -72,6 +74,8 @@ const TEXT = {
     stopped: "Stopped.",
     paused: "Paused. This message won't get a reply.",
     pausedNote: (name: string) => `${name} is paused and not replying for now.`,
+    botBrake: (bot: string, n: number) =>
+      `${bot} and I have gone back and forth ${n} times, so I'm stopping here. @ me if you want me to go on.`,
     failed: "Something went wrong. Send it again in a moment.",
     nothingToStop: "Nothing to stop.",
     failures: {
@@ -129,6 +133,16 @@ export function stopNote(platform: Platform, stopped: boolean): string {
 /** What Mingle tells a chat that writes to a paused agent, in the chat's language. */
 export function pausedNote(platform: Platform, name: string): string {
   return TEXT[langFor(platform)].pausedNote(name);
+}
+
+/**
+ * What Mingle says, once, when bots have had their turns in a chat (docs/spec.md 4.2). Names the
+ * other bot in plain text, never as a mention, so it does not wake it.
+ */
+export function botBrakeNote(platform: Platform, bot: string): string {
+  const name = bot.replace(/^@+/, "").trim();
+  const t = TEXT[langFor(platform)];
+  return t.botBrake(name || (langFor(platform) === "zh" ? "另一个机器人" : "Another bot"), MAX_BOT_HOPS);
 }
 
 /** What to tell the person when the agent could not answer: what happened, and what helps. */

@@ -114,6 +114,10 @@ describe("message header contacts", () => {
     platformId: "o9cq@im.wechat",
     name: null,
     alias: null,
+    isBot: false,
+    personId: null,
+    personName: null,
+    linkedBy: null,
     updatedAt: 0,
   };
 
@@ -126,6 +130,14 @@ describe("message header contacts", () => {
     const named = { ...contact, name: "Mei W.", alias: "Mei" };
     expect(formatMessage(message, chat, "wechat", { contact: named })).toContain('from="Mei" user=u7k2 time=');
     expect(formatMessage(message, chat, "wechat", { contact: { ...named, alias: null } })).toContain('from="Mei W."');
+  });
+
+  it("marks a bot, and never the owner", () => {
+    const bot = { ...contact, name: "Bob", isBot: true };
+    expect(formatMessage(message, chat, "wechat", { contact: bot })).toContain('from="Bob" user=u7k2 bot time=');
+    expect(formatMessage(message, chat, "wechat", { ownerId: "o9cq@im.wechat", contact: bot })).toContain(
+      "user=u7k2 owner time=",
+    );
   });
 
   it("writes no from= with a platform ID when there is neither a contact nor a name", () => {

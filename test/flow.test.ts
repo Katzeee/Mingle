@@ -1069,7 +1069,7 @@ describe("contacts", () => {
     const renamed = await admin("PATCH", `/v1/admin/agents/${agentId}/contacts/${fromMe?.contactId}`, {
       name: "  Wei  ",
     });
-    expect(renamed.json).toEqual({ id: fromMe?.contactId, name: "Wei" });
+    expect(renamed.json).toEqual({ id: fromMe?.contactId, name: "Wei", bot: false });
     const status = (await admin("GET", `/v1/admin/agents/${agentId}`)).json as {
       connections: { id: string; ownerShared: boolean; ownerContact: { name: string | null } | null }[];
     };

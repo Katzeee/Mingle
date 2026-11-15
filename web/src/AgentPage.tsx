@@ -12,6 +12,7 @@ import {
   type Reminder,
   type Task,
 } from "./api.ts";
+import { Contacts } from "./Contacts.tsx";
 import { fetchCached, peek, remember, useCached } from "./cache.ts";
 import { HandoffItem, HandoffSection } from "./Handoff.tsx";
 import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
@@ -30,7 +31,6 @@ import {
   Group,
   GroupRow,
   HarnessIcon,
-  Input,
   MoreMenu,
   PageHeader,
   PauseIcon,
@@ -320,6 +320,15 @@ export function AgentPage({
                     }}
                   />
                 </section>
+                <Contacts
+                  key={`contacts-${agent.id}`}
+                  agent={agent}
+                  onChanged={() => {
+                    void onChanged();
+                    // A renamed person shows by the new name in the activity right away.
+                    void refreshActivity();
+                  }}
+                />
                 <RoleEditor agent={agent} onSaved={onChanged} />
                 <Brain agent={agent} onSaved={onChanged} />
                 <AgentEnv agent={agent} />
@@ -1022,13 +1031,7 @@ function Connections({
       ) : (
         <Group>
           {agent.connections.map((c) => (
-            <ConnectionRow
-              key={c.id}
-              agentId={agent.id}
-              connection={c}
-              highlighted={landed === c.id}
-              onChanged={onChanged}
-            />
+            <ConnectionRow key={c.id} connection={c} highlighted={landed === c.id} onChanged={onChanged} />
           ))}
         </Group>
       )}
@@ -1037,12 +1040,10 @@ function Connections({
 }
 
 function ConnectionRow({
-  agentId,
   connection,
   highlighted,
   onChanged,
 }: {
-  agentId: string;
   connection: ConnectionView;
   highlighted: boolean;
   onChanged: () => void;
@@ -1050,7 +1051,6 @@ function ConnectionRow({
   const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [naming, setNaming] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const platform = t(`platform.${connection.platform}` as MessageKey);
   const owner = connection.ownerContact;
@@ -1085,17 +1085,7 @@ function ConnectionRow({
           </span>
         </span>
       </span>
-      {naming && owner ? (
-        <OwnerNameForm
-          agentId={agentId}
-          contactId={owner.id}
-          initial={owner.name ?? ""}
-          onDone={(saved) => {
-            setNaming(false);
-            if (saved) onChanged();
-          }}
-        />
-      ) : confirming ? (
+      {confirming ? (
         <span className="flex shrink-0 items-center gap-1.5">
           <span className="hidden text-small text-ink2 sm:inline">{t("connection.removeAsk")}</span>
           <Button
@@ -1137,10 +1127,7 @@ function ConnectionRow({
           ) : null}
           <MoreMenu
             label={t("agent.more")}
-            items={[
-              ...(owner ? [{ label: t("connection.nameOwner"), onSelect: () => setNaming(true) }] : []),
-              { label: t("connection.remove"), danger: true, onSelect: () => setConfirming(true) },
-            ]}
+            items={[{ label: t("connection.remove"), danger: true, onSelect: () => setConfirming(true) }]}
           />
         </span>
       )}
@@ -1149,61 +1136,6 @@ function ConnectionRow({
         <p className={`w-full pl-11 text-caption ${connection.state === "error" ? "text-red" : "text-ink3"}`}>{hint}</p>
       ) : null}
     </GroupRow>
-  );
-}
-
-/** Name a bot's owner, so two people on one platform are not both "you". Empty clears the name. */
-function OwnerNameForm({
-  agentId,
-  contactId,
-  initial,
-  onDone,
-}: {
-  agentId: string;
-  contactId: string;
-  initial: string;
-  onDone: (saved: boolean) => void;
-}) {
-  const { t } = useI18n();
-  const [name, setName] = useState(initial);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <form
-      className="flex w-full flex-col gap-1.5 pl-11"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        setBusy(true);
-        setError(null);
-        try {
-          await api.nameContact(agentId, contactId, name);
-          onDone(true);
-        } catch (err) {
-          setError(errorText(t, err));
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <span className="flex flex-wrap items-center gap-1.5">
-        <Input
-          className="min-w-0 flex-1"
-          aria-label={t("connection.ownerName")}
-          placeholder={t("connection.ownerName")}
-          value={name}
-          maxLength={64}
-          autoFocus
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Button small variant="primary" type="submit" disabled={busy}>
-          {t("connection.ownerNameSave")}
-        </Button>
-        <Button small variant="ghost" type="button" onClick={() => onDone(false)}>
-          {t("agent.cancel")}
-        </Button>
-      </span>
-      {error ? <p className="text-caption text-red">{error}</p> : null}
-    </form>
   );
 }
 

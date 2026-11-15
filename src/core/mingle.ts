@@ -15,7 +15,15 @@ import type {
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
 import type { SecretStore } from "../platform/secrets.ts";
-import { type Agent, type Connection, type Handoff, type Message, type Reminder, Store } from "../store/store.ts";
+import {
+  type Agent,
+  type Connection,
+  contactName,
+  type Handoff,
+  type Message,
+  type Reminder,
+  Store,
+} from "../store/store.ts";
 import { VERSION } from "../version.ts";
 import { Brains } from "./brains.ts";
 import { coldRebuildFor } from "./cold.ts";
@@ -26,11 +34,12 @@ import { checkHandoff, handoffPrompt } from "./handoff.ts";
 import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
 import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stored } from "./link.ts";
-import { LiveReplies, pausedNote, stopNote } from "./live.ts";
+import { botBrakeNote, LiveReplies, pausedNote, stopNote } from "./live.ts";
 import { Outbox } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
+import { BotHops, trigger } from "./trigger.ts";
 
 export interface OnboardingSession {
   readonly id: string;
@@ -106,6 +115,8 @@ export class Mingle {
   /** Paused agents (docs/spec.md 4.11), and the chats already told so during the current pause. */
   private readonly paused = new Set<string>();
   private readonly pauseNoted = new Set<string>();
+  /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
+  private readonly botHops = new BotHops();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -1139,12 +1150,21 @@ export class Mingle {
 
   // ------------------------------------------------------------------- inbox
 
+  /** The sender is one of this computer's agents, on a bot that is online now. */
+  private isLocalBot(platform: Platform, senderId: string): boolean {
+    for (const [id, live] of this.live) {
+      if (this.store.connection(id)?.platform !== platform) continue;
+      if (live.bot.id === senderId || live.bot.senderId === senderId) return true;
+    }
+    return false;
+  }
+
   /** One inbound message from a chat app (docs/spec.md 4.2, 4.3, 7.1). */
   receive(connectionId: string, inbound: InboundMessage): void {
     const connection = this.store.connection(connectionId);
     if (!connection) return;
-    // Other bots are ignored until there are rules against bot-to-bot loops (docs/spec.md 13).
-    if (inbound.sender.isBot) return;
+    // A bot by the platform's word, or one of this computer's agents (a GitHub agent is a plain user account).
+    const knownBot = inbound.sender.isBot || this.isLocalBot(connection.platform, inbound.sender.id);
     const parent = inbound.chat.parent
       ? this.store.upsertChat({
           connectionId,
@@ -1161,18 +1181,29 @@ export class Mingle {
       parentId: parent?.id,
     });
     let ownerId = connection.ownerId;
-    if (!ownerId && chat.kind === "dm") {
+    if (!ownerId && chat.kind === "dm" && !knownBot) {
       ownerId = inbound.sender.id;
       this.store.updateConnection(connectionId, { ownerId });
       this.log(
         `${connection.platform}: ${inbound.sender.name} is now the owner of ${connection.botName ?? connection.id}`,
       );
     }
-    this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
+    let contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
+    const owner = inbound.sender.id === ownerId;
+    if (knownBot && !owner && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
+    // The owner is a person, whatever was marked.
+    const bot = !owner && contact.isBot;
     const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
     const replyTo = quoted?.id ?? null;
-    // A reply to something the agent said is addressed to it, even where the platform does not say so.
-    const triggers = chat.kind === "dm" || inbound.addressedToBot || quoted?.direction === "out";
+    const decision = trigger({
+      dm: chat.kind === "dm",
+      bot,
+      // A reply to something the agent said is addressed to it, even where the platform does not say so.
+      addressed: inbound.addressedToBot || quoted?.direction === "out",
+      mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
+      hops: this.botHops.hops(chat.id),
+    });
+    const triggers = decision === "wake";
     const message = this.store.insertInbound({
       chatId: chat.id,
       platformId: inbound.platformId,
@@ -1189,7 +1220,17 @@ export class Mingle {
       triggers,
       createdAt: inbound.sentAt,
     });
-    if (!message || !triggers) return; // Duplicate, or not addressed to the agent.
+    if (!message) return; // The platform delivered it before.
+    if (!bot) this.botHops.person(chat.id);
+    else if (triggers) this.botHops.woke(chat.id);
+    else if (decision === "brake" && this.botHops.braked(chat.id)) {
+      // Said once, without quoting or naming the bot as a mention: that would only wake it again.
+      const name = contactName(contact) ?? inbound.sender.name;
+      void this.outbox
+        .send(connection.agentId, { chatId: chat.id, text: botBrakeNote(connection.platform, name), notice: true })
+        .catch((error) => this.log(`bot brake note failed: ${(error as Error).message}`));
+    }
+    if (!triggers) return; // Not addressed to the agent: background.
 
     const live = this.live.get(connectionId);
 

@@ -556,6 +556,8 @@ export function toInbound(message: DiscordMessage, botId: string, chat: ChatRef)
   if (message.type !== 0 && message.type !== 19) return undefined;
   if (message.author.id === botId) return undefined;
   const mentioned = (message.mentions ?? []).some((u) => u.id === botId);
+  // A reply pings its author by default, which lists them in `mentions`; only a typed mention is one.
+  const typed = new RegExp(`<@!?${botId}>`).test(message.content);
   const repliedToMe = message.referenced_message?.author?.id === botId;
 
   let text = message.content.replace(new RegExp(`<@!?${botId}>`, "g"), "");
@@ -584,6 +586,7 @@ export function toInbound(message: DiscordMessage, botId: string, chat: ChatRef)
     attachments,
     ...(message.message_reference?.message_id ? { replyTo: message.message_reference.message_id } : {}),
     addressedToBot: chat.kind === "dm" || mentioned || repliedToMe,
+    mentioned: typed,
     sentAt: Date.parse(message.timestamp) || Date.now(),
   };
 }
