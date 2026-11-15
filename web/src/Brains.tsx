@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { api, type BrainStatus, type InstallPlan, type Job, type SignInState, type UpdateInfo } from "./api.ts";
 import { useCached } from "./cache.ts";
 import { type MessageKey, useI18n } from "./i18n.ts";
+import { followJob } from "./jobs.ts";
 import { Button, HarnessIcon, Input, LinkButton, Problem, StatusDot, Waiting } from "./ui.tsx";
 
 /**
@@ -10,36 +11,11 @@ import { Button, HarnessIcon, Input, LinkButton, Problem, StatusDot, Waiting } f
  * one its own updater says is behind updated with that updater.
  */
 
-/** Poll a job until it ends. */
-function useJob(start: (() => Promise<Job>) | null, onEnd: (job: Job) => void, initialJob?: Job) {
+/** Poll a job until it ends. `onEnd` gets null when the job is gone and its outcome unknown. */
+function useJob(start: (() => Promise<Job>) | null, onEnd: (job: Job | null) => void, initialJob?: Job) {
   const [job, setJob] = useState<Job | null>(initialJob ?? null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new start function starts a new job
-  useEffect(() => {
-    if (!start) return;
-    let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async (id: string) => {
-      const next = await api.job(id).catch(() => null);
-      if (!live || !next) return;
-      setJob(next);
-      if (next.state === "running") timer = setTimeout(() => poll(id), 1000);
-      else onEnd(next);
-    };
-    start()
-      .then((first) => {
-        if (!live) return;
-        setJob(first);
-        poll(first.id);
-      })
-      .catch(
-        (e: Error) =>
-          live && setJob({ id: "", kind: "install", harness: "", state: "failed", events: [], detail: e.message }),
-      );
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [start]);
+  useEffect(() => (start ? followJob(start, api.job, setJob, onEnd) : undefined), [start]);
   return job;
 }
 
@@ -102,7 +78,7 @@ export function InstallBrain({
 export function SignInBrain({ brain, onDone }: { brain: BrainStatus; onDone: () => void }) {
   const { t } = useI18n();
   const [start, setStart] = useState<(() => Promise<Job>) | null>(null);
-  const job = useJob(start, (j) => j.state === "done" && onDone());
+  const job = useJob(start, (j) => j?.state === "done" && onDone());
   const [answer, setAnswer] = useState("");
 
   if (!job || job.state === "cancelled") {
@@ -237,12 +213,13 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
   const [open, setOpen] = useState(false);
   const { update, recheck } = useUpdate(brain);
   const [startInstall, setStartInstall] = useResumableJob(brain.installJob?.id);
-  const installJob = useJob(startInstall, (job) => job.state === "done" && onChanged(), brain.installJob);
+  // A job that is gone may have changed things too: read them again.
+  const installJob = useJob(startInstall, (job) => job?.state !== "failed" && onChanged(), brain.installJob);
   const [startUpgrade, setStartUpgrade] = useResumableJob(brain.upgradeJob?.id);
   const upgradeJob = useJob(
     startUpgrade,
     (job) => {
-      if (job.state !== "done") return;
+      if (job?.state === "failed") return;
       recheck();
       onChanged();
     },
