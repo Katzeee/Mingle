@@ -696,34 +696,63 @@ export async function reviewInteractions({
           assert(checked === "true", "settings tab not selected");
           await shot(`${localeName}-${width}-managed-settings`);
 
-          // Scrolled away and already on settings: Manage scrolls back and refocuses.
+          // Settings already lists the bots with their controls: the side panel does not repeat them.
+          assert(
+            await call(
+              (wanted) =>
+                ![...document.querySelectorAll("aside:not(.sidebar) h2, aside:not(.sidebar) h3")].some(
+                  (h) => h.textContent.trim() === wanted,
+                ),
+              labels.chatApps,
+            ),
+            "side panel repeats the chat apps on settings",
+          );
+
+          // Back on activity, a bot's row in the side panel opens that bot in settings,
+          // in view, focused and briefly tinted. Scroll settings away first so landing is real.
           await call(() => {
             const region = document.querySelector("section[aria-label]");
             let scroller = region?.parentElement;
             while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
             if (scroller) scroller.scrollTop = scroller.scrollHeight;
-            document.activeElement?.blur?.();
           });
-          await clickEl(await call(centerOfText, "aside:not(.sidebar)", "button", labels.manage));
-          const again = await until("region back in view", () => {
-            const region = document.querySelector("section[aria-label]");
-            if (!region || document.activeElement !== region) return null;
-            const r = region.getBoundingClientRect();
-            let scroller = region.parentElement;
+          await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.activity));
+          const rowCenter = await until(
+            "side panel bot rows",
+            (wanted) => {
+              const section = [...document.querySelectorAll("aside:not(.sidebar) section")].find(
+                (el) => el.querySelector("h2")?.textContent.trim() === wanted,
+              );
+              const rows = [...(section?.querySelectorAll(".divide-y > button") ?? [])];
+              const row = rows.at(-1);
+              if (!row) return null;
+              const r = row.getBoundingClientRect();
+              return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2, count: rows.length } : null;
+            },
+            labels.chatApps,
+          );
+          assert(rowCenter.count >= 2, `expected bot rows in the side panel, got ${rowCenter.count}`);
+          await clickEl(rowCenter);
+          const landed = await until("bot row focused", () => {
+            const el = document.activeElement;
+            if (!el?.id?.startsWith("connection-")) return null;
+            const r = el.getBoundingClientRect();
+            let scroller = el.parentElement;
             while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
             const s = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
-            return r.top >= s.top - 1 && r.top <= s.bottom ? { top: r.top } : null;
+            const rows = [...document.querySelectorAll('[id^="connection-"]')];
+            return r.top >= s.top - 1 && r.bottom <= s.bottom + 1
+              ? { tinted: el.className.includes("bg-accent-tint"), index: rows.indexOf(el), rows: rows.length }
+              : null;
           });
-          assert(again, "Manage did not scroll back to connections");
-
-          // A third click, focus elsewhere, must still retrigger.
-          await call(() => document.querySelector('header [role="radio"]')?.focus());
-          await clickEl(await call(centerOfText, "aside:not(.sidebar)", "button", labels.manage));
-          const third = await until(
-            "region refocused",
-            () => document.activeElement === document.querySelector("section[aria-label]"),
+          assert(landed.tinted, "opened bot row is not highlighted");
+          assert(landed.index === landed.rows - 1, `landed on row ${landed.index} of ${landed.rows}`);
+          await shot(`${localeName}-${width}-opened-bot`);
+          const faded = await until(
+            "highlight fades",
+            () => !document.querySelector('[id^="connection-"].bg-accent-tint') || null,
           );
-          assert(third, "repeated Manage did not refocus the region");
+          assert(faded, "bot highlight did not fade");
         } else {
           await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
         }
