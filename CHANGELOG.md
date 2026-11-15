@@ -3,6 +3,16 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.12
+
+- Agents can be renamed and given a picture from Settings → "Name and picture": choose or drop an image, frame it in place, and save it as a 256 px PNG. Chat-app bot pictures are not synced.
+- Reminders can be cancelled and open tasks closed directly from the console. Both work even while the agent is paused, stuck or offline, and the agent is told with its next input.
+- An installed harness that has a newer version can be updated from its Settings row; the console asks the harness's own update source and offers the update only when one exists.
+- Signing in to GitHub now shows a device code to enter on github.com by default, through Mingle's OAuth App; pasting a classic token remains available as the fallback.
+- DingTalk setup works again: its authorization page now uses DingTalk's device-registration source identifier instead of being rejected as an unavailable source.
+- The desktop window's waiting page follows the console's look instead of showing unstyled text, its restart state points to the logs rather than printing internal errors, and a blank window recovers by itself when its web content process dies.
+- The side panel no longer repeats the chat-app list under Agent settings; each side-panel row opens that bot's row in settings instead.
+
 ## 0.1.11
 
 - Connect an agent's own GitHub account and mention it in issues, pull requests, or review threads. It replies in the original conversation and uses reactions to show progress. Only repository owners, members, and collaborators can trigger it; GitHub Discussions and file uploads are not supported. The default setup uses a classic token; signing in with a device code requires a configured OAuth client ID.
