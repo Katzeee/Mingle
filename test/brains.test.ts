@@ -15,6 +15,7 @@ function fakeHarness(): Harness & { installs: string[] } {
       installs.push(id);
       return id === "broken" ? { ok: false, detail: "npm ERR! 404" } : { ok: true };
     },
+    upgrade: async (id) => (id === "broken" ? { ok: false, detail: "EACCES" } : { ok: true }),
     signIn: async (_id, interaction) => {
       interaction.onEvent({ kind: "url", url: "https://example.com/login" });
       const code = await interaction.prompt({ message: "Paste the code", secret: true });
@@ -24,6 +25,23 @@ function fakeHarness(): Harness & { installs: string[] } {
 }
 
 describe("harness installs and sign-ins", () => {
+  it("updates once per harness and never alongside an install", async () => {
+    let changed = 0;
+    const brains = new Brains(fakeHarness(), () => changed++);
+    const job = brains.upgrade("codex");
+    expect(job.kind).toBe("upgrade");
+    expect(brains.upgrade("codex").id).toBe(job.id);
+    expect(brains.active("codex", "upgrade")?.id).toBe(job.id);
+    await until(() => brains.get(job.id).state === "done");
+    expect(changed).toBe(1);
+    const failed = brains.upgrade("broken");
+    await until(() => brains.get(failed.id).state === "failed");
+    expect(brains.get(failed.id).detail).toBe("EACCES");
+    const install = brains.install("dsh");
+    expect(brains.upgrade("dsh").id).toBe(install.id);
+    brains.dispose();
+  });
+
   it("installs once per harness and reports the outcome", async () => {
     const harness = fakeHarness();
     let changed = 0;
@@ -43,7 +61,7 @@ describe("harness installs and sign-ins", () => {
     const brains = new Brains(fakeHarness(), () => {});
     const job = brains.signIn("claude");
     await until(() => brains.get(job.id).prompt);
-    expect(brains.activeInstall("claude")).toBeUndefined();
+    expect(brains.active("claude", "install")).toBeUndefined();
     expect(brains.get(job.id)).toMatchObject({
       state: "running",
       events: [{ kind: "url", url: "https://example.com/login" }],
@@ -79,8 +97,16 @@ describe("harness installs and sign-ins", () => {
             installed,
             canInstall: true,
             canSignIn: false,
+            canUpdate: false,
           },
-          { id: "other-test", name: "Other Test", installed: false, canInstall: true, canSignIn: false },
+          {
+            id: "other-test",
+            name: "Other Test",
+            installed: false,
+            canInstall: true,
+            canSignIn: false,
+            canUpdate: false,
+          },
         ],
         install: async () => {
           calls++;
@@ -111,8 +137,8 @@ describe("harness installs and sign-ins", () => {
       expect(again.id).toBe(started.id);
       expect(calls).toBe(1);
 
-      expect(r.mingle.brains.activeInstall("install-test")?.id).toBe(started.id);
-      expect(r.mingle.brains.activeInstall("other-test")).toBeUndefined();
+      expect(r.mingle.brains.active("install-test", "install")?.id).toBe(started.id);
+      expect(r.mingle.brains.active("other-test", "install")).toBeUndefined();
 
       installed = outcome === "done";
       finish({ ok: installed });
@@ -168,7 +194,9 @@ describe("harness installs and sign-ins", () => {
         ...harness,
         catalog: async () => {
           probes++;
-          return [{ id: "cached-test", name: "Cached Test", installed, canInstall: true, canSignIn: false }];
+          return [
+            { id: "cached-test", name: "Cached Test", installed, canInstall: true, canSignIn: false, canUpdate: false },
+          ];
         },
         install: async () => {
           installed = true;

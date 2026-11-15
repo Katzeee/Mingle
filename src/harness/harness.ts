@@ -155,7 +155,15 @@ export interface HarnessStatus extends HarnessInfo {
   readonly canInstall: boolean;
   /** The runtime has its own sign-in (`login`). */
   readonly canSignIn: boolean;
+  /** The runtime can tell whether a newer version exists and update itself (`checkUpdate`, `upgrade`). */
+  readonly canUpdate: boolean;
 }
+
+/** What the installed harness's own updater would do. `unknown` never means it is current. */
+export type UpdateInfo =
+  | { readonly kind: "available"; readonly installed: string; readonly latest: string }
+  | { readonly kind: "current"; readonly version: string }
+  | { readonly kind: "unknown" };
 
 export type SignInState =
   | { readonly kind: "signed_in"; readonly account?: string; readonly plan?: string }
@@ -196,6 +204,10 @@ export interface Harness {
   signInState?(id: string): Promise<SignInState>;
   installPlan?(id: string): Promise<InstallPlanInfo>;
   install?(id: string): Promise<{ ok: boolean; detail?: string }>;
+  /** Read only: asks the harness's update source, never installs. */
+  updateCheck?(id: string): Promise<UpdateInfo>;
+  /** Runs the harness's own updater, judged by the version it reports afterwards. */
+  upgrade?(id: string): Promise<{ ok: boolean; detail?: string }>;
   signIn?(id: string, interaction: SignInInteraction): Promise<{ ok: boolean; detail?: string }>;
   /** The harness's display name ("Claude Code"), for messages to people. */
   name?(id: string): string;
@@ -417,6 +429,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
             ...(found?.kind === "unsupported" ? { unsupported: found.reason } : {}),
             canInstall: Boolean(runtime.install),
             canSignIn: Boolean(runtime.login),
+            canUpdate: Boolean(runtime.checkUpdate && runtime.upgrade),
           };
         }),
       );
@@ -465,6 +478,30 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
       });
       if (result.kind === "installed" || result.kind === "already_installed") return { ok: true };
       if (result.kind === "failed") return { ok: false, detail: result.output.trim().split("\n").slice(-6).join("\n") };
+      return { ok: false, detail: result.detail ?? result.reason };
+    },
+
+    async updateCheck(id) {
+      const runtime = lookup(id);
+      if (!runtime.checkUpdate || !runtime.upgrade) return { kind: "unknown" };
+      const check = await runtime
+        .checkUpdate(await installation(runtime), { timeoutMs: 15_000 })
+        .catch(() => undefined);
+      if (check?.kind !== "ok") return { kind: "unknown" };
+      return check.updateAvailable
+        ? { kind: "available", installed: check.installed, latest: check.latest }
+        : { kind: "current", version: check.installed };
+    },
+
+    async upgrade(id) {
+      const runtime = lookup(id);
+      if (!runtime.upgrade) return { ok: false, detail: "no updater" };
+      const result = await runtime.upgrade(await installation(runtime), { timeoutMs: 10 * 60_000 });
+      const tail = (output: string) => output.trim().split("\n").slice(-6).join("\n");
+      if (result.kind === "upgraded" || result.kind === "current") return { ok: true };
+      // Updaters can exit 0 without touching this copy; the version it reports decides.
+      if (result.kind === "unchanged") return { ok: false, detail: tail(result.output) || `still ${result.version}` };
+      if (result.kind === "failed") return { ok: false, detail: tail(result.output) };
       return { ok: false, detail: result.detail ?? result.reason };
     },
 

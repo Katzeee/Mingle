@@ -527,6 +527,9 @@ const en = {
   "brain.installRuns": "Mingle runs the vendor's own installer:",
   "brain.installFailed": "The installer did not finish",
   "brain.install": "Install",
+  "brain.updateTo": "Update to {version}",
+  "brain.updating": "Updating {name}. This can take a few minutes\u2026",
+  "brain.updateFailed": "The update did not finish",
   "brain.vendorPage": "Vendor's page",
   "brain.cannotInstall": "Mingle cannot install this one here. Install it yourself, then come back.",
   "brain.signIn": "Sign in",
@@ -543,7 +546,8 @@ const en = {
   "brain.more": "Install another harness ({count})",
   "brain.signInBody": "Sign {name} in once, then pick a model.",
   "settings.brains": "Harnesses",
-  "settings.brainsBody": "The coding agents on this computer that think for your agents. Install or sign in from here.",
+  "settings.brainsBody":
+    "The coding agents on this computer that think for your agents. Install, sign in or update them here.",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -1040,6 +1044,9 @@ const zh: Record<MessageKey, string> = {
   "brain.installRuns": "Mingle 会运行官方的安装命令：",
   "brain.installFailed": "安装没有完成",
   "brain.install": "安装",
+  "brain.updateTo": "更新到 {version}",
+  "brain.updating": "正在更新 {name}，可能需要几分钟…",
+  "brain.updateFailed": "更新没有完成",
   "brain.vendorPage": "官方说明",
   "brain.cannotInstall": "这个没法由 Mingle 在这里安装。请自己安装后回来。",
   "brain.signIn": "登录",
@@ -1056,7 +1063,7 @@ const zh: Record<MessageKey, string> = {
   "brain.more": "安装其他 harness（{count} 个）",
   "brain.signInBody": "先登录 {name}，然后选模型。",
   "settings.brains": "Harness",
-  "settings.brainsBody": "这台电脑上替 Agent 思考的编码智能体。可以在这里安装和登录。",
+  "settings.brainsBody": "这台电脑上替 Agent 思考的编码智能体。可以在这里安装、登录和更新。",
 };
 
 export type { Locale, LocalePreference } from "./locale.ts";

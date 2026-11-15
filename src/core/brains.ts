@@ -3,7 +3,7 @@ import type { Harness, SignInInteraction } from "../harness/harness.ts";
 import { MingleError } from "./errors.ts";
 
 /**
- * Installing a harness or signing it in takes minutes and may need the person: a link to
+ * Installing, updating or signing in a harness takes minutes and may need the person: a link to
  * open, a code to type back. Each runs as a job the console polls, like a QR onboarding.
  */
 export type JobEvent =
@@ -13,7 +13,7 @@ export type JobEvent =
 
 export interface JobView {
   readonly id: string;
-  readonly kind: "install" | "sign_in";
+  readonly kind: "install" | "upgrade" | "sign_in";
   readonly harness: string;
   readonly state: "running" | "done" | "failed" | "cancelled";
   readonly events: readonly JobEvent[];
@@ -49,6 +49,15 @@ export class Brains {
     return this.start("install", harness, async () => install.call(this.harness, harness));
   }
 
+  upgrade(harness: string): JobView {
+    const upgrade = this.harness.upgrade;
+    if (!upgrade) throw new MingleError("unsupported", "this Mingle cannot update harnesses");
+    // Installing and updating both run the vendor's installer: one at a time per harness.
+    const installing = this.active(harness, "install");
+    if (installing) return installing;
+    return this.start("upgrade", harness, async () => upgrade.call(this.harness, harness));
+  }
+
   signIn(harness: string): JobView {
     const signIn = this.harness.signIn;
     if (!signIn) throw new MingleError("unsupported", "this Mingle cannot sign harnesses in");
@@ -72,23 +81,23 @@ export class Brains {
     });
   }
 
-  /** Recover an installation after the console has been closed or navigated away. */
-  activeInstall(harness: string): JobView | undefined {
+  /** Recover an install or update after the console has been closed or navigated away. */
+  active(harness: string, kind: "install" | "upgrade"): JobView | undefined {
     for (const { view } of this.jobs.values()) {
-      if (view.harness === harness && view.kind === "install" && view.state === "running") return view;
+      if (view.harness === harness && view.kind === kind && view.state === "running") return view;
     }
     return undefined;
   }
 
   get(id: string): JobView {
     const job = this.jobs.get(id);
-    if (!job) throw new MingleError("job_not_found", "start the install or sign-in again", 404);
+    if (!job) throw new MingleError("job_not_found", "start the install, update or sign-in again", 404);
     return job.view;
   }
 
   answer(id: string, value: string): void {
     const job = this.jobs.get(id);
-    if (!job) throw new MingleError("job_not_found", "start the install or sign-in again", 404);
+    if (!job) throw new MingleError("job_not_found", "start the install, update or sign-in again", 404);
     if (!job.answer) throw new MingleError("no_question", "the harness is not waiting for an answer", 409);
     job.answer(value);
   }

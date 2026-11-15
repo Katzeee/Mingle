@@ -24,6 +24,7 @@ const LOCALES = {
     deleteAsk: "Delete ",
     chatApps: "Chat apps",
     install: "Install",
+    updateTo: "Update to 1.1.0",
     installing: "Installing",
     notInstalled: "Not installed",
     installFailed: "The installer did not finish",
@@ -77,6 +78,7 @@ const LOCALES = {
     deleteAsk: "删除 ",
     chatApps: "聊天软件",
     install: "安装",
+    updateTo: "更新到 1.1.0",
     installing: "正在安装",
     notInstalled: "未安装",
     installFailed: "安装没有完成",
@@ -134,6 +136,7 @@ const INSTALL_MOCK = String.raw`(() => {
     const list = [
       { id: "install-test", name: "Install Test", installed: s.installed, canInstall: true, canSignIn: false },
       { id: "other-test", name: "Other Test", installed: false, canInstall: true, canSignIn: false },
+      { id: "update-test", name: "Update Test", installed: true, version: "1.0.0", canInstall: false, canSignIn: false, canUpdate: true },
     ];
     if (s.job && s.job.state === "running") list[0].installJob = s.job;
     return list;
@@ -150,7 +153,9 @@ const INSTALL_MOCK = String.raw`(() => {
       );
     if (method === "GET" && path === "/v1/admin/brains/other-test/install-plan")
       return Promise.resolve(json({ kind: "unsupported", detail: "not offered here" }));
-    if (method === "GET" && /^\/v1\/admin\/brains\/(install-test|other-test)\/sign-in$/.test(path))
+    if (method === "GET" && path === "/v1/admin/brains/update-test/update")
+      return Promise.resolve(json({ kind: "available", installed: "1.0.0", latest: "1.1.0" }));
+    if (method === "GET" && /^\/v1\/admin\/brains\/(install-test|other-test|update-test)\/sign-in$/.test(path))
       return Promise.resolve(json({ kind: "unknown" }));
     if (method === "POST" && path === "/v1/admin/brains/install-test/install") {
       const s = read();
@@ -880,6 +885,8 @@ export async function reviewInteractions({
       await resetFixture();
       await gotoSettings(labels);
       await until("install row", rowHas, "Install Test", labels.notInstalled);
+      // An installed harness its updater says is behind offers the update in its row.
+      await until("update button", rowButtonCenter, "Update Test", labels.updateTo);
 
       // Outer Install opens the plan; its own Install button starts the job.
       await clickEl(await until("outer install button", rowButtonCenter, "Install Test", labels.install));

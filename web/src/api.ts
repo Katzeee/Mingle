@@ -149,9 +149,17 @@ export interface BrainStatus extends Harness {
   unsupported?: string;
   canInstall: boolean;
   canSignIn: boolean;
+  canUpdate: boolean;
   /** An installation still running in the local Mingle process. */
   installJob?: Job;
+  /** An update still running in the local Mingle process. */
+  upgradeJob?: Job;
 }
+
+export type UpdateInfo =
+  | { kind: "available"; installed: string; latest: string }
+  | { kind: "current"; version: string }
+  | { kind: "unknown" };
 
 export type SignInState =
   | { kind: "signed_in"; account?: string; plan?: string }
@@ -164,7 +172,7 @@ export type InstallPlan =
 
 export interface Job {
   id: string;
-  kind: "install" | "sign_in";
+  kind: "install" | "upgrade" | "sign_in";
   harness: string;
   state: "running" | "done" | "failed" | "cancelled";
   events: (
@@ -236,6 +244,8 @@ export const api = {
   signInState: (harness: string) => call<SignInState>("GET", `/v1/admin/brains/${harness}/sign-in`),
   installPlan: (harness: string) => call<InstallPlan>("GET", `/v1/admin/brains/${harness}/install-plan`),
   install: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/install`),
+  updateCheck: (harness: string) => call<UpdateInfo>("GET", `/v1/admin/brains/${harness}/update`),
+  upgrade: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/upgrade`),
   signIn: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/sign-in`),
   job: (id: string) => call<Job>("GET", `/v1/admin/jobs/${id}`),
   answerJob: (id: string, value: string) => call("POST", `/v1/admin/jobs/${id}/answer`, { value }),
