@@ -422,6 +422,7 @@ export function toInbound(message: TgMessage, me: TgUser): InboundMessage | unde
       ? { replyTo: String(message.reply_to_message.message_id) }
       : {}),
     addressedToBot: chat.kind === "dm" || mentioned || repliedToMe,
+    mentioned,
     sentAt: message.date * 1000,
   };
 }

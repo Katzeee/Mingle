@@ -39,6 +39,7 @@ export function formatMessage(
     if (name) parts.push(`from=${quote(name)}`);
     if (opts.contact) parts.push(`user=${opts.contact.id}`);
     if (opts.ownerId && message.senderId === opts.ownerId) parts.push("owner");
+    else if (opts.contact?.isBot) parts.push("bot");
   }
   if (message.replyTo) parts.push(`reply_to=${message.replyTo}`);
   for (const a of message.attachments) parts.push(`file=${a.id}:${quote(a.name)}`);

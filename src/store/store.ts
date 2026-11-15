@@ -56,6 +56,8 @@ export interface Contact {
   name: string | null;
   /** The name the owner or the agent gave them. Wins over `name`. */
   alias: string | null;
+  /** A bot: the platform or a local agent said so, or the owner marked it (docs/spec.md 4.2). */
+  isBot: boolean;
   updatedAt: number;
 }
 
@@ -501,6 +503,12 @@ export class Store {
       )
       .all(agentId) as Row[];
     return rows.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform, owner: r.is_owner === 1 }));
+  }
+
+  /** Mark a contact as a bot, or as a person again. */
+  setContactBot(id: string, isBot: boolean): Contact | undefined {
+    this.db.prepare("UPDATE contacts SET is_bot = ?, updated_at = ? WHERE id = ?").run(isBot ? 1 : 0, this.now(), id);
+    return this.contact(id);
   }
 
   /** Give a contact a name, or clear it with null to go back to the platform's. */
@@ -1061,6 +1069,7 @@ function toContact(r: Row): Contact {
     platformId: String(r.platform_id),
     name: str(r.name),
     alias: str(r.alias),
+    isBot: r.is_bot === 1,
     updatedAt: Number(r.updated_at),
   };
 }

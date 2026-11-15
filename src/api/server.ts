@@ -180,6 +180,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     platformName: k.name,
     alias: k.alias,
     owner: k.owner,
+    bot: k.isBot && !k.owner,
   });
 
   app.get("/v1/agent/contacts", (c) => c.json(store.agentContacts(c.get("agent").id).map(contactView)));
@@ -563,6 +564,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
           senderIsOwner,
           /** The console may call an unnamed owner "you" only when that cannot mean two people. */
           senderIsOnlyOwner: senderIsOwner && !shared.has(m.chat.connectionId),
+          senderIsBot: !senderIsOwner && Boolean(contact?.isBot),
           contactId: contact?.id ?? null,
           body: m.body,
           state: m.state,
@@ -575,14 +577,28 @@ export function createApi(mingle: Mingle): Hono<Env> {
     );
   });
 
-  /** The owner names someone in the agent's address book, or clears the name with an empty one. */
+  /**
+   * The owner edits someone in the agent's address book: `name` names them (empty clears it), `bot`
+   * marks an account that is a bot though the platform does not say so (docs/spec.md 4.2). Fields
+   * left out stay as they are.
+   */
   app.patch("/v1/admin/agents/:id/contacts/:contactId", async (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const id = c.req.param("contactId");
-    if (!store.agentContact(agent.id, id)) throw notFound("contact", id);
-    const body = await c.req.json<{ name?: unknown }>();
-    const contact = store.setContactAlias(id, contactAlias(body.name));
-    return c.json({ id, name: contactName(contact) });
+    const found = store.agentContact(agent.id, id);
+    if (!found) throw notFound("contact", id);
+    const body = await c.req.json<{ name?: unknown; bot?: unknown }>();
+    if (body.bot !== undefined && typeof body.bot !== "boolean") {
+      throw new MingleError("bot_invalid", "pass bot as true or false");
+    }
+    if (body.bot === true && store.connection(found.connectionId)?.ownerId === found.platformId) {
+      throw new MingleError("contact_is_owner", "the owner is a person; their messages always reach the agent", 409);
+    }
+    const name = "name" in body ? contactAlias(body.name) : undefined;
+    if (name !== undefined) store.setContactAlias(id, name);
+    if (typeof body.bot === "boolean") store.setContactBot(id, body.bot);
+    const contact = store.contact(id);
+    return c.json({ id, name: contactName(contact), bot: contact?.isBot ?? false });
   });
 
   app.get("/v1/admin/agents/:id/work", (c) => {

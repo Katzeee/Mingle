@@ -119,7 +119,11 @@ describe("github onboarding", () => {
       githubChannel({ fetch: fakeGitHub().fetchImpl }).onboard({ token: " ghp_x " }, new AbortController().signal),
     );
     expect(ok).toEqual([
-      { kind: "succeeded", credentials: { token: "ghp_x" }, bot: { id: "42", name: "@alex-agent" } },
+      {
+        kind: "succeeded",
+        credentials: { token: "ghp_x" },
+        bot: { id: "42", name: "@alex-agent", senderId: "alex-agent" },
+      },
     ]);
 
     // Fine-grained tokens send no scope header: they cannot read notifications.
@@ -172,7 +176,7 @@ describe("github onboarding", () => {
     expect(out[1]).toEqual({
       kind: "succeeded",
       credentials: { token: "gho_token" },
-      bot: { id: "42", name: "@alex-agent" },
+      bot: { id: "42", name: "@alex-agent", senderId: "alex-agent" },
     });
     const asked = gh.calls.find((c) => c.path === "/login/device/code");
     expect(asked?.body).toEqual({ client_id: "Iv1.abc", scope: "notifications repo" });
@@ -212,7 +216,7 @@ describe("github connection", () => {
     });
     const rec = recorder();
     const connection = await githubChannel({ fetch: gh.fetchImpl }).connect({ token: "ghp_x" }, rec.events);
-    expect(connection.bot).toEqual({ id: "42", name: "@alex-agent" });
+    expect(connection.bot).toEqual({ id: "42", name: "@alex-agent", senderId: "alex-agent" });
     await until(() => rec.messages.length === 2);
     expect(rec.messages.map((m) => [m.platformId, m.text, m.addressedToBot])).toEqual([
       ["ic:10", "Seen this too.", false],
