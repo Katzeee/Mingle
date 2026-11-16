@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { Harness, SignInInteraction } from "../harness/harness.ts";
+import type { AccountUsage, Harness, SignInInteraction } from "../harness/harness.ts";
 import { MingleError } from "./errors.ts";
 
 /**
@@ -32,8 +32,12 @@ interface Job {
   answer?: ((value: string) => void) | undefined;
 }
 
+/** How long one quota read serves the console: opening settings again soon after asks nobody. */
+export const USAGE_TTL_MS = 60_000;
+
 export class Brains {
   private readonly jobs = new Map<string, Job>();
+  private readonly usages = new Map<string, { at: number; read: Promise<AccountUsage> }>();
   private readonly harness: Harness;
   private readonly changed: () => void;
 
@@ -79,6 +83,20 @@ export class Brains {
       };
       return signIn.call(this.harness, harness, interaction);
     });
+  }
+
+  /**
+   * The signed-in account's quota, read at most once a minute per harness: the read starts the
+   * harness or asks its vendor, and every open settings page shares it.
+   */
+  usage(harness: string, now = Date.now()): Promise<AccountUsage> {
+    const held = this.usages.get(harness);
+    if (held && now - held.at < USAGE_TTL_MS) return held.read;
+    const read = (this.harness.accountUsage?.(harness) ?? Promise.resolve({ kind: "unknown" } as const)).catch(
+      (): AccountUsage => ({ kind: "unknown" }),
+    );
+    this.usages.set(harness, { at: now, read });
+    return read;
   }
 
   /** Recover an install or update after the console has been closed or navigated away. */
@@ -139,6 +157,8 @@ export class Brains {
         if (job.view.state === "running") this.update(job, { state: "failed", detail: error.message });
       })
       .finally(() => {
+        // Signed in to another account, or installed afresh: its quota is not the one read before.
+        this.usages.delete(harness);
         this.changed();
         // Keep the outcome around long enough for the console to read it.
         setTimeout(() => this.jobs.delete(job.view.id), 30 * 60_000).unref();
