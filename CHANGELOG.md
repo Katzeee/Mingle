@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.18
+
+- The console and the desktop app answer the keys each platform already uses — Command on macOS, Ctrl on Windows and Linux. ⌘N / Ctrl+N starts a new agent, ⌘, / Ctrl+, opens settings, and ⌘1–⌘9 / Ctrl+1–9 jumps to that agent in the sidebar. In the app, ⌘[ and ⌘] (Alt+← and Alt+→ on Windows and Linux) go back and forward, ⌘W / Ctrl+W closes the window while Mingle keeps running, and ⌘Q / Ctrl+Q quits, asking first while agents are online. Esc backs out of every in-place question and editor, and ⌘Return / Ctrl+Enter submits a multi-line field. The Mac app gains the standard menu bar — Settings, File, Edit, View and Window — and sidebar buttons show their shortcut on hover.
+- Naming a new agent is quicker: a dice button in the name field suggests a companion name, skipping names your other agents already have, and two role templates join the list — Study buddy and Habit coach, in English and Chinese.
+- The sidebar's brand row drops the logo mark; the wordmark stays and still drags the window.
+
 ## 0.1.17
 
 - iMessage keeps the agent in one thread. Every message to yourself is stored twice, once per address, and the agent used to answer in whichever copy Messages wrote first, so its replies jumped between your email and phone-number threads and both sides of each looked mixed up. It now picks the thread from where you wrote from and to: when you write from your number to your Apple ID, your words stay on the right and the agent's land on the left. Its own reflected copies are never read back as yours, even if the invisible marker is lost.
