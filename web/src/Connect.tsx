@@ -284,7 +284,7 @@ function CredentialsFlow({
     .filter((l) => l.trim());
   return (
     <div className="flex flex-col gap-6">
-      <FlowTitle platform={info.platform} title={t("connect.flowTitle", { platform: spaced(platformName) })} />
+      <FlowTitle platform={info.platform} title={t("connect.flowTitle", { platform: platformName })} />
       <form onSubmit={submit}>
         <Steps>
           {lines.map((line, i) => (
@@ -443,7 +443,7 @@ function SetupFlow({ agent, info, onDone }: { agent: AgentView; info: PlatformIn
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
-        <FlowTitle platform={platform} title={t("connect.flowTitle", { platform: spaced(platformName) })} />
+        <FlowTitle platform={platform} title={t("connect.flowTitle", { platform: platformName })} />
         <p className="text-ink2">{t(`${platform}.intro` as MessageKey, { name: agent.name })}</p>
       </div>
       {setup === null ? (
@@ -600,7 +600,7 @@ function DeviceFlow({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
-        <FlowTitle platform={platform} title={t("connect.flowTitle", { platform: spaced(platformName) })} />
+        <FlowTitle platform={platform} title={t("connect.flowTitle", { platform: platformName })} />
         <p className="text-ink2">{t(`${platform}.intro` as MessageKey, { name: agent.name })}</p>
       </div>
       <Steps>
@@ -784,7 +784,7 @@ function QrFlow({
 
   return (
     <div className="flex flex-col gap-6">
-      <FlowTitle platform={info.platform} title={t("connect.flowTitle", { platform: spaced(platformName) })} />
+      <FlowTitle platform={info.platform} title={t("connect.flowTitle", { platform: platformName })} />
       <Steps>
         <Step n={1} state={at(1)} title={t(`${info.platform}.qr1` as MessageKey)}>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -919,9 +919,4 @@ function errorTextFor(t: ReturnType<typeof useI18n>["t"], code: string): string 
   const key = `qr.failed.${code}` as MessageKey;
   const text = t(key);
   return text === key ? t("qr.failed.unknown") : text;
-}
-
-/** Chinese copy leaves a space before a Latin name ("连接到 Slack"), none before a Chinese one ("连接到飞书"). */
-function spaced(name: string): string {
-  return /^[A-Za-z0-9]/.test(name) ? ` ${name}` : name;
 }

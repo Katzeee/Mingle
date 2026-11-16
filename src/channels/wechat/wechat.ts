@@ -468,6 +468,8 @@ export function wechatChannel(options: WechatOptions = {}): Channel {
 
   return {
     platform: "wechat",
+    // The bot is bound to the WeChat account that scanned: only its owner talks to it.
+    trust: "owner",
     onboarding: { kind: "qr" },
 
     async *onboard(_input, signal, context?: OnboardingContext): AsyncIterable<OnboardingEvent> {

@@ -19,9 +19,18 @@ const notAllMeKey = (agentId: string, ids: readonly string[]) =>
  * accounts on several chat apps linked into one person who shares a name and a note. Linking only
  * tells people apart; it grants nothing.
  */
-export function Contacts({ agent, onChanged }: { agent: AgentView; onChanged: () => void }) {
+export function Contacts({
+  agent,
+  connection,
+  onChanged,
+}: {
+  agent: AgentView;
+  /** The bot whose page this is: only the people who wrote to it are listed. */
+  connection: string;
+  onChanged: () => void;
+}) {
   const { t } = useI18n();
-  const { value: entries, reload } = useCached<ContactEntry[]>(
+  const { value: everyone, reload } = useCached<ContactEntry[]>(
     `contacts:${agent.id}`,
     () => api.contacts(agent.id),
     [],
@@ -30,12 +39,14 @@ export function Contacts({ agent, onChanged }: { agent: AgentView; onChanged: ()
   const [all, setAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!entries || entries.length === 0) return null;
+  if (!everyone) return null;
+  const entries = everyone.filter((e) => e.accounts.some((a) => a.connection === connection));
   const key = (e: ContactEntry) => e.person ?? (e.accounts[0] as ContactAccount).id;
   const changed = async () => {
     await reload();
     onChanged();
   };
+  const waiting = new Set(agent.requests.filter((r) => r.kind === "contact").map((r) => r.id));
   const shown = all ? entries : entries.slice(0, FIRST_ROWS);
   return (
     <Section
@@ -46,36 +57,41 @@ export function Contacts({ agent, onChanged }: { agent: AgentView; onChanged: ()
         </span>
       }
     >
-      <AllMe agentId={agent.id} entries={entries} onLinked={changed} />
-      <Group>
-        {shown.map((entry) =>
-          open === key(entry) ? (
-            <Editor
-              key={key(entry)}
-              agent={agent}
-              entry={entry}
-              others={entries.filter((e) => key(e) !== key(entry))}
-              onClose={() => setOpen(null)}
-              onChanged={changed}
-            />
-          ) : (
-            <Row
-              key={key(entry)}
-              agentName={agent.name}
-              entry={entry}
-              onOpen={() => {
-                setOpen(key(entry));
-                setError(null);
-              }}
-            />
-          ),
-        )}
-        {!all && entries.length > FIRST_ROWS ? (
-          <GroupRow onClick={() => setAll(true)} className="text-small text-ink2 hover:text-ink">
-            {t("contacts.showAll", { count: String(entries.length) })}
-          </GroupRow>
-        ) : null}
-      </Group>
+      {entries.length === 0 ? (
+        <p className="-mt-1 px-1 text-small text-ink3">{t("contacts.none", { name: agent.name })}</p>
+      ) : (
+        <Group>
+          {shown.map((entry) =>
+            open === key(entry) ? (
+              <Editor
+                key={key(entry)}
+                agent={agent}
+                entry={entry}
+                others={everyone.filter((e) => key(e) !== key(entry))}
+                onClose={() => setOpen(null)}
+                onChanged={changed}
+              />
+            ) : (
+              <Row
+                key={key(entry)}
+                agentName={agent.name}
+                entry={entry}
+                here={entry.accounts.filter((a) => a.connection === connection)}
+                waiting={entry.accounts.some((a) => waiting.has(a.id))}
+                onOpen={() => {
+                  setOpen(key(entry));
+                  setError(null);
+                }}
+              />
+            ),
+          )}
+          {!all && entries.length > FIRST_ROWS ? (
+            <GroupRow onClick={() => setAll(true)} className="text-small text-ink2 hover:text-ink">
+              {t("contacts.showAll", { count: String(entries.length) })}
+            </GroupRow>
+          ) : null}
+        </Group>
+      )}
       {error ? <p className="px-1 text-small text-red">{error}</p> : null}
     </Section>
   );
@@ -106,11 +122,26 @@ function Icons({ accounts }: { accounts: readonly ContactAccount[] }) {
   );
 }
 
-function Row({ agentName, entry, onOpen }: { agentName: string; entry: ContactEntry; onOpen: () => void }) {
+function Row({
+  agentName,
+  entry,
+  here,
+  waiting,
+  onOpen,
+}: {
+  agentName: string;
+  entry: ContactEntry;
+  /** Their accounts on this bot. */
+  here: readonly ContactAccount[];
+  /** Waiting for the owner to let them in. */
+  waiting: boolean;
+  onOpen: () => void;
+}) {
   const { t } = useI18n();
   const label = useLabel();
   const platforms = [...new Set(entry.accounts.map((a) => t(`platform.${a.platform}` as MessageKey)))];
   const tags = [
+    waiting ? t("contacts.waiting") : here.some((a) => a.access === "blocked") ? t("access.declined") : null,
     entry.accounts.some((a) => a.owner) ? t("contacts.owner") : null,
     entry.accounts.some((a) => a.bot) ? t("contacts.bot") : null,
     entry.accounts.some((a) => a.linkedBy === "agent") ? t("contacts.linkedByAgent", { name: agentName }) : null,
@@ -227,6 +258,7 @@ function Editor({
             account={a}
             alone={entry.accounts.length === 1}
             onBot={(bot) => act(() => api.editContact(agent.id, a.id, { bot }))}
+            onAccess={(access) => act(() => api.setAccess(agent.id, "contact", a.id, access))}
             onUnlink={() => act(() => api.unlinkContact(agent.id, a.id))}
           />
         ))}
@@ -286,12 +318,14 @@ function AccountLine({
   account,
   alone,
   onBot,
+  onAccess,
   onUnlink,
 }: {
   agentName: string;
   account: ContactAccount;
   alone: boolean;
   onBot: (bot: boolean) => void;
+  onAccess: (access: "allowed" | "blocked") => void;
   onUnlink: () => void;
 }) {
   const { t } = useI18n();
@@ -300,8 +334,15 @@ function AccountLine({
     account.owner ? t("contacts.owner") : null,
     account.bot ? t("contacts.bot") : null,
     account.linkedBy === "agent" ? t("contacts.linkedByAgent", { name: agentName }) : null,
+    account.access === "blocked" ? t("access.declined") : null,
   ].filter(Boolean);
   const items = [
+    // The owner always gets through; someone undecided is answered under "Needs you".
+    ...(account.access === "allowed"
+      ? [{ label: t("access.revoke"), danger: true, onSelect: () => onAccess("blocked") }]
+      : account.access === "blocked"
+        ? [{ label: t("access.allow"), onSelect: () => onAccess("allowed") }]
+        : []),
     ...(account.owner
       ? []
       : [{ label: account.bot ? t("contacts.notBot") : t("contacts.markBot"), onSelect: () => onBot(!account.bot) }]),
@@ -327,7 +368,27 @@ function AccountLine({
  * The owner's accounts on several apps, not yet one person: asked once whether they are all the
  * owner. Yes links them, so the console can call every one "you"; no is remembered on this computer.
  */
-function AllMe({
+export function AllMe({ agent, onChanged }: { agent: AgentView; onChanged: () => void }) {
+  const { value: entries, reload } = useCached<ContactEntry[]>(
+    `contacts:${agent.id}`,
+    () => api.contacts(agent.id),
+    [],
+  );
+  if (!entries) return null;
+  return (
+    <AllMeCard
+      key={agent.id}
+      agentId={agent.id}
+      entries={entries}
+      onLinked={async () => {
+        await reload();
+        onChanged();
+      }}
+    />
+  );
+}
+
+function AllMeCard({
   agentId,
   entries,
   onLinked,

@@ -2,7 +2,6 @@ import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { AgentEnv } from "./AgentEnv.tsx";
 import type { Navigate } from "./App.tsx";
 import {
-  type AccessEntry,
   type AccessRequest,
   type Activity,
   type AgentView,
@@ -14,7 +13,15 @@ import {
   type Reminder,
   type Task,
 } from "./api.ts";
-import { Contacts } from "./Contacts.tsx";
+import {
+  BotPage,
+  ChatAppList,
+  ChevronIcon,
+  ClaimCode,
+  connectionDetail,
+  focusChatAppRow,
+  ReconnectButton,
+} from "./ChatApps.tsx";
 import { fetchCached, peek, remember, useCached } from "./cache.ts";
 import { HandoffItem, HandoffSection } from "./Handoff.tsx";
 import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
@@ -33,11 +40,9 @@ import {
   Group,
   GroupRow,
   HarnessIcon,
-  MoreMenu,
   PageHeader,
   PauseIcon,
   PlayIcon,
-  PlusIcon,
   Problem,
   relativeTime,
   Section,
@@ -79,8 +84,13 @@ export function AgentPage({
   const connectionsRef = useRef<HTMLElement>(null);
   const handoffRef = useRef<HTMLDivElement>(null);
   const [handoffRequest, setHandoffRequest] = useState(0);
-  const [manageRequest, setManageRequest] = useState<{ n: number; connectionId?: string }>({ n: 0 });
-  const [landed, setLanded] = useState<string | undefined>();
+  const [manageRequest, setManageRequest] = useState(0);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  // The bot whose own page is open in settings; null shows the settings list.
+  const [bot, setBot] = useState<string | null>(null);
+  const openBot = agent.connections.find((c) => c.id === bot);
+  // Back from a bot's page lands on its row; a removed bot has no row to land on.
+  const [backTo, setBackTo] = useState<string | null>(null);
 
   // From the getting-started card: land on the handoff section of the settings.
   useLayoutEffect(() => {
@@ -89,21 +99,26 @@ export function AgentPage({
     handoffRef.current?.focus({ preventScroll: true });
   }, [handoffRequest]);
 
-  // From the side panel: land on the settings connections (or the one bot clicked), even when already there.
+  // From the side panel's Manage: land on the settings chat apps, even when already there.
   useLayoutEffect(() => {
-    if (manageRequest.n === 0) return;
-    const row = manageRequest.connectionId
-      ? document.getElementById(connectionRowId(manageRequest.connectionId))
-      : null;
-    const target = row ?? connectionsRef.current;
-    target?.scrollIntoView({ block: row ? "center" : "start" });
-    target?.focus({ preventScroll: true });
-    if (!row) return;
-    // A brief tint says which row was opened; it fades back on its own.
-    setLanded(manageRequest.connectionId);
-    const timer = setTimeout(() => setLanded(undefined), 1600);
-    return () => clearTimeout(timer);
+    if (manageRequest === 0) return;
+    connectionsRef.current?.scrollIntoView({ block: "start" });
+    connectionsRef.current?.focus({ preventScroll: true });
   }, [manageRequest]);
+
+  // A bot's page opens at its top; back on the list, its row is where the eye was.
+  useLayoutEffect(() => {
+    if (bot) scrollerRef.current?.scrollTo({ top: 0 });
+  }, [bot]);
+  useLayoutEffect(() => {
+    if (!backTo || bot) return;
+    focusChatAppRow(backTo);
+    setBackTo(null);
+  }, [backTo, bot]);
+  // The bot was removed (here or elsewhere): its page has nothing left to show.
+  useEffect(() => {
+    if (bot && !openBot) setBot(null);
+  }, [bot, openBot]);
 
   // Each resource guards itself: a slow call is not superseded by the next poll, and one
   // request in flight does not hold back the other resource. `fresh` lets a remount read
@@ -168,9 +183,10 @@ export function AgentPage({
     setPauseFailure(null);
     setNotice(null);
     setTab("activity");
-    setManageRequest({ n: 0 });
+    setManageRequest(0);
     setHandoffRequest(0);
-    setLanded(undefined);
+    setBot(null);
+    setBackTo(null);
   }, [agent.id]);
   usePolling(refresh, 2500);
 
@@ -309,44 +325,47 @@ export function AgentPage({
         }
       />
       <div className="flex min-h-0 flex-1">
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
             {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
             {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
             {agent.status === "error" ? <AgentError agent={agent} /> : null}
 
-            {tab === "settings" ? (
+            {tab === "settings" && openBot ? (
+              <BotPage
+                agent={agent}
+                connection={openBot}
+                onBack={() => {
+                  setBackTo(openBot.id);
+                  setBot(null);
+                }}
+                onChanged={() => {
+                  void onChanged();
+                  // A renamed person shows by the new name in the activity right away.
+                  void refreshActivity();
+                }}
+              />
+            ) : tab === "settings" ? (
               <>
                 <Profile agent={agent} onSaved={onChanged} />
+                <RoleEditor agent={agent} onSaved={onChanged} />
+                <Brain agent={agent} onSaved={onChanged} />
                 <section
                   ref={connectionsRef}
                   aria-label={t("agent.chatApps")}
                   tabIndex={-1}
                   className="rounded-card focus:outline-2 focus:outline-offset-4 focus:outline-accent"
                 >
-                  <Connections
+                  <ChatAppList
                     agent={agent}
-                    landed={landed}
+                    onOpen={setBot}
                     onConnect={connect}
                     onChanged={() => {
                       void onChanged();
-                      // A renamed owner shows by the new name in the activity right away.
                       void refreshActivity();
                     }}
                   />
                 </section>
-                <Contacts
-                  key={`contacts-${agent.id}`}
-                  agent={agent}
-                  onChanged={() => {
-                    void onChanged();
-                    // A renamed person shows by the new name in the activity right away.
-                    void refreshActivity();
-                  }}
-                />
-                <AccessSettings agent={agent} onChanged={onChanged} />
-                <RoleEditor agent={agent} onSaved={onChanged} />
-                <Brain agent={agent} onSaved={onChanged} />
                 <AgentEnv agent={agent} />
                 <div ref={handoffRef} tabIndex={-1} className="rounded-card focus:outline-none">
                   <HandoffSection agent={agent} handoffs={handoffs} onSent={() => void refreshActivity()} />
@@ -422,6 +441,7 @@ export function AgentPage({
                     onChanged={onChanged}
                     onHandoff={() => {
                       setTab("settings");
+                      setBot(null);
                       setHandoffRequest((n) => n + 1);
                     }}
                   />
@@ -489,7 +509,8 @@ export function AgentPage({
               agent={agent}
               onManage={(connectionId) => {
                 setTab("settings");
-                setManageRequest((request) => ({ n: request.n + 1, connectionId }));
+                setBot(connectionId ?? null);
+                if (!connectionId) setManageRequest((n) => n + 1);
               }}
             />
           ) : null}
@@ -810,156 +831,6 @@ function AccessRequestItem({
   );
 }
 
-/**
- * How to claim a bot the platform named no owner for: the code, big enough to read off and type,
- * the one-tap link where the platform has one, and how long it lasts. Expired, a button for a new one.
- */
-function ClaimCode({ connection, onChanged }: { connection: ConnectionView; onChanged: () => Promise<void> | void }) {
-  const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const claim = connection.claim;
-  if (!claim) return null;
-  const left = claim.expiresAt ? claim.expiresAt - Date.now() : 0;
-  const code = claim.code && left > 0 ? claim.code : null;
-  const renew = async () => {
-    setBusy(true);
-    setFailure(null);
-    try {
-      await api.claim(connection.id);
-      await onChanged();
-    } catch (error) {
-      setFailure(errorText(t, error));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="flex flex-col gap-2 py-1">
-      <p className="text-small text-ink2">{t(code ? "connection.claimHint" : "connection.claimExpired")}</p>
-      {code ? (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="selectable font-mono text-title3 font-semibold tracking-[0.18em]">{code}</span>
-          {claim.url ? (
-            <a
-              href={claim.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-7 items-center rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
-            >
-              {t("connection.claimOpen", { platform: t(`platform.${connection.platform}` as MessageKey) })}
-            </a>
-          ) : null}
-          <span className="text-caption text-ink3">
-            {t("connection.claimLeft", { minutes: String(Math.min(10, Math.max(1, Math.ceil(left / 60_000)))) })}
-          </span>
-        </div>
-      ) : (
-        <Button small className="self-start" disabled={busy} onClick={renew}>
-          {t("connection.claimNew")}
-        </Button>
-      )}
-      {failure ? <p className="text-caption text-red">{failure}</p> : null}
-    </div>
-  );
-}
-
-/**
- * Who can talk to the agent (docs/spec.md 4.7): one switch to be asked about everyone new, and the
- * people and groups already let in or turned away, so the owner can change their mind.
- */
-function AccessSettings({ agent, onChanged }: { agent: AgentView; onChanged: () => Promise<void> | void }) {
-  const { t } = useI18n();
-  const [entries, setEntries] = useState<AccessEntry[] | null>(null);
-  const [all, setAll] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setEntries(await api.access(agent.id));
-    } catch {
-      setEntries((current) => current ?? []);
-    }
-  }, [agent.id]);
-  // Read again when a request is answered elsewhere (the side panel), as well as on opening.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the count is the signal to read again
-  useEffect(() => {
-    void load();
-  }, [load, agent.requests.length]);
-  const change = async (entry: AccessEntry, access: "allowed" | "blocked") => {
-    setFailure(null);
-    try {
-      await api.setAccess(agent.id, entry.kind, entry.id, access);
-    } catch (error) {
-      setFailure(errorText(t, error));
-    }
-    await load();
-    await onChanged();
-  };
-  const shown = entries && !all ? entries.slice(0, 6) : (entries ?? []);
-  return (
-    <Section title={t("access.title")}>
-      <p className="-mt-1 px-1 text-small text-ink2">{t("access.body", { name: agent.name })}</p>
-      <Group>
-        <GroupRow>
-          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span>{t("access.askAll")}</span>
-              <span className="text-small text-ink2">{t("access.askAllHint")}</span>
-            </span>
-            <input
-              type="checkbox"
-              className="size-4 shrink-0 accent-[var(--accent-btn)]"
-              checked={agent.askAll}
-              onChange={async (e) => {
-                setFailure(null);
-                try {
-                  await api.setAskAll(agent.id, e.target.checked);
-                } catch (error) {
-                  setFailure(errorText(t, error));
-                }
-                await onChanged();
-              }}
-            />
-          </label>
-        </GroupRow>
-        {shown.map((entry) => (
-          <GroupRow key={`${entry.kind}:${entry.id}`}>
-            <PlatformIcon platform={entry.platform} size={22} />
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate" title={entry.name ?? undefined}>
-                {entry.name ?? t("access.unnamed")}
-              </span>
-              <span className="truncate text-caption text-ink2">
-                {t(`platform.${entry.platform}` as MessageKey)} ·{" "}
-                {t(entry.kind === "contact" ? "chat.dm" : "chat.group")}
-              </span>
-            </span>
-            {entry.access === "blocked" ? (
-              <span className="shrink-0 text-small text-ink3">{t("access.declined")}</span>
-            ) : null}
-            <MoreMenu
-              label={t("agent.more")}
-              items={[
-                entry.access === "allowed"
-                  ? { label: t("access.revoke"), danger: true, onSelect: () => void change(entry, "blocked") }
-                  : { label: t("access.allow"), onSelect: () => void change(entry, "allowed") },
-              ]}
-            />
-          </GroupRow>
-        ))}
-      </Group>
-      {entries && entries.length > shown.length ? (
-        <Button variant="ghost" small className="self-start" onClick={() => setAll(true)}>
-          {t("access.showAll", { count: String(entries.length) })}
-        </Button>
-      ) : null}
-      {failure ? <p className="px-1 text-caption text-red">{failure}</p> : null}
-    </Section>
-  );
-}
-
-const connectionRowId = (id: string) => `connection-${id}`;
-
 /** The agent's bots at a glance, in the side panel. Each row opens that bot in settings. */
 function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: (connectionId?: string) => void }) {
   const { t } = useI18n();
@@ -992,46 +863,6 @@ function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: (con
         ))}
       </Group>
     </Section>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="shrink-0 text-ink3" aria-hidden="true">
-      <path
-        d="m4.5 2.5 3.5 3.5-3.5 3.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function connectionDetail(t: ReturnType<typeof useI18n>["t"], c: ConnectionView): string {
-  const key = `connection.detail.${c.detail}` as MessageKey;
-  return t(key) !== key ? t(key) : t("connection.detail.unknown");
-}
-
-/** Try an offline bot again now. Offered on every error: waiting for the automatic retry is never the only way. */
-function ReconnectButton({ connection }: { connection: ConnectionView }) {
-  const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      small
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        await api
-          .reconnect(connection.id)
-          .catch(() => {})
-          .finally(() => setBusy(false));
-      }}
-    >
-      {t("connection.reconnect")}
-    </Button>
   );
 }
 
@@ -1243,150 +1074,6 @@ function WorkRow({
   );
 }
 
-function Connections({
-  agent,
-  landed,
-  onConnect,
-  onChanged,
-}: {
-  agent: AgentView;
-  /** The bot just opened from the side panel. */
-  landed?: string;
-  onConnect: () => void;
-  onChanged: () => void;
-}) {
-  const { t } = useI18n();
-  // Always shown, even with no bot: removing the last one must not remove the way to add one.
-  return (
-    <Section
-      title={t("agent.chatApps")}
-      action={
-        <Button variant="ghost" small onClick={onConnect}>
-          <PlusIcon /> {t("agent.add")}
-        </Button>
-      }
-    >
-      {agent.connections.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-card border border-line bg-card px-4 py-3.5">
-          <p className="text-small text-ink2">{t("connection.none")}</p>
-          <Button variant="primary" small onClick={onConnect}>
-            {t("start.connectAction")}
-          </Button>
-        </div>
-      ) : (
-        <Group>
-          {agent.connections.map((c) => (
-            <ConnectionRow key={c.id} connection={c} highlighted={landed === c.id} onChanged={onChanged} />
-          ))}
-        </Group>
-      )}
-    </Section>
-  );
-}
-
-function ConnectionRow({
-  connection,
-  highlighted,
-  onChanged,
-}: {
-  connection: ConnectionView;
-  highlighted: boolean;
-  onChanged: () => void;
-}) {
-  const { t } = useI18n();
-  const [confirming, setConfirming] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const platform = t(`platform.${connection.platform}` as MessageKey);
-  const owner = connection.ownerContact;
-  // Another bot on this platform has a different owner: name them, or both read as "you".
-  const shared = connection.ownerShared;
-  const hint =
-    connection.state === "error"
-      ? connectionDetail(t, connection)
-      : shared && owner && !owner.name
-        ? t("connection.nameOwnerHint", { platform })
-        : null;
-  return (
-    <GroupRow
-      id={connectionRowId(connection.id)}
-      tabIndex={-1}
-      className={`flex-wrap scroll-my-6 outline-none transition-colors duration-[180ms] ${highlighted ? "bg-accent-tint" : ""}`}
-    >
-      <PlatformIcon platform={connection.platform} size={32} />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium" title={connection.bot ?? undefined}>
-          {connection.bot ?? platform}
-        </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-small text-ink2">
-          <StatusDot state={connection.state} />
-          <span className="truncate">
-            {platform} · {t(`connection.${connection.state}` as MessageKey)}
-            {owner && (owner.name || shared)
-              ? ` · ${owner.name ? t("connection.ownerIs", { name: owner.name }) : t("connection.ownerUnnamed")}`
-              : null}
-          </span>
-        </span>
-      </span>
-      {confirming ? (
-        <span className="flex shrink-0 items-center gap-1.5">
-          <span className="hidden text-small text-ink2 sm:inline">{t("connection.removeAsk")}</span>
-          <Button
-            small
-            variant="danger"
-            disabled={removing}
-            onClick={async () => {
-              setRemoving(true);
-              setFailure(null);
-              try {
-                await api.disconnect(connection.id);
-                onChanged();
-              } catch (error) {
-                setFailure(errorText(t, error));
-                setConfirming(false);
-              } finally {
-                setRemoving(false);
-              }
-            }}
-          >
-            {t("connection.removeYes")}
-          </Button>
-          <Button small variant="ghost" onClick={() => setConfirming(false)}>
-            {t("agent.cancel")}
-          </Button>
-        </span>
-      ) : (
-        <span className="flex shrink-0 items-center gap-1">
-          {connection.state === "error" ? <ReconnectButton connection={connection} /> : null}
-          {connection.invite ? (
-            <a
-              href={connection.invite}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-7 items-center rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
-            >
-              {t("connection.invite")}
-            </a>
-          ) : null}
-          <MoreMenu
-            label={t("agent.more")}
-            items={[{ label: t("connection.remove"), danger: true, onSelect: () => setConfirming(true) }]}
-          />
-        </span>
-      )}
-      {failure ? <p className="w-full pl-11 text-caption text-red">{failure}</p> : null}
-      {hint ? (
-        <p className={`w-full pl-11 text-caption ${connection.state === "error" ? "text-red" : "text-ink3"}`}>{hint}</p>
-      ) : null}
-      {connection.state === "connected" && connection.claim ? (
-        <div className="w-full pl-11">
-          <ClaimCode connection={connection} onChanged={onChanged} />
-        </div>
-      ) : null}
-    </GroupRow>
-  );
-}
-
 function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState(false);
@@ -1442,10 +1129,22 @@ function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void 
             </Button>
           </div>
         </div>
-      ) : (
+      ) : agent.role.trim() ? (
         <div className="selectable rounded-card border border-line bg-card px-4 py-3 whitespace-pre-wrap wrap-anywhere">
-          {agent.role.trim() ? agent.role.trim() : <span className="text-ink3">{t("agent.roleEmpty")}</span>}
+          {agent.role.trim()}
         </div>
+      ) : (
+        // Empty, the card is the way to write one, as it says.
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(true);
+            setSaved(false);
+          }}
+          className="rounded-card border border-line bg-card px-4 py-3 text-left text-ink3 transition-colors duration-[120ms] hover:bg-bg2 focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {t("agent.roleEmpty")}
+        </button>
       )}
       {failure ? <p className="px-1 text-small text-red">{failure}</p> : null}
       {saved ? <p className="px-1 text-small text-ink2">{t("agent.roleSaved")}</p> : null}

@@ -101,6 +101,8 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
 
   return {
     platform: "imessage",
+    // The owner's own self-chat: nobody else reaches it.
+    trust: "owner",
     onboarding: { kind: "credentials", fields: [] },
     setup: imessageSetup(dbPath, runScript, options.setup ?? {}),
 

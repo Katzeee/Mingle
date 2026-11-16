@@ -24,6 +24,11 @@ describe("gate", () => {
     expect(gate({ ...base, trust: "org", askAll: true })).toBe("ask");
   });
 
+  it("asks about anyone but the owner on a bot that is the owner's own account", () => {
+    expect(gate({ ...base, trust: "owner" })).toBe("ask");
+    expect(gate({ ...base, trust: "owner", isOwner: true })).toBe("deliver");
+  });
+
   it("goes by what the owner decided, for a person in a direct chat and for a group", () => {
     expect(gate({ ...base, contact: "allowed" })).toBe("deliver");
     expect(gate({ ...base, contact: "blocked", trust: "org" })).toBe("drop");
