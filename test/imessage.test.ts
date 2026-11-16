@@ -61,7 +61,8 @@ class FakeMessages {
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT);
+      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT,
+        last_addressed_handle TEXT);
       CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, attributedBody BLOB, date INTEGER,
         handle_id INTEGER, is_from_me INTEGER, associated_message_type INTEGER DEFAULT 0,
         item_type INTEGER DEFAULT 0, service TEXT, account TEXT, destination_caller_id TEXT);
@@ -81,6 +82,16 @@ class FakeMessages {
     );
     this.chats.set(guid, rowid);
   }
+  /** The address Messages last saw written to in a chat, and so answers from. */
+  addressed(guid: string, handle: string): void {
+    this.db.prepare("UPDATE chat SET last_addressed_handle = ? WHERE guid = ?").run(handle, guid);
+  }
+  sendsFrom(guid: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT chat_identifier AS id, last_addressed_handle AS from_ FROM chat WHERE guid = ?")
+      .get(guid) as { id: string; from_: string | null } | undefined;
+    return row ? (row.from_ ?? row.id) : undefined;
+  }
   /** Real self-chat rows keep the text only in attributedBody; `fromMe` defaults to true. */
   add(
     chat: string,
@@ -91,6 +102,8 @@ class FakeMessages {
       at?: number;
       tapback?: boolean;
       file?: { path: string; name: string; mime: string; size: number };
+      /** destination_caller_id: the address sent from, or received at. */
+      to?: string | null;
     },
   ): void {
     const fromMe = m.fromMe ?? true;
@@ -107,7 +120,7 @@ class FakeMessages {
           fromMe ? 1 : 0,
           m.tapback ? 2000 : 0,
           `E:${ME}`,
-          fromMe ? MY_PHONE : null,
+          m.to === undefined ? (fromMe ? MY_PHONE : null) : m.to,
         ).lastInsertRowid,
     );
     this.db
@@ -124,8 +137,11 @@ class FakeMessages {
   }
 }
 
-/** Stands in for osascript: records calls and, like Messages, writes what it sends into chat.db. */
-function fakeScripts(messages: FakeMessages, opts: { mark?: boolean } = {}) {
+/**
+ * Stands in for osascript: records calls and, like Messages, writes what it sends into chat.db, as
+ * sent in the chat it went to and as received in the thread of the address it went out from.
+ */
+function fakeScripts(messages: FakeMessages, opts: { mark?: boolean; from?: string } = {}) {
   const calls: { script: string; args: readonly string[] }[] = [];
   let failWith: Error | undefined;
   let accounts = `E:${ME}\nE:${ME}\n`;
@@ -144,7 +160,13 @@ function fakeScripts(messages: FakeMessages, opts: { mark?: boolean } = {}) {
         text: "￼",
         file: { path, name: basename(path), mime: "text/plain", size: 1 },
       });
-    } else messages.add(chat, { guid: `sent-${++n}`, text: keep(args[0] ?? "") });
+    } else {
+      const to = chat.split(";").at(-1) ?? "";
+      const from = opts.from ?? messages.sendsFrom(chat) ?? to;
+      const text = keep(args[0] ?? "");
+      messages.add(chat, { guid: `sent-${++n}`, text, to: from });
+      messages.add(`iMessage;-;${from}`, { guid: `echo-${n}`, text, fromMe: false, to });
+    }
     return "";
   };
   return {
@@ -439,6 +461,63 @@ describe("imessage channel", () => {
     await until(() => rec.messages.length === 2);
     await new Promise((r) => setTimeout(r, 100));
     expect(rec.messages.map((m) => m.platformId)).toEqual(["copy-1", "again"]);
+  });
+
+  describe("which side each message shows on", () => {
+    /** The owner on their phone writes from their number to their Apple ID: one message, two copies. */
+    const ownerWrites = (guid: string, text: string, receivedFirst = false) => {
+      const at = Date.now();
+      const sent = () => messages.add(SELF, { guid: `${guid}-sent`, text, at, to: MY_PHONE });
+      const received = () =>
+        messages.add(SELF_BY_PHONE, { guid: `${guid}-received`, text, at: at + 300, fromMe: false, to: ME });
+      if (receivedFirst) received();
+      sent();
+      if (!receivedFirst) received();
+    };
+
+    it("answers from the address the owner wrote to, so replies land opposite the owner in their thread", async () => {
+      // Messages answers in the phone-number thread from the address written to there: the Apple ID.
+      messages.addressed(SELF_BY_PHONE, ME);
+      const { live, rec, scripts } = await connect();
+      ownerWrites("a", "hello");
+      ownerWrites("b", "and again", true);
+      await until(() => rec.messages.length === 2);
+      // Whichever copy Messages wrote first, the answer goes to the same thread.
+      expect(rec.messages.map((m) => m.chat.platformId)).toEqual([SELF_BY_PHONE, SELF_BY_PHONE]);
+
+      await live.send({ chat: { platformId: SELF_BY_PHONE, kind: "dm" }, text: "Hi" });
+      expect(scripts.calls.at(-1)?.args[1]).toBe(SELF_BY_PHONE);
+      // Its received copy is in the owner's thread, on the left; neither copy is read back.
+      const echo = messages.db
+        .prepare(
+          `SELECT m.is_from_me AS fromMe FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID
+           JOIN chat c ON c.ROWID = j.chat_id WHERE c.guid = ? AND m.guid LIKE 'echo-%'`,
+        )
+        .get(SELF) as { fromMe: number };
+      expect(echo.fromMe).toBe(0);
+      await live.messageUser?.(ME, "Reminder");
+      expect(scripts.calls.at(-1)?.args[1]).toBe(SELF_BY_PHONE);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(rec.messages).toHaveLength(2);
+    });
+
+    it("answers in the thread written to when Messages would send from the owner's own address", async () => {
+      const scripts = fakeScripts(messages, { from: MY_PHONE });
+      const { live, rec } = await connect(scripts);
+      ownerWrites("a", "hello");
+      await until(() => rec.messages.length === 1);
+      expect(rec.messages[0]?.chat.platformId).toBe(SELF);
+
+      // Messages said it would answer from the Apple ID, but a send shows the number: trust the send.
+      messages.addressed(SELF_BY_PHONE, ME);
+      ownerWrites("b", "hello again");
+      await until(() => rec.messages.length === 2);
+      expect(rec.messages[1]?.chat.platformId).toBe(SELF_BY_PHONE);
+      await live.send({ chat: { platformId: SELF_BY_PHONE, kind: "dm" }, text: "Hi" });
+      ownerWrites("c", "third");
+      await until(() => rec.messages.length === 3);
+      expect(rec.messages[2]?.chat.platformId).toBe(SELF);
+    });
   });
 
   it("maps send failures without retrying what may have gone out", async () => {

@@ -3,6 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## Unreleased
+
+- iMessage keeps the agent in one thread. Every message to yourself is stored twice, once per address, and the agent used to answer in whichever copy Messages wrote first, so its replies jumped between your email and phone-number threads and both sides of each looked mixed up. It now picks the thread from where you wrote from and to: when you write from your number to your Apple ID, your words stay on the right and the agent's land on the left. Its own reflected copies are never read back as yours, even if the invisible marker is lost.
+
 ## 0.1.16
 
 - Feishu bots join groups like a person: apps created by scanning now ask for "all group messages" (`im:message.group_msg`) by default, so every group message is kept as background the agent can read — with the `unseen` count on the next trigger — and group history works through the messages API, instead of the bot only hearing @mentions.
