@@ -143,7 +143,14 @@ function Shell() {
   if (agents !== null) {
     if (view.kind === "settings") page = <SettingsPage version={version} />;
     else if (view.kind === "new")
-      page = <NewAgent first={agents.length === 0} onNavigate={navigate} onCreated={created} />;
+      page = (
+        <NewAgent
+          first={agents.length === 0}
+          taken={agents.map((a) => a.name)}
+          onNavigate={navigate}
+          onCreated={created}
+        />
+      );
     else if (view.kind === "connect" && current)
       page = <ConnectPage agent={current} platform={view.platform} onNavigate={navigate} onChanged={refresh} />;
     else if (current) page = <AgentPage key={current.id} agent={current} onNavigate={navigate} onChanged={refresh} />;

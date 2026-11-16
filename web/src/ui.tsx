@@ -665,6 +665,13 @@ export const MoreIcon = (p: { className?: string }) => (
     <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth="2.2" />
   </Icon>
 );
+/** A dice face: pick a random value (a generated name). */
+export const DiceIcon = (p: { className?: string }) => (
+  <Icon {...p}>
+    <rect x="2.5" y="2.5" width="11" height="11" rx="2.75" />
+    <path d="M5.7 5.7h.01M10.3 5.7h.01M5.7 10.3h.01M10.3 10.3h.01" strokeWidth="2" />
+  </Icon>
+);
 export const ArrowUpRight = (p: { className?: string }) => (
   <Icon {...p} size={12}>
     <path d="M5 11 11 5M6 5h5v5" />

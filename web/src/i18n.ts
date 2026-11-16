@@ -7,6 +7,7 @@ const en = {
   "agents.new": "New agent",
   "create.name": "Name",
   "create.namePlaceholder": "Alex",
+  "create.nameGenerate": "Suggest a name",
   "create.role": "Role",
   "create.rolePlaceholder":
     "Who it is and what it does. For example: helps our hiking group plan routes and check the weather.",
@@ -387,6 +388,12 @@ const en = {
   "role.translator": "Translator",
   "role.translator.text":
     "A translator. Translate what people send you between Chinese and English, keeping the meaning and the tone.",
+  "role.tutor": "Study buddy",
+  "role.tutor.text":
+    "My study partner. Help me learn new things: explain concepts simply, quiz me, and keep track of how far I have come.",
+  "role.coach": "Habit coach",
+  "role.coach.text":
+    "My habit coach. Check in with me on my goals and daily habits, nudge me when I fall behind and cheer the small wins.",
   "brain.harness": "Harness",
   "brain.looking": "Looking for harnesses on this computer…",
   "brain.none": "No harness found on this computer",
@@ -684,6 +691,7 @@ const zh: Record<MessageKey, string> = {
   "agents.new": "新建 Agent",
   "create.name": "名字",
   "create.namePlaceholder": "Alex",
+  "create.nameGenerate": "随机取个名字",
   "create.role": "角色",
   "create.rolePlaceholder": "它是谁、做什么。例如：帮我们的徒步群规划路线、查天气。",
   "create.brain": "大脑",
@@ -1040,6 +1048,10 @@ const zh: Record<MessageKey, string> = {
   "role.coder.text": "我的编程搭档。在这台电脑上读代码、跑命令、修 bug。改动之前先说明打算怎么做。",
   "role.translator": "翻译",
   "role.translator.text": "专业翻译。把大家发来的内容在中英文之间互译，保留原意和语气。",
+  "role.tutor": "学习搭档",
+  "role.tutor.text": "我的学习搭档。陪我学新东西：把概念讲得简单明白，出题考我，记下我学到哪儿了。",
+  "role.coach": "习惯教练",
+  "role.coach.text": "我的习惯教练。跟进我的目标和每天的习惯打卡，松懈时提醒我，有进步就为我鼓劲。",
   "brain.harness": "Harness",
   "brain.looking": "正在查找这台电脑上的 harness…",
   "brain.none": "这台电脑上没有找到 harness",
