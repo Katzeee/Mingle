@@ -10,7 +10,7 @@ site/scripts/build.mjs         renders site/dist from copy.mjs and a release sna
 site/scripts/screenshots.mjs   seeds a throwaway Mingle and shoots the console into site/img, light and dark; refreshes site/icons from OAR
 site/scripts/review.mjs        screenshots the built site section by section, desktop and phone, into .site-review/page/
 site/scripts/demo-review.mjs   plays every demo scene in headless Chrome, tapping Send, into .site-review/demo/
-site/styles.css, site/main.js  the look (DESIGN.md's tokens) and the few behaviors (OS download, copy, motion, the hub, the phones, the demo player)
+site/styles.css, site/main.js  the look (DESIGN.md's tokens) and the few behaviors (OS download, copy, motion, the phones, the demo player)
 site/wrangler.jsonc            deploys site/dist as a static-assets Worker on mingle.build and www.mingle.build
 ```
 

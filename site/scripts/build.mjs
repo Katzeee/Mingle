@@ -78,6 +78,27 @@ const shot = (name, lang, alt, cls = "") => `
       <img src="/img/${name}-${lang}-light.png" alt="${esc(alt)}" width="2560" height="1600" loading="lazy" decoding="async">
     </picture>
   </figure>`;
+const githubIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.2-3.1 0-.4-.5-1.6.2-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z"/></svg>`;
+// The hero button wears this OS's mark (main.js sets data-os); Linux and phones get a plain arrow.
+const osIcons = [
+  [
+    "mac",
+    '<path d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9 0 0-2.7-1-2.7-4.1ZM13.9 5c.7-.9 1.2-2 1.1-3.2-1 0-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.1 1.1.1 2.3-.6 3-1.5Z"/>',
+  ],
+  [
+    "windows",
+    '<path d="M3 5.1 10.4 4v7.1H3V5.1Zm8.3-1.2L21 2.5v8.6h-9.7V3.9ZM3 12.9h7.4V20L3 18.9v-6Zm8.3 0H21v8.6l-9.7-1.4v-7.2Z"/>',
+  ],
+  [
+    "any",
+    '<path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  ],
+]
+  .map(
+    ([os, path]) =>
+      `<svg class="os-icon os-${os}" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">${path}</svg>`,
+  )
+  .join("");
 const codeBlock = (text, t, label) => `
   <div class="code">
     <div class="code-label"><span>${label}</span><button class="copy" type="button" data-copy="${esc(text)}" data-done="${esc(t.cli.copied)}">${t.cli.copy}</button></div>
@@ -124,10 +145,11 @@ function phone(key, t, chat, msgs, cls = "") {
   </div>`;
 }
 
-// Step 3: Alex answering in a Telegram group.
-function talkPhone(key, t) {
+// The hero's phone: Alex answering in a group, in WeChat for Chinese readers and Telegram for English ones.
+function heroPhone(key, t) {
   const c = t.chat;
-  return phone(key, t, { app: "telegram", name: c.group, members: 5 }, [
+  const app = key === "zh" ? "wechat" : "telegram";
+  return phone(key, t, { app, name: c.group, members: 5 }, [
     ["in", c.asker, c.ask, { react: "👀" }],
     ["in", "agent", c.reply, { typing: true }],
     ["in", c.follower, c.follow],
@@ -135,54 +157,61 @@ function talkPhone(key, t) {
   ]);
 }
 
-// The core idea, drawn: any harness on the left, any chat app on the right, one agent in between.
-function hub(t) {
-  const brains = harnesses
-    .map(
-      ([id, name]) =>
-        `<li data-name="${esc(name)}" title="${esc(name)}"><span class="brain-icon"><img class="on-light" src="/icons/${id}-light.svg" alt=""><img class="on-dark" src="/icons/${id}-dark.svg" alt=""></span><span class="hub-name">${name}</span></li>`,
-    )
-    .join("");
-  const apps = platformOrder
-    .map(
-      (id) =>
-        `<li data-name="${esc(t.platforms[id])}" title="${esc(t.platforms[id])}">${platformIcon(id, 24)}<span class="hub-name">${t.platforms[id]}</span></li>`,
-    )
-    .join("");
+const brainIcon = (id) =>
+  `<span class="brain-icon"><img class="on-light" src="/icons/${id}-light.svg" alt=""><img class="on-dark" src="/icons/${id}-dark.svg" alt=""></span>`;
+
+// Under the hero: every harness and every chat app, as a plain list of marks and names.
+function logos(t) {
+  const row = (label, items) =>
+    `<div class="logos-row"><p class="logos-label">${label}</p><ul>${items.join("")}</ul></div>`;
   return `
-  <div class="hub rise" data-hub>
-    <div class="hub-side"><p class="hub-label">${t.hub.brains}</p><ul class="hub-list" data-brains>${brains}</ul></div>
-    <div class="hub-wire" aria-hidden="true"><i></i></div>
-    <div class="hub-core">
-      <span class="av av-agent hub-avatar" aria-hidden="true">A</span>
-      <b>Alex</b>
-      <small>${t.hub.agent} · ${t.hub.where}</small>
-      <p class="hub-pair" aria-hidden="true"><span data-pair-brain>${harnesses[0][1]}</span><i>⇄</i><span data-pair-app>${t.platforms.wechat}</span></p>
-    </div>
-    <div class="hub-wire hub-wire-late" aria-hidden="true"><i></i></div>
-    <div class="hub-side"><p class="hub-label">${t.hub.apps}</p><ul class="hub-list" data-apps>${apps}</ul></div>
+<section class="logos">
+  <div class="wrap">
+    ${row(
+      t.logos.harnesses,
+      harnesses.map(([id, name]) => `<li>${brainIcon(id)}${name}</li>`),
+    )}
+    ${row(
+      t.logos.apps,
+      platformOrder.map((id) => `<li>${platformIcon(id, 22)}${t.platforms[id]}</li>`),
+    )}
   </div>
-  <p class="hub-caption rise">${t.hub.caption}</p>`;
+</section>`;
 }
 
-// Privacy, drawn: chat apps, your computer, your model provider, and no Mingle server anywhere in the path.
-const laptop =
-  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>';
-const spark =
-  '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3c.6 4.6 2.4 6.4 7 7-4.6.6-6.4 2.4-7 7-.6-4.6-2.4-6.4-7-7 4.6-.6 6.4-2.4 7-7Z"/><path d="M19 16c.2 1.5.8 2.1 2.3 2.3-1.5.2-2.1.8-2.3 2.3-.2-1.5-.8-2.1-2.3-2.3 1.5-.2 2.1-.8 2.3-2.3Z"/></svg>';
-const serverOff =
-  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M3 3l18 18"/></svg>';
+// No server, drawn: your agent → Mingle on your computer → your chat apps. Nothing in a cloud of ours.
 function flow(t) {
   const f = t.privacy.flow;
+  const side = (title, items, note) => `
+      <div class="flow-side">
+        <p class="flow-label">${title}</p>
+        <ul>${items.join("")}</ul>
+        <p class="flow-note">${note}</p>
+      </div>`;
+  const arrow = '<span class="flow-arrow" aria-hidden="true">→</span>';
   return `
-    <div class="flow reveal" aria-label="${esc(f.none)}">
-      <div class="flow-node"><span class="flow-apps">${["wechat", "telegram", "slack"].map((id) => platformIcon(id, 30)).join("")}</span><b>${f.apps}</b></div>
-      <span class="flow-line" aria-hidden="true"></span>
-      <div class="flow-node flow-me"><span class="flow-glyph">${laptop}</span><b>${f.computer}</b><small>${f.computerSub}</small></div>
-      <span class="flow-line" aria-hidden="true"></span>
-      <div class="flow-node"><span class="flow-glyph">${spark}</span><b>${f.model}</b></div>
-    </div>
-    <p class="flow-none reveal">${serverOff}${f.none}</p>`;
+    <div class="flow reveal">
+      ${side(
+        f.brains,
+        harnesses.slice(0, 5).map(([id, name]) => `<li>${brainIcon(id)}${name}</li>`),
+        f.brainsNote,
+      )}
+      ${arrow}
+      <div class="flow-core">
+        <img src="/favicon.svg" alt="" width="44" height="44">
+        <b>Mingle</b>
+        <code>${f.where}</code>
+        <ul>${f.rows.map(([k, v]) => `<li><span>${k}</span><span>${v}</span></li>`).join("")}</ul>
+      </div>
+      ${arrow}
+      ${side(
+        f.apps,
+        ["wechat", "feishu", "slack", "telegram", "discord"].map(
+          (id) => `<li>${platformIcon(id, 20)}${t.platforms[id]}</li>`,
+        ),
+        f.appsNote,
+      )}
+    </div>`;
 }
 
 // The interactive demo (site/scripts/demo.mjs): the frame is static, main.js plays the scenes from the inline JSON.
@@ -258,13 +287,19 @@ function page(key) {
     .map(([id, label]) => `<a href="#${id}">${label}</a>`)
     .join("");
   const dl = (os) =>
-    `<div class="dl"><b>${t.downloadFor[os]}</b>${downloads[os].map(([label, href]) => `<a href="${href}">${label}</a>`).join("")}</div>`;
+    `<div class="dl"><b>${t.alsoFor[os]}</b><div>${downloads[os].map(([label, href]) => `<a href="${href}">${label}</a>`).join("")}</div></div>`;
+  // Under the hero: three harnesses, each in a different chat app. Any one goes with any other.
+  const pairs = [
+    ["claude", "Claude Code", key === "zh" ? "wechat" : "slack"],
+    ["codex", "Codex", "feishu"],
+    ["cursor", "Cursor", "telegram"],
+  ];
   const steps = t.how.steps
     .map(
       (s, i) => `
       <li class="step reveal">
         <div class="step-text"><span class="num">${i + 1}</span><h3>${s.title}</h3><p>${s.body}</p></div>
-        ${s.img ? shot(s.img, lang, s.alt) : talkPhone(key, t)}
+        ${shot(s.img, lang, s.alt)}
       </li>`,
     )
     .join("");
@@ -301,7 +336,7 @@ ${Object.values(copy)
     <nav class="nav-links">${navLinks}</nav>
     <div class="nav-end">
       <div class="langs">${langLinks}</div>
-      <a class="icon-link" href="${REPO}" aria-label="GitHub"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.2-3.1 0-.4-.5-1.6.2-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z"/></svg></a>
+      <a class="icon-link" href="${REPO}" aria-label="GitHub">${githubIcon}</a>
       <a class="btn btn-small btn-primary" href="#download">${t.download}</a>
     </div>
   </div>
@@ -309,31 +344,41 @@ ${Object.values(copy)
 
 <main>
 <section class="hero">
-  <div class="wrap">
-    <p class="eyebrow rise">${t.hero.eyebrow} · v${version}</p>
-    <h1 class="rise">${t.hero.title}</h1>
-    <p class="lead rise">${t.hero.lead}</p>
-    <div class="cta rise">
-      <a class="btn btn-primary" data-os-download href="${downloads.mac[0][1]}"
-         data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
-         data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${t.downloadFor.mac}</a>
-      <a class="btn" href="#cli">${t.installTerminal}</a>
+  <div class="wrap hero-grid">
+    <div class="hero-text">
+      <h1 class="rise">${t.hero.title}</h1>
+      <p class="lead rise">${t.hero.lead}</p>
+      <ul class="pairs rise" aria-label="${esc(t.logos.harnesses)} → ${esc(t.logos.apps)}">${pairs
+        .map(
+          ([id, name, app]) =>
+            `<li>${brainIcon(id)}<b>${name}</b><span class="pair-arrow" aria-hidden="true">→</span>${platformIcon(app, 18)}${t.platforms[app]}</li>`,
+        )
+        .join("")}</ul>
+      <div class="cta rise">
+        <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
+           data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
+           data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
+        <a class="btn" href="#cli">${t.installTerminal}</a>
+      </div>
+      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
     </div>
-    <p class="also rise" data-also data-prefix="${esc(t.alsoFor.prefix)}" data-and="${esc(t.alsoFor.and)}"
-       data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}"><a href="#download">${t.alsoFor.all}</a></p>
-    <p class="meta rise">${t.hero.meta}</p>
-    ${hub(t)}
+    <div class="hero-stage rise">
+      ${shot("agent", lang, t.how.steps[2].alt, "hero-window")}
+      ${heroPhone(key, t).replace("phone phone-static ", "phone phone-static hero-phone ")}
+    </div>
   </div>
 </section>
 
-<section id="privacy" class="section tint privacy">
+${logos(t)}
+
+<section id="privacy" class="section">
   <div class="wrap">
     <p class="eyebrow">${t.privacy.eyebrow}</p>
     <h2>${t.privacy.title}</h2>
     <p class="lead">${t.privacy.lead}</p>
     ${flow(t)}
-    <ul class="grid grid-2">
-      ${t.privacy.items.map(([h, p]) => `<li class="card reveal"><h3>${h}</h3><p>${p}</p></li>`).join("")}
+    <ul class="table table-2 reveal">
+      ${t.privacy.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
     <p class="note">${t.privacy.note}</p>
   </div>
@@ -358,8 +403,8 @@ ${Object.values(copy)
           `<div class="memory-link" aria-hidden="true"><span class="av av-agent link-avatar">A</span><small>${t.agent.link}</small></div>`,
         )}
     </div>
-    <ul class="grid grid-3 points">
-      ${t.agent.points.map(([h, p]) => `<li class="card reveal"><h3>${h}</h3><p>${p}</p></li>`).join("")}
+    <ul class="table table-3 reveal">
+      ${t.agent.points.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
   </div>
 </section>
@@ -374,20 +419,17 @@ ${demoSection(key, t)}
   </div>
 </section>
 
-<section id="brains" class="section tint">
-  <div class="wrap">
-    <p class="eyebrow">${t.brains.eyebrow}</p>
-    <h2>${t.brains.title}</h2>
-    <p class="lead">${t.brains.lead}</p>
-    <ul class="brains reveal">
-      ${harnesses
-        .map(
-          ([id, name]) =>
-            `<li><span class="brain-icon"><img class="on-light" src="/icons/${id}-light.svg" alt=""><img class="on-dark" src="/icons/${id}-dark.svg" alt=""></span>${name}</li>`,
-        )
-        .join("")}
+<section id="brains" class="section">
+  <div class="wrap split">
+    <div>
+      <p class="eyebrow">${t.brains.eyebrow}</p>
+      <h2>${t.brains.title}</h2>
+      <p class="lead">${t.brains.lead}</p>
+      <p class="note">${t.brains.note}</p>
+    </div>
+    <ul class="lines reveal">
+      ${t.brains.points.map(([h, p]) => `<li><b>${h}</b> ${p}</li>`).join("")}
     </ul>
-    <p class="note">${t.brains.note}</p>
   </div>
 </section>
 
@@ -395,13 +437,13 @@ ${demoSection(key, t)}
   <div class="wrap">
     <p class="eyebrow">${t.details.eyebrow}</p>
     <h2>${t.details.title}</h2>
-    <ul class="grid grid-3">
-      ${t.details.items.map(([h, p]) => `<li class="card reveal"><h3>${h}</h3><p>${p}</p></li>`).join("")}
+    <ul class="table table-3 reveal">
+      ${t.details.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
   </div>
 </section>
 
-<section id="cli" class="section tint">
+<section id="cli" class="section">
   <div class="wrap">
     <p class="eyebrow">${t.cli.eyebrow}</p>
     <h2>${t.cli.title}</h2>
@@ -413,7 +455,6 @@ ${demoSection(key, t)}
         ${codeBlock(fromSource, t, t.cli.source)}
       </div>
       <div class="terminal reveal" aria-label="mingle">
-        <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i></div>
         <pre><code>${t.cli.commands
           .map(
             ([cmd, note]) =>
@@ -431,6 +472,12 @@ ${demoSection(key, t)}
     <img class="end-icon" src="/favicon.svg" alt="" width="64" height="64">
     <h2>${t.end.title}</h2>
     <p class="lead">${t.end.lead}</p>
+    <div class="cta">
+      <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
+         data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
+         data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
+      <a class="btn" href="${REPO}">${githubIcon}${t.end.github}</a>
+    </div>
     <div class="dls">${dl("mac")}${dl("windows")}${dl("linux")}</div>
     <p class="note">${t.end.installation} <a href="${releaseURL}">${t.end.releaseNotes} →</a></p>
   </div>
