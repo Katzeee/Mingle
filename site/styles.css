@@ -241,9 +241,9 @@ h3 {
 }
 .hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
-  gap: 48px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px 56px;
+  align-items: end;
 }
 .eyebrow {
   margin: 0 0 14px;
@@ -274,7 +274,7 @@ h2 span {
   margin: 20px 0 0;
 }
 .hero .lead {
-  margin-top: 24px;
+  margin-top: 0;
 }
 .pairs {
   display: flex;
@@ -326,30 +326,8 @@ h2 span {
 .meta a:hover {
   color: var(--ink);
 }
-.hero-stage {
-  position: relative;
-  height: 600px;
-}
-.hero-window {
-  position: absolute;
-  top: 40px;
-  left: 90px;
-  width: 760px;
-  margin: 0;
-}
-.hero-phone .im-app > span:not(.app-icon) {
-  display: none;
-}
-.hero-phone .im-app {
-  padding: 4px;
-}
-.hero-phone {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 300px;
-  height: 600px;
-  box-shadow: var(--shadow-lg);
+.window.hero-shot {
+  margin-top: 64px;
 }
 
 /* A window around a screenshot */
@@ -547,6 +525,7 @@ html:not(.js) .demo-section {
   display: none;
 }
 .demo-grid {
+  margin-top: 48px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
   gap: 64px;
@@ -1464,34 +1443,29 @@ html:not(.js) .demo-section {
   }
 }
 
-/* The same memory in two apps: two phones, one Alex between them. */
-.memory {
-  display: grid;
-  grid-template-columns: minmax(0, 340px) auto minmax(0, 340px);
-  justify-content: center;
-  gap: 32px;
-  align-items: center;
-  margin-top: 56px;
-}
-.memory-link {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  width: 120px;
-  color: var(--ink3);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: center;
-}
-.link-avatar {
-  --size: 44px;
-  font-size: 18px;
-}
-
 /* Phones with a fixed conversation (site/scripts/build.mjs phone()): newest at the bottom, like a real chat. */
 .phone-static {
   height: 520px;
   box-shadow: var(--shadow-lg);
+}
+.step .phone {
+  width: 100%;
+  max-width: 360px;
+  height: 600px;
+  justify-self: center;
+}
+/* A cropped piece of the console, framed like a card. */
+.crop {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+}
+.crop img {
+  width: 100%;
+  height: auto;
 }
 .phone-static .im-log {
   justify-content: flex-end;
@@ -1855,17 +1829,8 @@ html:not(.js) .phone-static .rx .chip {
   .hero-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .hero-stage {
-    height: 560px;
-    max-width: 640px;
-  }
-  .hero-window {
-    left: 110px;
-    width: 640px;
-  }
-  .hero-phone {
-    height: 560px;
-    width: 290px;
+  .window.hero-shot {
+    margin-top: 48px;
   }
   .step,
   .step:nth-child(even) {
@@ -1874,16 +1839,6 @@ html:not(.js) .phone-static .rx .chip {
   }
   .step:nth-child(even) .step-text {
     order: 0;
-  }
-  .memory {
-    grid-template-columns: minmax(0, 360px);
-    gap: 20px;
-  }
-  .memory-link {
-    width: auto;
-    grid-auto-flow: column;
-    justify-content: center;
-    align-items: center;
   }
   .demo-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1941,17 +1896,9 @@ html:not(.js) .phone-static .rx .chip {
   .cta .btn {
     flex: 1 1 100%;
   }
-  .hero-stage {
-    height: 520px;
-  }
-  .hero-window {
-    display: none;
-  }
-  .hero-phone {
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(320px, 100%);
-    height: 520px;
+  .window.hero-shot {
+    margin-top: 40px;
+    border-radius: 10px;
   }
   .section {
     padding: 80px 0;
