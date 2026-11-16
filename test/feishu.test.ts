@@ -1,10 +1,17 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NormalizedMessage } from "@larksuiteoapi/node-sdk";
+import type { LarkChannelOptions, NormalizedMessage } from "@larksuiteoapi/node-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelEvents, ConnectionState, InboundMessage, OnboardingEvent } from "../src/channels/channel.ts";
-import { type FeishuApi, feishuChannel, type LarkChannelLike, toInbound } from "../src/channels/feishu/feishu.ts";
+import {
+  FEISHU_SCOPES,
+  type FeishuApi,
+  feishuChannel,
+  GROUP_MESSAGES_SCOPE,
+  type LarkChannelLike,
+  toInbound,
+} from "../src/channels/feishu/feishu.ts";
 import { eventually, type Rig, rig, until } from "./helpers.ts";
 
 const bot = { id: "ou_bot", name: "Alex" };
@@ -35,6 +42,8 @@ function fakeLark() {
   const streams: { to: string; opts: unknown; contents: string[] }[] = [];
   let connected = false;
   let failNext: string | undefined;
+  let history: unknown[] | undefined;
+  const listed: unknown[] = [];
   const channel = {
     async connect() {
       connected = true;
@@ -77,8 +86,23 @@ function fakeLark() {
     async getChatInfo(chatId: string) {
       return { chatId, name: "周末徒步", chatType: "group" };
     },
-    rawClient: {},
-    botIdentity: undefined,
+    rawClient: {
+      im: {
+        v1: {
+          message: {
+            async list(request: unknown) {
+              listed.push(request);
+              if (!history) throw Object.assign(new Error("no permission"), { code: 230027 });
+              return { code: 0, data: { items: history } };
+            },
+          },
+        },
+      },
+      contact: {
+        v3: { user: { get: async () => ({ data: { user: { name: "李四" } } }) } },
+      },
+    },
+    botIdentity: { openId: "ou_bot", name: "Alex" },
   } as unknown as LarkChannelLike;
   return {
     channel,
@@ -90,10 +114,19 @@ function fakeLark() {
     failNextSend: (code: string) => {
       failNext = code;
     },
+    setHistory: (items: unknown[] | undefined) => {
+      history = items;
+    },
+    listed,
   };
 }
 
-function fakeApi(options: { activated: () => boolean; deny?: boolean; hold?: Promise<void> }): FeishuApi {
+function fakeApi(options: {
+  activated: () => boolean;
+  deny?: boolean;
+  hold?: Promise<void>;
+  scopes?: () => ReadonlyMap<string, boolean>;
+}): FeishuApi {
   return {
     async register({ onQRCodeReady }) {
       onQRCodeReady({ url: "https://open.feishu.cn/page/launcher?user_code=ABCD", expireIn: 600 });
@@ -103,6 +136,10 @@ function fakeApi(options: { activated: () => boolean; deny?: boolean; hold?: Pro
     },
     async botInfo() {
       return { name: "Alex", openId: "ou_bot", activated: options.activated() };
+    },
+    async scopes() {
+      if (!options.scopes) throw new Error("offline");
+      return options.scopes();
     },
   };
 }
@@ -255,6 +292,132 @@ describe("feishu connection", () => {
       kind: "uncertain",
     });
     rmSync(dir, { recursive: true, force: true });
+    await connection.close();
+  });
+});
+
+describe("feishu group messages permission", () => {
+  const events = { onMessage: () => {}, onState: () => {}, onMembership: () => {} };
+
+  it("asks for every group message when the app is created, and lets them through the SDK", async () => {
+    expect(FEISHU_SCOPES).toContain(GROUP_MESSAGES_SCOPE);
+    const lark = fakeLark();
+    let options: LarkChannelOptions | undefined;
+    const channel = feishuChannel({
+      api: fakeApi({ activated: () => true }),
+      createChannel: (o) => {
+        options = o;
+        return lark.channel;
+      },
+    });
+    const connection = await channel.connect({ appId: "cli_1", appSecret: "s" }, events);
+    expect(options?.policy).toMatchObject({ requireMention: false });
+    await connection.close();
+  });
+
+  it("reports the scope with a link to add it, and reads it again once granted", async () => {
+    let granted = new Map<string, boolean>();
+    const now = Date.now();
+    const clock = { at: now };
+    const realNow = Date.now;
+    Date.now = () => clock.at;
+    try {
+      const channel = feishuChannel({
+        api: fakeApi({ activated: () => true, scopes: () => granted }),
+        createChannel: () => fakeLark().channel,
+      });
+      const connection = await channel.connect({ appId: "cli_1", appSecret: "s", domain: "lark" }, events);
+      expect(await connection.permissions?.()).toEqual([
+        {
+          id: "group_messages",
+          granted: false,
+          grant: {
+            url: "https://open.larksuite.com/app/cli_1/auth?q=im%3Amessage.group_msg&op_from=openapi&token_type=tenant",
+            steps: "feishu",
+          },
+        },
+      ]);
+      granted = new Map([[GROUP_MESSAGES_SCOPE, true]]);
+      expect((await connection.permissions?.())?.[0]?.granted).toBe(false);
+      clock.at += 20_000;
+      expect(await connection.permissions?.()).toEqual([{ id: "group_messages", granted: true }]);
+      await connection.close();
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it("reads a group's latest messages when it joins, as the group's past", async () => {
+    const lark = fakeLark();
+    // Newest first, as Feishu lists them with ByCreateTimeDesc.
+    lark.setHistory([
+      {
+        message_id: "om_3",
+        msg_type: "text",
+        create_time: "1700000003000",
+        chat_id: "oc_9",
+        sender: { id: "cli_ci", id_type: "app_id", sender_type: "app" },
+        body: { content: JSON.stringify({ text: "deploy failed" }) },
+      },
+      {
+        message_id: "om_2",
+        msg_type: "text",
+        create_time: "1700000002000",
+        chat_id: "oc_9",
+        sender: { id: "ou_li", id_type: "open_id", sender_type: "user" },
+        body: { content: JSON.stringify({ text: "@_user_1 周六去哪？" }) },
+        mentions: [{ key: "@_user_1", id: "ou_bot", id_type: "open_id", name: "Alex" }],
+      },
+      { message_id: "om_1", msg_type: "system", chat_id: "oc_9", sender: { id: "x", id_type: "", sender_type: "" } },
+      {
+        message_id: "om_0",
+        msg_type: "text",
+        deleted: true,
+        sender: { id: "ou_li", id_type: "open_id", sender_type: "user" },
+      },
+    ]);
+    const received: InboundMessage[] = [];
+    const joined: string[] = [];
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: (m) => received.push(m), onState: () => {}, onMembership: (m) => joined.push(m.chat.platformId) },
+    );
+    await lark.emit("botAdded", { chatId: "oc_9" });
+    await until(() => received.length === 2, 2000);
+    expect(joined).toEqual(["oc_9"]);
+    expect(lark.listed[0]).toMatchObject({
+      params: { container_id_type: "chat", container_id: "oc_9", sort_type: "ByCreateTimeDesc", page_size: 50 },
+    });
+    expect(received.map((m) => [m.platformId, m.text, m.sender.name, m.sender.isBot, m.earlier])).toEqual([
+      ["om_2", "周六去哪？", "李四", false, true],
+      ["om_3", "deploy failed", "", true, true],
+    ]);
+    expect(received[0]?.chat).toEqual({ platformId: "oc_9", kind: "group", name: "周末徒步" });
+    expect(received[0]?.sentAt).toBe(1_700_000_002_000);
+    await connection.close();
+  });
+
+  it("starts from now when it may not read the group's messages", async () => {
+    const lark = fakeLark();
+    const received: InboundMessage[] = [];
+    const joined: string[] = [];
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: (m) => received.push(m), onState: () => {}, onMembership: (m) => joined.push(m.chat.platformId) },
+    );
+    await lark.emit("botAdded", { chatId: "oc_9" });
+    expect(joined).toEqual(["oc_9"]);
+    expect(lark.listed).toHaveLength(1);
+    expect(received).toEqual([]);
+    await connection.close();
+  });
+
+  it("reports nothing when it cannot tell", async () => {
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => fakeLark().channel });
+    const connection = await channel.connect({ appId: "cli_1", appSecret: "s" }, events);
+    expect(await connection.permissions?.()).toEqual([]);
     await connection.close();
   });
 });

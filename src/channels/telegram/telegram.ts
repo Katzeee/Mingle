@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type {
   BotIdentity,
+  BotPermission,
   Capabilities,
   Channel,
   ChannelConnection,
@@ -29,6 +30,8 @@ interface TgUser {
   first_name: string;
   last_name?: string;
   username?: string;
+  /** getMe only: false while privacy mode is on, so groups send the bot only what is addressed to it. */
+  can_read_all_group_messages?: boolean;
 }
 interface TgChat {
   id: number;
@@ -85,6 +88,9 @@ class TgError extends Error {
     this.retryAfter = retryAfter;
   }
 }
+
+/** How long a read of the bot's privacy mode stays fresh. */
+const PERMISSIONS_TTL_MS = 15_000;
 
 const CAPABILITIES: Capabilities = {
   quoteReply: true,
@@ -232,9 +238,32 @@ export function telegramChannel(options: TelegramOptions = {}): Channel {
           .catch(() => {});
       };
 
+      let privacyRead: { at: number; read: Promise<readonly BotPermission[]> } | undefined;
+      const readPrivacy = async (): Promise<readonly BotPermission[]> => {
+        try {
+          const granted = (await api.call<TgUser>("getMe")).can_read_all_group_messages === true;
+          // Privacy mode only changes in BotFather; there is no link to the setting itself.
+          return [
+            {
+              id: "group_messages",
+              granted,
+              ...(granted ? {} : { grant: { url: "https://t.me/BotFather", steps: "telegram" } }),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      };
+
       return {
         bot,
         capabilities: () => CAPABILITIES,
+
+        permissions() {
+          if (!privacyRead || Date.now() - privacyRead.at > PERMISSIONS_TTL_MS)
+            privacyRead = { at: Date.now(), read: readPrivacy() };
+          return privacyRead.read;
+        },
 
         async send(message: OutboundMessage): Promise<SendResult> {
           const { chatId, threadId } = parseChat(message.chat.platformId);

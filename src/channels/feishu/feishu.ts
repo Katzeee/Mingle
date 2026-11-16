@@ -3,6 +3,7 @@ import { basename, extname } from "node:path";
 import * as lark from "@larksuiteoapi/node-sdk";
 import type {
   BotIdentity,
+  BotPermission,
   Capabilities,
   Channel,
   ChannelConnection,
@@ -26,10 +27,14 @@ import { withTextSent } from "../channel.ts";
  * long connection for events. No public callback address is needed.
  */
 
-/** Tenant scopes requested when the app is created. Group messages that do not @ the bot are not requested (docs/spec.md 13). */
+/** Every message in the bot's groups, and the groups' earlier messages (docs/spec.md 4.2). Sensitive on Feishu. */
+export const GROUP_MESSAGES_SCOPE = "im:message.group_msg";
+
+/** Tenant scopes requested when the app is created. */
 export const FEISHU_SCOPES = [
   "im:message.p2p_msg:readonly",
   "im:message.group_at_msg:readonly",
+  GROUP_MESSAGES_SCOPE,
   "im:message:readonly",
   "im:message:send_as_bot",
   "im:message.reactions:write_only",
@@ -54,6 +59,12 @@ const STREAM_LIMIT_MS = 9 * 60_000;
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
+/** How many of a group's latest messages to read when the bot joins: one page of Feishu's list. */
+const HISTORY_LIMIT = 50;
+
+/** How long a read of the app's granted scopes stays fresh. */
+const SCOPES_TTL_MS = 15_000;
+
 /** Feishu bot activate_status 2 means the tenant has the app enabled. Anything else waits for an admin. */
 const ACTIVE = 2;
 
@@ -73,6 +84,8 @@ export interface FeishuApi {
     onQRCodeReady: (info: { url: string; expireIn: number }) => void;
   }): Promise<{ appId: string; appSecret: string; ownerId?: string; domain: Domain }>;
   botInfo(credentials: { appId: string; appSecret: string; domain: Domain }): Promise<BotInfo>;
+  /** The scopes the app's published version asks for, each with whether the tenant granted it. */
+  scopes(credentials: { appId: string; appSecret: string; domain: Domain }): Promise<ReadonlyMap<string, boolean>>;
 }
 
 export interface FeishuOptions {
@@ -225,6 +238,32 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
         return chatNames.get(chatId);
       };
 
+      /** The group's latest messages, kept as background. Needs every-group-message access; without it, nothing. */
+      const readEarlier = async (instance: LarkChannelLike, chatId: string, name: string | undefined) => {
+        try {
+          const response = await instance.rawClient.im.v1.message.list({
+            params: {
+              container_id_type: "chat",
+              container_id: chatId,
+              sort_type: "ByCreateTimeDesc",
+              page_size: HISTORY_LIMIT,
+            },
+          });
+          const botIdentity = instance.botIdentity ?? { openId: bot.id, name: bot.name };
+          for (const item of [...(response.data?.items ?? [])].reverse()) {
+            const raw = rawEvent(item, chatId);
+            if (!raw) continue;
+            const normalized = await lark.normalize(raw, { botIdentity, stripBotMentions: true });
+            const app = item.sender?.sender_type === "app";
+            const senderName = app ? undefined : await userName(normalized.senderId);
+            const inbound = toInbound(senderName ? { ...normalized, senderName } : normalized, bot, name);
+            if (inbound) events.onMessage({ ...inbound, sender: { ...inbound.sender, isBot: app }, earlier: true });
+          }
+        } catch {
+          // Not allowed to read the group's messages, or offline: the bot starts from now.
+        }
+      };
+
       const start = async () => {
         const instance = create({
           appId: credentials.appId,
@@ -233,8 +272,9 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           transport: "websocket",
           loggerLevel: lark.LoggerLevel.warn,
           source: "mingle",
-          // Mingle does its own batching and access rules.
-          policy: { dmMode: "open", requireMention: true, respondToMentionAll: false },
+          // Mingle does its own batching and access rules. Group messages that do not @ the bot still
+          // come through: the core keeps them as background (docs/spec.md 4.2).
+          policy: { dmMode: "open", requireMention: false, respondToMentionAll: true },
           safety: { batch: { text: { delayMs: 0 }, media: { delayMs: 0 } } },
         });
         channel = instance;
@@ -253,6 +293,8 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             chat: { platformId: event.chatId, kind: "group", ...(name ? { name } : {}) },
             joined: true,
           });
+          // Like a person who joins: scroll up and see what was said before (docs/spec.md 4.2).
+          await readEarlier(instance, event.chatId, name);
         });
         instance.on("reconnecting", () => events.onState({ kind: "reconnecting", attempt: 1 }));
         instance.on("reconnected", () => events.onState({ kind: "connected" }));
@@ -279,9 +321,30 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
         approvalTimer = setTimeout(check, pollMs);
       }
 
+      let scopes: { at: number; read: Promise<readonly BotPermission[]> } | undefined;
+      const readPermissions = async (): Promise<readonly BotPermission[]> => {
+        try {
+          const granted = (await api.scopes(credentials)).get(GROUP_MESSAGES_SCOPE) === true;
+          return [
+            {
+              id: "group_messages",
+              granted,
+              ...(granted ? {} : { grant: { url: scopeUrl(credentials, GROUP_MESSAGES_SCOPE), steps: "feishu" } }),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      };
+
       return {
         bot,
         capabilities: () => CAPABILITIES,
+
+        permissions() {
+          if (!scopes || Date.now() - scopes.at > SCOPES_TTL_MS) scopes = { at: Date.now(), read: readPermissions() };
+          return scopes.read;
+        },
 
         async send(message: OutboundMessage): Promise<SendResult> {
           if (!channel) return { kind: "failed", code: "forbidden", retryable: false };
@@ -401,8 +464,51 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
   };
 }
 
+/** One item of Feishu's message list in the shape of a receive event, for the SDK's normalizer. */
+type ListedMessage = NonNullable<
+  NonNullable<Awaited<ReturnType<lark.Client["im"]["v1"]["message"]["list"]>>["data"]>["items"]
+>[number];
+
+/** Exported for tests. */
+export function rawEvent(item: ListedMessage, chatId: string): lark.RawMessageEvent | undefined {
+  if (item.deleted || !item.message_id || !item.msg_type || !item.sender?.id) return undefined;
+  // System messages (someone joined, the name changed) are not part of the conversation.
+  if (item.msg_type === "system") return undefined;
+  return {
+    sender: {
+      sender_id: { open_id: item.sender.id },
+      sender_type: item.sender.sender_type,
+      ...(item.sender.tenant_key ? { tenant_key: item.sender.tenant_key } : {}),
+    },
+    message: {
+      message_id: item.message_id,
+      ...(item.root_id ? { root_id: item.root_id } : {}),
+      ...(item.parent_id ? { parent_id: item.parent_id } : {}),
+      ...(item.thread_id ? { thread_id: item.thread_id } : {}),
+      ...(item.create_time ? { create_time: item.create_time } : {}),
+      chat_id: item.chat_id ?? chatId,
+      chat_type: "group",
+      message_type: item.msg_type,
+      content: item.body?.content ?? "",
+      mentions: (item.mentions ?? []).map((m) => ({ key: m.key, id: { open_id: m.id }, name: m.name })),
+    },
+  };
+}
+
 function domainOf(credentials: Credentials): Domain {
   return credentials.domain === "lark" ? "lark" : "feishu";
+}
+
+function originOf(domain: Domain): string {
+  return domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+}
+
+/**
+ * The app's permission page on the developer site with the scope ready to add, the same link Feishu
+ * puts in a missing-scope error. The owner adds it and publishes a new version there.
+ */
+export function scopeUrl(credentials: { appId: string; domain: Domain }, scope: string): string {
+  return `${originOf(credentials.domain)}/app/${encodeURIComponent(credentials.appId)}/auth?q=${encodeURIComponent(scope)}&op_from=openapi&token_type=tenant`;
 }
 
 /** Map a normalized Feishu message to Mingle's shape. Exported for tests. */
@@ -489,32 +595,48 @@ function officialApi(): FeishuApi {
       };
     },
 
-    async botInfo({ appId, appSecret, domain }) {
-      const origin = domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
-      const tokenResponse = await fetch(`${origin}/open-apis/auth/v3/tenant_access_token/internal`, {
-        method: "POST",
-        headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      const token = (await tokenResponse.json()) as { code: number; msg?: string; tenant_access_token?: string };
-      if (token.code !== 0 || !token.tenant_access_token)
-        throw new Error(`Feishu auth failed: ${token.msg ?? token.code}`);
-      const botResponse = await fetch(`${origin}/open-apis/bot/v3/info/`, {
-        headers: { authorization: `Bearer ${token.tenant_access_token}` },
-        signal: AbortSignal.timeout(15_000),
-      });
-      const body = (await botResponse.json()) as {
-        code: number;
-        msg?: string;
-        bot?: { app_name?: string; open_id?: string; activate_status?: number };
-      };
-      if (body.code !== 0) throw new Error(`Feishu bot info failed: ${body.msg ?? body.code}`);
+    async botInfo(credentials) {
+      const body = await feishuGet<{ bot?: { app_name?: string; open_id?: string; activate_status?: number } }>(
+        credentials,
+        "/open-apis/bot/v3/info/",
+      );
       return {
         name: body.bot?.app_name ?? "Feishu bot",
-        openId: body.bot?.open_id ?? appId,
+        openId: body.bot?.open_id ?? credentials.appId,
         activated: body.bot?.activate_status === ACTIVE,
       };
     },
+
+    async scopes(credentials) {
+      // Needs no scope of its own. grant_status 1 is granted, 2 is not yet.
+      const body = await feishuGet<{ data?: { scopes?: { scope_name?: string; grant_status?: number }[] } }>(
+        credentials,
+        "/open-apis/application/v6/scopes",
+      );
+      return new Map((body.data?.scopes ?? []).map((s) => [s.scope_name ?? "", s.grant_status === 1]));
+    },
   };
+}
+
+/** A GET with a fresh tenant token. Throws on any non-zero Feishu code. */
+async function feishuGet<T>(
+  { appId, appSecret, domain }: { appId: string; appSecret: string; domain: Domain },
+  path: string,
+): Promise<T> {
+  const origin = originOf(domain);
+  const tokenResponse = await fetch(`${origin}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const token = (await tokenResponse.json()) as { code: number; msg?: string; tenant_access_token?: string };
+  if (token.code !== 0 || !token.tenant_access_token) throw new Error(`Feishu auth failed: ${token.msg ?? token.code}`);
+  const response = await fetch(`${origin}${path}`, {
+    headers: { authorization: `Bearer ${token.tenant_access_token}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const body = (await response.json()) as T & { code: number; msg?: string };
+  if (body.code !== 0) throw new Error(`Feishu ${path} failed: ${body.msg ?? body.code}`);
+  return body;
 }

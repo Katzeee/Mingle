@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { type AccessEntry, type AgentView, api, type ConnectionView } from "./api.ts";
+import { type AccessEntry, type AgentView, api, type BotPermission, type ConnectionView } from "./api.ts";
 import { AllMe, Contacts } from "./Contacts.tsx";
 import { errorText, type MessageKey, useI18n } from "./i18n.ts";
 import { PlatformIcon } from "./platforms.tsx";
@@ -342,12 +342,58 @@ function ConnectionRow({
       {hint ? (
         <p className={`w-full pl-11 text-caption ${connection.state === "error" ? "text-red" : "text-ink3"}`}>{hint}</p>
       ) : null}
+      {connection.state === "connected" ? <GroupMessages connectionId={connection.id} /> : null}
       {connection.state === "connected" && connection.claim ? (
         <div className="w-full pl-11">
           <ClaimCode connection={connection} onChanged={onChanged} />
         </div>
       ) : null}
     </GroupRow>
+  );
+}
+
+/**
+ * A bot that only sees the group messages that @ it, and how to let it see the rest (docs/spec.md
+ * 4.2). Read again whenever the window comes back, since the owner grants it on the platform's site.
+ */
+function GroupMessages({ connectionId }: { connectionId: string }) {
+  const { t } = useI18n();
+  const [missing, setMissing] = useState<BotPermission | null>(null);
+  useEffect(() => {
+    let live = true;
+    const read = () =>
+      api
+        .permissions(connectionId)
+        .then(({ permissions }) => {
+          if (live) setMissing(permissions.find((p) => p.id === "group_messages" && !p.granted) ?? null);
+        })
+        .catch(() => {});
+    void read();
+    window.addEventListener("focus", read);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", read);
+    };
+  }, [connectionId]);
+  if (!missing) return null;
+  const steps = missing.grant?.steps;
+  return (
+    <div className="flex w-full flex-col items-start gap-2 py-1 pl-11">
+      <p className="text-caption text-ink2">
+        {t("permission.groupMessages")}
+        {steps ? ` ${t(`permission.steps.${steps}` as MessageKey)}` : null}
+      </p>
+      {missing.grant ? (
+        <a
+          href={missing.grant.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex h-7 items-center rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
+        >
+          {t("permission.grant")}
+        </a>
+      ) : null}
+    </div>
   );
 }
 

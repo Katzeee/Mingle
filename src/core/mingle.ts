@@ -1221,14 +1221,17 @@ export class Mingle {
     const bot = !owner && contact.isBot;
     const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
     const replyTo = quoted?.id ?? null;
-    const decision = trigger({
-      dm: chat.kind === "dm",
-      bot,
-      // A reply to something the agent said is addressed to it, even where the platform does not say so.
-      addressed: inbound.addressedToBot || quoted?.direction === "out",
-      mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
-      hops: this.botHops.hops(chat.id),
-    });
+    // A message from before the bot joined is the group's past: kept for reading, never answered.
+    const decision = inbound.earlier
+      ? "background"
+      : trigger({
+          dm: chat.kind === "dm",
+          bot,
+          // A reply to something the agent said is addressed to it, even where the platform does not say so.
+          addressed: inbound.addressedToBot || quoted?.direction === "out",
+          mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
+          hops: this.botHops.hops(chat.id),
+        });
     const triggers = decision === "wake";
     // Who may put the agent to work (docs/spec.md 4.7). Only a trigger needs letting in: background
     // is stored as it always was.
@@ -1261,7 +1264,7 @@ export class Mingle {
       held: verdict === "ask",
       createdAt: inbound.sentAt,
     });
-    if (!message) return; // The platform delivered it before.
+    if (!message || inbound.earlier) return; // Delivered before, or the group's past.
     if (!bot) this.botHops.person(chat.id);
     else if (triggers) this.botHops.woke(chat.id);
     else if (decision === "brake" && this.botHops.braked(chat.id)) {

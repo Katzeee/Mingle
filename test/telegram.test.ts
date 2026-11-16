@@ -346,3 +346,23 @@ describe("telegram connection", () => {
     await connection.close();
   });
 });
+
+describe("telegram group messages permission", () => {
+  it("reports privacy mode with the way to turn it off", async () => {
+    let readsAll = false;
+    const bot = fakeBot({ getMe: () => ({ ok: true, result: { ...me, can_read_all_group_messages: readsAll } }) });
+    const connection = await telegramChannel({ fetch: bot.fetchImpl }).connect({ token: TOKEN }, recorder().events);
+    expect(await connection.permissions?.()).toEqual([
+      { id: "group_messages", granted: false, grant: { url: "https://t.me/BotFather", steps: "telegram" } },
+    ]);
+    readsAll = true;
+    const realNow = Date.now;
+    Date.now = () => realNow() + 60_000;
+    try {
+      expect(await connection.permissions?.()).toEqual([{ id: "group_messages", granted: true }]);
+    } finally {
+      Date.now = realNow;
+    }
+    await connection.close();
+  });
+});

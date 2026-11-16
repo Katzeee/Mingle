@@ -241,6 +241,45 @@ describe("discord connection", () => {
     await connection.close();
   });
 
+  it("reports a missing Message Content intent, and asks for it again once it is on", async () => {
+    let flags = 0;
+    const http = fakeHttp({
+      ...identity,
+      "GET /oauth2/applications/@me": () => ({ id: "A1", flags, owner: { id: "U0" } }),
+    });
+    const ws = fakeSockets();
+    const connection = await discordChannel({
+      fetch: http.fetchImpl,
+      createSocket: ws.createSocket,
+      backoff: () => 1,
+    }).connect({ token: TOKEN }, { onMessage: () => {}, onState: () => {}, onMembership: () => {} });
+    ws.push(0, { op: 10, d: { heartbeat_interval: 60_000 } });
+    const first = ws.sockets[0]?.sent[0] as { d: { intents: number } } | undefined;
+    expect((first?.d.intents ?? -1) & (1 << 15)).toBe(0);
+    expect(await connection.permissions?.()).toEqual([
+      {
+        id: "group_messages",
+        granted: false,
+        grant: { url: "https://discord.com/developers/applications/A1/bot", steps: "discord" },
+      },
+    ]);
+
+    flags = 1 << 19;
+    const realNow = Date.now;
+    Date.now = () => realNow() + 60_000;
+    try {
+      expect(await connection.permissions?.()).toEqual([{ id: "group_messages", granted: true }]);
+    } finally {
+      Date.now = realNow;
+    }
+    await until(() => ws.sockets.length === 2, 1000);
+    ws.push(1, { op: 10, d: { heartbeat_interval: 60_000 } });
+    const identify = ws.sockets[1]?.sent[0] as { op: number; d: { intents: number } };
+    expect(identify.op).toBe(2);
+    expect(identify.d.intents & (1 << 15)).toBe(1 << 15);
+    await connection.close();
+  });
+
   it("drops the Message Content intent when Discord refuses it", async () => {
     const http = fakeHttp(identity);
     const ws = fakeSockets();

@@ -923,6 +923,8 @@ describe("waking from sleep", () => {
       connections: { retryAt: number | null }[];
     };
     expect(view.connections[0]?.retryAt).toBeNull();
+    // What the owner can still grant the bot: the test platform has nothing to grant.
+    expect((await admin("GET", `/v1/admin/connections/${id}/permissions`)).json).toEqual({ permissions: [] });
   });
 
   it("names the offline bot when a retry cannot run", async () => {

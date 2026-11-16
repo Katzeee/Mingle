@@ -87,6 +87,16 @@ export interface ConnectionView {
   claim: { code: string | null; expiresAt: number | null; url: string | null } | null;
 }
 
+/**
+ * A permission the owner grants the bot on the platform itself (docs/spec.md 4.2). `group_messages`:
+ * every message in its groups, not only the ones that @ it. `grant.steps` picks the instructions.
+ */
+export interface BotPermission {
+  id: "group_messages";
+  granted: boolean;
+  grant?: { url: string; steps?: "feishu" | "telegram" | "discord" };
+}
+
 /** A person or group waiting for the owner to let them talk to the agent (docs/spec.md 4.7). */
 export interface AccessRequest {
   kind: "contact" | "group";
@@ -414,6 +424,9 @@ export const api = {
   disconnect: (connectionId: string) => call("DELETE", `/v1/admin/connections/${connectionId}`),
   /** Try an offline bot again now. */
   reconnect: (connectionId: string) => call("POST", `/v1/admin/connections/${connectionId}/reconnect`),
+  /** What the owner can still grant the bot on the platform, read live; empty while it is offline. */
+  permissions: (connectionId: string) =>
+    call<{ permissions: BotPermission[] }>("GET", `/v1/admin/connections/${connectionId}/permissions`),
   /** A fresh code for claiming a bot that has no owner yet. */
   claim: (connectionId: string) =>
     call<{ code: string; expiresAt: number }>("POST", `/v1/admin/connections/${connectionId}/claim`),
