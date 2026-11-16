@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentPage } from "./AgentPage.tsx";
 import { type AgentView, ApiError, api, captureToken } from "./api.ts";
 import { ConnectPage } from "./Connect.tsx";
@@ -106,13 +106,17 @@ function Shell() {
     };
   }, []);
 
+  const refreshVersion = useRef(0);
   const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
     try {
       const status = await api.status();
+      if (version !== refreshVersion.current) return;
       setAgents(status.agents);
       setVersion(status.version);
       setProblem(null);
     } catch (e) {
+      if (version !== refreshVersion.current) return;
       setProblem(e instanceof ApiError && e.status === 401 ? "unauthorized" : "offline");
     }
   }, []);
@@ -255,9 +259,10 @@ function Sidebar({
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate font-medium">{a.name}</span>
                 <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">
-                  <StatusDot state={a.status} />
+                  {a.remote?.reachable !== false ? <StatusDot state={a.status} /> : null}
                   <span className="truncate">
-                    {t(`status.${a.status}`)}
+                    {a.remote?.reachable === false ? t("ssh.unknown") : t(`status.${a.status}`)}
+                    {a.remote ? ` · ${a.remote.host}` : ""}
                     {apps ? ` · ${apps}` : ""}
                   </span>
                 </span>

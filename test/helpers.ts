@@ -219,6 +219,7 @@ export async function rig(
     owner?: string;
     /** Who the fake chat app says can reach its bots; "org" unless a test is about access. */
     trust?: Trust;
+    remoteTransport?: import("../src/core/remotes.ts").RemoteTransport;
   } = {},
 ): Promise<Rig> {
   const home = mkdtempSync(join(tmpdir(), "mingle-test-"));
@@ -252,6 +253,7 @@ export async function rig(
     },
   };
   const mingle = new Mingle({
+    ...(options.remoteTransport ? { remoteTransport: options.remoteTransport } : {}),
     paths: resolvePaths(home),
     harness: options.wrap ? options.wrap(harness) : harness,
     channels: { telegram: channel, ...options.channels },

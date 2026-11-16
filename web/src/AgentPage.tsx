@@ -293,7 +293,13 @@ export function AgentPage({
       <PageHeader
         leading={<Avatar name={agent.name} src={agent.avatar} size={26} />}
         title={agent.name}
-        meta={<AgentStatusText status={agent.status} detail={agent.statusDetail} />}
+        meta={
+          agent.remote?.reachable === false ? (
+            t("ssh.unknown")
+          ) : (
+            <AgentStatusText status={agent.status} detail={agent.statusDetail} />
+          )
+        }
         actions={
           <>
             <Segmented
@@ -327,6 +333,17 @@ export function AgentPage({
       <div className="flex min-h-0 flex-1">
         <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
+            {agent.remote ? (
+              <p className="selectable break-words text-small text-ink2">
+                {t("ssh.runningOn", { host: agent.remote.host })}
+                {agent.remote.reachable ? ` · ${t("ssh.independent")}` : null}
+              </p>
+            ) : null}
+            {agent.remote?.reachable === false ? (
+              <p role="status" className="rounded-control border border-line bg-bg2 p-3 text-small text-ink2">
+                {t("ssh.unreachable")}
+              </p>
+            ) : null}
             {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
             {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
             {agent.status === "error" ? <AgentError agent={agent} /> : null}
@@ -413,9 +430,11 @@ export function AgentPage({
                           {agent.home}
                         </span>
                       </span>
-                      <Button small onClick={() => api.openHome(agent.id)}>
-                        {t("agent.openHome")}
-                      </Button>
+                      {!agent.remote ? (
+                        <Button small onClick={() => api.openHome(agent.id)}>
+                          {t("agent.openHome")}
+                        </Button>
+                      ) : null}
                     </GroupRow>
                     <DeleteRow
                       agent={agent}
@@ -1155,7 +1174,11 @@ function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void 
 /** Which harness and model drive the agent. A change applies from the next message. */
 function Brain({ agent, onSaved }: { agent: AgentView; onSaved: () => void }) {
   const { t } = useI18n();
-  const { value: harnesses } = useCached<Harness[]>("harnesses", api.harnesses, []);
+  const { value: harnesses } = useCached<Harness[]>(
+    `harnesses:${agent.remote?.id ?? "local"}`,
+    () => api.harnesses(agent.remote?.id),
+    [],
+  );
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
   async function save(patch: { harness?: string; model?: string | null }) {

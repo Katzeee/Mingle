@@ -15,6 +15,7 @@ import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
 import * as people from "../core/people.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
+import { readSshConfig } from "../platform/ssh-config.ts";
 import {
   type Agent,
   type Connection,
@@ -25,6 +26,7 @@ import {
   type TaskStatus,
 } from "../store/store.ts";
 import { VERSION } from "../version.ts";
+import { remoteGateway, remoteResponse } from "./remote.ts";
 
 type Env = { Variables: { agent: Agent } };
 
@@ -52,6 +54,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
   });
 
   app.get("/v1/health", (c) => c.json({ ok: true, version: VERSION }));
+
+  app.get("/v1/ssh-avatars/:host/:file", async (c) => {
+    const file = c.req.param("file");
+    if (!/^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp)$/.test(file)) return c.body(null, 404);
+    return remoteResponse(
+      await mingle.remotes.request(c.req.param("host"), { method: "GET", path: `/v1/avatars/${file}` }),
+    );
+  });
 
   /**
    * An agent's picture, for <img> tags that cannot send the admin token. The file name is
@@ -394,6 +404,13 @@ export function createApi(mingle: Mingle): Hono<Env> {
     await next();
   });
 
+  app.use("/v1/admin/*", remoteGateway(mingle.remotes));
+  app.get("/v1/admin/ssh/config", async (c) => c.json(await readSshConfig()));
+  app.get("/v1/admin/ssh/hosts", (c) => c.json(mingle.remotes.list()));
+  app.post("/v1/admin/ssh/hosts", async (c) => c.json(await mingle.remotes.add(await c.req.json()), 201));
+  app.post("/v1/admin/ssh/installations", async (c) => c.json(mingle.remotes.install(await c.req.json()), 202));
+  app.get("/v1/admin/ssh/installations/:id", (c) => c.json(mingle.remotes.installation(c.req.param("id"))));
+
   const agentView = (agent: Agent) => {
     const connections = store.connections(agent.id);
     const shared = sharedOwners(connections);
@@ -529,7 +546,15 @@ export function createApi(mingle: Mingle): Hono<Env> {
     }
   };
 
-  app.get("/v1/admin/status", (c) => c.json({ version: VERSION, agents: store.agents().map(agentView) }));
+  app.get("/v1/admin/status", async (c) =>
+    c.json({
+      version: VERSION,
+      agents: [
+        ...store.agents().map(agentView),
+        ...(c.req.query("local") === "1" ? [] : await mingle.remotes.agents()),
+      ],
+    }),
+  );
 
   /**
    * Every agent in a line, for the desktop app's menu bar icon (docs/spec.md 9.1): its state, what it

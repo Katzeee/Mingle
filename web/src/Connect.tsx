@@ -46,7 +46,11 @@ export function ConnectPage({
   onChanged: () => void;
 }) {
   const { t } = useI18n();
-  const { value: platforms } = useCached<PlatformInfo[]>("platforms", api.platforms, []);
+  const { value: platforms } = useCached<PlatformInfo[]>(
+    `platforms:${agent.remote?.id ?? "local"}`,
+    () => api.platforms(agent.remote?.id),
+    [],
+  );
 
   const info = platforms?.find((p) => p.platform === platform);
   const back = () =>
@@ -394,15 +398,15 @@ function SetupFlow({ agent, info, onDone }: { agent: AgentView; info: PlatformIn
   const [connected, setConnected] = useState(false);
 
   const refresh = useCallback(async () => {
-    const next = await api.setup(platform).catch(() => null);
+    const next = await api.setup(platform, agent.remote?.id).catch(() => null);
     if (next) setSetup(next);
-  }, [platform]);
+  }, [platform, agent.remote?.id]);
   usePolling(refresh, 2000, !connected);
 
   const act = async (action: string) => {
     setActing(action);
     try {
-      setSetup(await api.setupAction(platform, action));
+      setSetup(await api.setupAction(platform, action, agent.remote?.id));
     } catch (e) {
       setError(errorText(t, e));
     } finally {

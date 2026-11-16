@@ -1,9 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { Navigate } from "./App.tsx";
 import { type AgentView, api, type BrainStatus, type ModelList } from "./api.ts";
 import { BrainRow, SignInBrain, useSignIn } from "./Brains.tsx";
 import { useCached } from "./cache.ts";
 import { errorText, type Locale, type MessageKey, useI18n } from "./i18n.ts";
+import { SshLocation } from "./SshLocation.tsx";
 import {
   ApiKeyHint,
   Button,
@@ -126,6 +127,11 @@ export function NewAgent({
   onCreated: (agent: AgentView) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const [location, setLocation] = useState("");
+  const remote = location && location !== "add" ? location : undefined;
+  const selectedLocation = useRef(location);
+  selectedLocation.current = location;
+  const [brainError, setBrainError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [harness, setHarness] = useState("");
@@ -134,10 +140,24 @@ export function NewAgent({
   const [busy, setBusy] = useState(false);
 
   const { value: harnesses, reload: reloadBrains } = useCached<BrainStatus[]>(
-    "brains",
-    () => api.brains(),
+    location === "add" ? null : `brains:${remote ?? "local"}`,
+    () =>
+      api.brains(false, remote).catch((e) => {
+        if (selectedLocation.current === location) setBrainError(errorText(t, e));
+        throw e;
+      }),
     [],
-    () => api.brains(true),
+    () =>
+      api
+        .brains(true, remote)
+        .then((items) => {
+          if (selectedLocation.current === location) setBrainError(null);
+          return items;
+        })
+        .catch((e) => {
+          if (selectedLocation.current === location) setBrainError(errorText(t, e));
+          throw e;
+        }),
   );
   const loadBrains = useCallback(() => void reloadBrains(), [reloadBrains]);
   // The first installed harness is the default choice, as soon as the list is known.
@@ -168,6 +188,17 @@ export function NewAgent({
   const takenNames = new Set(taken.map((n) => n.toLowerCase()));
   const form = (
     <form onSubmit={submit} className="flex flex-col gap-8">
+      <SshLocation
+        value={location}
+        disabled={busy}
+        onChange={(value) => {
+          if (value === location) void reloadBrains();
+          setLocation(value);
+          setHarness("");
+          setModel("");
+          setBrainError(null);
+        }}
+      />
       <Steps>
         <Step n={1} state={named ? "done" : "now"} title={t("new.step1")} open>
           <div className="relative">
@@ -213,22 +244,37 @@ export function NewAgent({
             ))}
           </div>
         </Step>
-        <Step n={3} state={named ? "now" : "todo"} open title={t("new.step3")} hint={t("new.step3Hint")}>
-          <BrainPicker
-            onBrainsChanged={loadBrains}
-            harnesses={harnesses}
-            harness={harness}
-            model={model}
-            onHarness={(id) => {
-              setHarness(id);
-              setModel("");
-            }}
-            onModel={setModel}
-          />
+        <Step
+          n={3}
+          state={named ? "now" : "todo"}
+          open
+          title={t("new.step3")}
+          hint={t(location ? "ssh.brainHint" : "new.step3Hint")}
+        >
+          {brainError ? (
+            <Problem title={brainError}>
+              <Button onClick={loadBrains}>{t("ssh.retry")}</Button>
+            </Problem>
+          ) : null}
+          {location === "add" ? (
+            <p className="text-small text-ink2">{t("ssh.chooseFirst")}</p>
+          ) : (
+            <BrainPicker
+              onBrainsChanged={loadBrains}
+              harnesses={harnesses}
+              harness={harness}
+              model={model}
+              onHarness={(id) => {
+                setHarness(id);
+                setModel("");
+              }}
+              onModel={setModel}
+            />
+          )}
         </Step>
       </Steps>
       <div className="flex flex-col gap-3 border-t border-line pt-5">
-        <p className="text-small text-ink2">{t("create.notice")}</p>
+        <p className="text-small text-ink2">{t(location ? "ssh.notice" : "create.notice")}</p>
         {error ? <p className="text-small text-red">{error}</p> : null}
         <div className="flex items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy || !named || !chosen || Boolean(chosen.disabled)}>

@@ -41,6 +41,7 @@ import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stor
 import { accessText, botBrakeNote, LiveReplies, pausedNote, stopNote } from "./live.ts";
 import { Outbox } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
+import { Remotes, type RemoteTransport } from "./remotes.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
 import { BotHops, trigger } from "./trigger.ts";
@@ -79,6 +80,7 @@ interface Link {
 }
 
 export interface MingleOptions {
+  readonly remoteTransport?: RemoteTransport;
   readonly paths: Paths;
   readonly harness: Harness;
   readonly channels: Partial<Record<Platform, Channel>>;
@@ -102,6 +104,7 @@ const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)
 
 /** The whole local process: store, agent runtimes, live IM connections, reminders. The HTTP API sits on top. */
 export class Mingle {
+  readonly remotes: Remotes;
   readonly store: Store;
   readonly outbox: Outbox;
   private readonly replies: LiveReplies;
@@ -141,6 +144,7 @@ export class Mingle {
 
   constructor(options: MingleOptions) {
     this.options = options;
+    this.remotes = new Remotes(options.paths.home, options.remoteTransport);
     for (const dir of [
       options.paths.home,
       options.paths.agents,
@@ -266,6 +270,8 @@ export class Mingle {
   }
 
   async stop(): Promise<void> {
+    // Disconnect management only. Remote daemons keep serving their chat apps.
+    this.remotes.close();
     clearInterval(this.reminderTimer);
     clearInterval(this.wakeTimer);
     await this.resuming?.catch(() => {});
