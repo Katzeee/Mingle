@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -88,6 +88,59 @@ describe("harness list", () => {
     expect(peak).toBe(2);
     expect(list.map((h) => h.id)).toEqual(["claude", "codex"]);
     expect(list[0]?.version).toBe("1.2.3");
+  });
+
+  /** CodeBuddy whose probe answers from `answers` in turn, found at a real file. */
+  function flaky(answers: ("found" | "missed" | "timeout" | "refused")[]) {
+    const command = join(cwd(), "codebuddy.cmd");
+    writeFileSync(command, "");
+    let calls = 0;
+    const runtime: Runtime = {
+      ...defaultRuntimes.require("codebuddy"),
+      installation: async () => {
+        const answer = answers[Math.min(calls++, answers.length - 1)];
+        if (answer === "timeout") throw new Error("Failed to run codebuddy.cmd --help: timeout after 15000 ms");
+        if (answer === "missed") return { kind: "not_found" };
+        if (answer === "refused") return { kind: "unsupported", reason: "--help failed" };
+        return { kind: "available", via: "executable", command, version: "2.184.0" };
+      },
+    };
+    const harness = oarHarness({
+      require: (id) => {
+        if (id !== "codebuddy") throw new Error("not offered here");
+        return runtime;
+      },
+      list: () => [runtime],
+    });
+    const installed = async () => (await harness.catalog?.())?.find((h) => h.id === "codebuddy")?.installed;
+    return { command, harness, installed, calls: () => calls };
+  }
+
+  it("keeps a harness whose probe missed it while its executable is still there", async () => {
+    const { command, harness, installed } = flaky(["found", "missed", "timeout", "missed"]);
+    expect(await installed()).toBe(true);
+    expect(await installed()).toBe(true);
+    expect(await installed()).toBe(true);
+    // Sessions use the copy found last instead of failing on the missed probe.
+    expect((await harness.available()).map((h) => h.id)).toEqual(["codebuddy"]);
+    rmSync(command);
+    expect(await installed()).toBe(false);
+  });
+
+  it("believes a harness that ran and refused", async () => {
+    const { installed } = flaky(["found", "refused"]);
+    expect(await installed()).toBe(true);
+    expect(await installed()).toBe(false);
+  });
+
+  it("shares one probe between the list and the catalog asked together", async () => {
+    const { harness, calls } = flaky(["found"]);
+    const [list, catalog] = await Promise.all([harness.available(), harness.catalog?.()]);
+    expect(calls()).toBe(1);
+    expect(list.map((h) => h.id)).toEqual(["codebuddy"]);
+    expect(catalog?.[0]?.installed).toBe(true);
+    await harness.catalog?.();
+    expect(calls()).toBe(2);
   });
 });
 

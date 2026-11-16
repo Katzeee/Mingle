@@ -19,7 +19,8 @@ describe("SSH transport", () => {
       expect(() => sshTarget(bad)).toThrow();
     for (const good of ["dev", "user@dev.example", "user@[::1]"]) expect(sshTarget(good)).toBe(good);
     const value = "/tmp/a 'quoted' $(false); with spaces";
-    expect(spawnSync("sh", ["-c", `printf %s ${shellQuote(value)}`], { encoding: "utf8" }).stdout).toBe(value);
+    if (process.platform !== "win32")
+      expect(spawnSync("sh", ["-c", `printf %s ${shellQuote(value)}`], { encoding: "utf8" }).stdout).toBe(value);
     const args = sshArgs("dev", ["node", value]);
     expect(args).toContain("BatchMode=yes");
     expect(args).toContain("StrictHostKeyChecking=yes");
@@ -205,72 +206,77 @@ describe("remote management", () => {
     expect(closed).toBe(2);
   });
 
-  it("keeps receiving and replying after the manager disconnects, reconnects, and restarts a crashed daemon", async () => {
-    const home = mkdtempSync(join(tmpdir(), "mingle-remote-supervisor-"));
-    const localHome = mkdtempSync(join(tmpdir(), "mingle-remote-manager-"));
-    const supervisorModule = pathToFileURL(resolve("src/remote/service.ts")).href;
-    const script = `import { supervise } from ${JSON.stringify(supervisorModule)}; await supervise(${JSON.stringify(home)}, ${JSON.stringify(resolve("test/fixtures/remote-service.ts"))});`;
-    const supervisor = spawn(process.execPath, ["--input-type=module", "-e", script], {
-      stdio: "ignore",
-      detached: true,
-    });
-    const controls: ReturnType<typeof spawn>[] = [];
-    const transport: RemoteTransport = {
-      install: async () => {},
-      prepare: async () => ({ home, runtime: resolve(".") }),
-      connect: () => {
-        // Local pipes stand in for SSH; the real control program and Mingle API run unmodified.
-        const child = spawn(process.execPath, ["src/remote/control.ts", home], { stdio: ["pipe", "pipe", "ignore"] });
-        controls.push(child);
-        const rpc = new RpcClient(child.stdout, child.stdin);
-        child.on("error", (error) => rpc.close(error));
-        return {
-          request: (request, timeout) => rpc.request(request, timeout),
-          close: () => {
-            rpc.close();
-            child.kill();
-          },
-        };
-      },
-    };
-    let manager = new Remotes(localHome, transport);
-    try {
-      await until(() => existsSync(join(home, "fixture.json")), 20_000);
-      const fixture = JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")) as { url: string; pid: number };
-      const host = await manager.add({ host: "isolated-fixture", home });
-      const initial = await manager.agents();
-      expect(initial).toHaveLength(1);
-      const remoteAgentId = initial[0]?.id;
-      const remoteToken = JSON.parse(readFileSync(join(home, "runtime.json"), "utf8")).adminToken as string;
-      expect(JSON.stringify(initial)).not.toContain(remoteToken);
-      manager.close();
-      await until(() => controls.every((child) => child.exitCode !== null || child.signalCode !== null));
-      // No manager or control channel exists when the next chat message arrives.
-      await fetch(`${fixture.url}/receive`);
-      await eventually(async () => {
-        const state = (await (await fetch(fixture.url)).json()) as { sent: { text: string }[] };
-        return state.sent.some((message) => message.text === "still here");
+  // The fixture emulates a POSIX remote service, including its paths and graceful signals.
+  it.skipIf(process.platform === "win32")(
+    "keeps receiving and replying after the manager disconnects, reconnects, and restarts a crashed daemon",
+    async () => {
+      const home = mkdtempSync(join(tmpdir(), "mingle-remote-supervisor-"));
+      const localHome = mkdtempSync(join(tmpdir(), "mingle-remote-manager-"));
+      const supervisorModule = pathToFileURL(resolve("src/remote/service.ts")).href;
+      const script = `import { supervise } from ${JSON.stringify(supervisorModule)}; await supervise(${JSON.stringify(home)}, ${JSON.stringify(resolve("test/fixtures/remote-service.ts"))});`;
+      const supervisor = spawn(process.execPath, ["--input-type=module", "-e", script], {
+        stdio: "ignore",
+        detached: true,
       });
-      manager = new Remotes(localHome, transport);
-      expect((await manager.agents())[0]).toMatchObject({ id: remoteAgentId, remote: { reachable: true } });
-      expect(manager.list()[0]?.id).toBe(host.id);
-      // A second supervisor cannot start another daemon for the same data directory.
-      const duplicate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: "ignore" });
-      await once(duplicate, "exit");
-      expect(JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")).pid).toBe(fixture.pid);
-      process.kill(fixture.pid, "SIGTERM");
-      await until(() => {
-        const current = JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")) as { pid: number };
-        return current.pid !== fixture.pid;
-      }, 20_000);
-      expect((await manager.agents())[0]).toMatchObject({ remote: { reachable: true } });
-    } finally {
-      manager.close();
-      supervisor.kill("SIGTERM");
-      await once(supervisor, "exit");
-      for (const child of controls) child.kill();
-      rmSync(home, { recursive: true, force: true });
-      rmSync(localHome, { recursive: true, force: true });
-    }
-  }, 60_000);
+      const controls: ReturnType<typeof spawn>[] = [];
+      const transport: RemoteTransport = {
+        install: async () => {},
+        prepare: async () => ({ home, runtime: resolve(".") }),
+        connect: () => {
+          // Local pipes stand in for SSH; the real control program and Mingle API run unmodified.
+          const child = spawn(process.execPath, ["src/remote/control.ts", home], { stdio: ["pipe", "pipe", "ignore"] });
+          controls.push(child);
+          const rpc = new RpcClient(child.stdout, child.stdin);
+          child.on("error", (error) => rpc.close(error));
+          return {
+            request: (request, timeout) => rpc.request(request, timeout),
+            close: () => {
+              rpc.close();
+              child.kill();
+            },
+          };
+        },
+      };
+      let manager = new Remotes(localHome, transport);
+      try {
+        await until(() => existsSync(join(home, "fixture.json")), 20_000);
+        const fixture = JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")) as { url: string; pid: number };
+        const host = await manager.add({ host: "isolated-fixture", home });
+        const initial = await manager.agents();
+        expect(initial).toHaveLength(1);
+        const remoteAgentId = initial[0]?.id;
+        const remoteToken = JSON.parse(readFileSync(join(home, "runtime.json"), "utf8")).adminToken as string;
+        expect(JSON.stringify(initial)).not.toContain(remoteToken);
+        manager.close();
+        await until(() => controls.every((child) => child.exitCode !== null || child.signalCode !== null));
+        // No manager or control channel exists when the next chat message arrives.
+        await fetch(`${fixture.url}/receive`);
+        await eventually(async () => {
+          const state = (await (await fetch(fixture.url)).json()) as { sent: { text: string }[] };
+          return state.sent.some((message) => message.text === "still here");
+        });
+        manager = new Remotes(localHome, transport);
+        expect((await manager.agents())[0]).toMatchObject({ id: remoteAgentId, remote: { reachable: true } });
+        expect(manager.list()[0]?.id).toBe(host.id);
+        // A second supervisor cannot start another daemon for the same data directory.
+        const duplicate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: "ignore" });
+        await once(duplicate, "exit");
+        expect(JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")).pid).toBe(fixture.pid);
+        process.kill(fixture.pid, "SIGTERM");
+        await until(() => {
+          const current = JSON.parse(readFileSync(join(home, "fixture.json"), "utf8")) as { pid: number };
+          return current.pid !== fixture.pid;
+        }, 20_000);
+        expect((await manager.agents())[0]).toMatchObject({ remote: { reachable: true } });
+      } finally {
+        manager.close();
+        supervisor.kill("SIGTERM");
+        await once(supervisor, "exit");
+        for (const child of controls) child.kill();
+        rmSync(home, { recursive: true, force: true });
+        rmSync(localHome, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });

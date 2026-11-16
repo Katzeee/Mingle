@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,7 @@ Host -oInjected
   });
 
   it("follows sorted includes, quotes, globs, home paths and nested relative paths", async () => {
-    const absolute = config("absolute", "Host absolute\n");
+    const absolute = config("absolute", "Host absolute\n").replaceAll("\\", "/");
     config("config", `Host first\nInclude conf.d/*.conf "with spaces" ~/extra.conf "${absolute}"\nHost last\n`);
     config("conf.d/b.conf", "Host second\nInclude nested\n");
     config("conf.d/a.conf", "Host included\n");
@@ -70,7 +70,7 @@ Host -oInjected
 
   it("bounds recursive includes and reports partial results for invalid or oversized files", async () => {
     config("config", 'Host usable\nInclude cycle large %h/config\nHost "unfinished\n');
-    symlinkSync(join(userHome, ".ssh/config"), join(userHome, ".ssh/cycle"));
+    config("cycle", "Include config\n");
     config("large", `Host hidden\n${"#".repeat(1024 * 1024)}`);
     expect(await sshConfig.readSshConfig(userHome)).toEqual({ hosts: ["usable"], incomplete: true });
   });

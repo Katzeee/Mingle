@@ -165,9 +165,17 @@ func (c *trayController) refresh() {
 	c.power()
 }
 
-func (c *trayController) openAgent(slug string) {
+func (c *trayController) openAgent(slug string) { c.openPage("/a/" + url.PathEscape(slug)) }
+
+// openPage shows the window at a page of the console.
+func (c *trayController) openPage(path string) {
 	c.show()
-	_ = NavigateEvent.Broadcast("/a/" + url.PathEscape(slug))
+	_ = NavigateEvent.Broadcast(path)
+}
+
+// pageClick is a menu item's click that opens a page of the console.
+func (c *trayController) pageClick(path string) func(*mygo.MenuItem, *mygo.Window) {
+	return func(*mygo.MenuItem, *mygo.Window) { c.openPage(path) }
 }
 
 func (c *trayController) iconFor(state string) ([]byte, bool) {

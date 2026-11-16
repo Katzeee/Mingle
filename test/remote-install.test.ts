@@ -18,7 +18,8 @@ import { installRemoteNode } from "../src/platform/remote-install.ts";
 import { remoteNodeCommand, shellQuote, sshArgs } from "../src/platform/ssh.ts";
 import { REMOTE_INSTALL_COMMAND } from "../web/src/remote-install.ts";
 
-describe("remote environment installer", () => {
+// The installer targets POSIX remote hosts; its local shell fixture needs a POSIX runner.
+describe.skipIf(process.platform === "win32")("remote environment installer", () => {
   let root: string;
   let prefix: string;
   let fixtures: string;

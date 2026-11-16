@@ -77,6 +77,10 @@ const LOCALES = {
     ownerUnnamed: "Owner not named",
     ownerIs: "Owner: ",
     save: "Save",
+    roleTitle: "Role",
+    edit: "Edit",
+    roleSaved: "Saved. It applies from the next message.",
+    navMenu: "Agents and settings",
   },
   "zh-CN": {
     storage: "zh-CN",
@@ -140,6 +144,10 @@ const LOCALES = {
     ownerUnnamed: "owner 未命名",
     ownerIs: "owner：",
     save: "保存",
+    roleTitle: "角色",
+    edit: "编辑",
+    roleSaved: "已保存，从下一条消息起生效。",
+    navMenu: "Agent 与设置",
   },
 };
 
@@ -336,6 +344,16 @@ export async function reviewInteractions({
         await sleep(100);
       }
     };
+    // Settings sections load on their own; a target measured before they land moves under the click.
+    const settled = async (what, fn, ...args) => {
+      let last = await until(what, fn, ...args);
+      for (;;) {
+        await sleep(250);
+        const now = await until(what, fn, ...args);
+        if (now.x === last.x && now.y === last.y) return now;
+        last = now;
+      }
+    };
     const click = async (x, y) => {
       for (const type of ["mousePressed", "mouseReleased"]) {
         await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
@@ -459,7 +477,7 @@ export async function reviewInteractions({
     /** Open the i-th bot's page from the settings list; it shows that one bot. */
     const openBot = async (i, labels) => {
       await until("chat app rows", chatAppRows);
-      await clickEl(await until("chat app row", chatAppRowCenter, i));
+      await clickEl(await settled("chat app row", chatAppRowCenter, i));
       await until("bot page", (more) => connTriggers(more).length === 1 || null, labels.more);
     };
     const backToList = async (labels) => {
@@ -1053,16 +1071,6 @@ export async function reviewInteractions({
       const r = el.getBoundingClientRect();
       return r.width && r.height ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
     };
-    // Settings sections load on their own; a target measured before they land moves under the click.
-    const settled = async (what, fn, ...args) => {
-      let last = await until(what, fn, ...args);
-      for (;;) {
-        await sleep(250);
-        const now = await until(what, fn, ...args);
-        if (now.x === last.x && now.y === last.y) return now;
-        last = now;
-      }
-    };
     const pauseScenario = async (localeName, labels, width) => {
       const tag = `pause ${localeName} ${width}`;
       await metrics(width);
@@ -1297,6 +1305,156 @@ export async function reviewInteractions({
         console.log(`handoff ${localeName} ${width}: passed`);
       }
     }
+
+    // --- keyboard shortcuts: Command on macOS, Ctrl elsewhere (MING-93) ---
+    const modifier = await call(() => (/Mac|iPhone|iPad/.test(navigator.userAgent) ? 4 : 2));
+    const press = async (k, code, vk, modifiers = 0) => {
+      for (const type of ["keyDown", "keyUp"]) {
+        await send("Input.dispatchKeyEvent", { type, key: k, code, windowsVirtualKeyCode: vk, modifiers });
+      }
+    };
+    const path = () => location.pathname;
+    const shortcutScenario = async (localeName, labels, width) => {
+      const tag = `shortcuts ${localeName} ${width}`;
+      await metrics(width);
+      await goto(`/a/${slug}`, labels);
+      await press(",", "Comma", 188, modifier);
+      await until("settings by shortcut", () => location.pathname === "/settings");
+      await press("n", "KeyN", 78, modifier);
+      await until("new agent by shortcut", () => location.pathname === "/new");
+      await press("1", "Digit1", 49, modifier);
+      await until("first agent by shortcut", () => location.pathname.startsWith("/a/"));
+      const first = await call(path);
+      await press("2", "Digit2", 50, modifier);
+      await until(
+        "second agent by shortcut",
+        (p) => location.pathname.startsWith("/a/") && location.pathname !== p,
+        first,
+      );
+
+      // The agent's tabs: ⇧⌘[ ⇧⌘] on macOS, Ctrl+Page Up / Down elsewhere.
+      await goto(`/a/${slug}`, labels);
+      const tabChecked = (label) =>
+        [...document.querySelectorAll('header [role="radio"]')].some(
+          (b) => b.textContent.trim() === label && b.getAttribute("aria-checked") === "true",
+        );
+      if (modifier === 4) await press("}", "BracketRight", 221, modifier | 8);
+      else await press("PageDown", "PageDown", 34, modifier);
+      await until("settings tab by shortcut", tabChecked, labels.settings);
+      if (modifier === 4) await press("{", "BracketLeft", 219, modifier | 8);
+      else await press("PageUp", "PageUp", 33, modifier);
+      await until("activity tab by shortcut", tabChecked, labels.activity);
+
+      // Holding the modifier alone shows every shortcut beside its button; letting go hides them.
+      const hintsShown = () => {
+        const badges = [...document.querySelectorAll("span[aria-hidden] > kbd")].map((k) => k.parentElement);
+        const shown = badges.filter((b) => b.offsetParent && getComputedStyle(b).opacity === "1");
+        return badges.length > 0 && shown.length === badges.filter((b) => b.offsetParent).length ? shown.length : 0;
+      };
+      const hintsHidden = () =>
+        [...document.querySelectorAll("span[aria-hidden] > kbd")].every(
+          (k) => getComputedStyle(k.parentElement).opacity === "0",
+        );
+      const modKey = modifier === 4 ? ["Meta", "MetaLeft", 91] : ["Control", "ControlLeft", 17];
+      await send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: modKey[0],
+        code: modKey[1],
+        windowsVirtualKeyCode: modKey[2],
+        modifiers: modifier,
+      });
+      await sleep(200);
+      assert(await call(hintsHidden), `${tag}: hints showed before the hold delay`);
+      const shown = await until("hints while held", hintsShown);
+      // Two tabs, at least two agents, New agent and Settings.
+      assert(shown >= (width < 768 ? 2 : 6), `${tag}: only ${shown} hints`);
+      assert(await call(pageFits), `${tag}: horizontal overflow with hints`);
+      await shot(`${localeName}-${width}-shortcut-hints`);
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: modKey[0],
+        code: modKey[1],
+        windowsVirtualKeyCode: modKey[2],
+      });
+      await until("hints hidden on release", hintsHidden);
+
+      if (width >= 768) {
+        // Pointing at a sidebar row shows its name and keys, soon.
+        const rowAt = await call(() => {
+          const el = document.querySelector("aside nav button");
+          const r = el?.getBoundingClientRect();
+          return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+        });
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: rowAt.x, y: rowAt.y });
+        const started = Date.now();
+        await until("tooltip", () => !!document.querySelector('[role="tooltip"] kbd'));
+        assert(Date.now() - started < 1500, `${tag}: tooltip took ${Date.now() - started} ms`);
+        await shot(`${localeName}-${width}-shortcut-tooltip`);
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: width - 4, y: 880 });
+        await until("tooltip gone", () => !document.querySelector('[role="tooltip"]'));
+      }
+
+      // Command-Return saves the role; Escape leaves the editor without saving.
+      await goto(`/a/${slug}`, labels);
+      await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
+      await clickEl(await settled("edit role", handoffButton, labels.roleTitle, labels.edit));
+      await until("role editor", () => document.activeElement?.tagName === "TEXTAREA");
+      const role = `Plans weekend hikes (${tag})`;
+      await call(() => {
+        const el = document.activeElement;
+        el.select();
+      });
+      await send("Input.insertText", { text: role });
+      await press("Enter", "Enter", 13, modifier);
+      await until("role saved", (saved) => document.body.textContent.includes(saved), labels.roleSaved);
+      assert(!(await call(() => !!document.querySelector("textarea"))), `${tag}: editor still open after save`);
+      await until("role shown", (r) => document.body.textContent.includes(r), role);
+      await clickEl(await settled("edit role again", handoffButton, labels.roleTitle, labels.edit));
+      await until("role editor again", () => document.activeElement?.tagName === "TEXTAREA");
+      await send("Input.insertText", { text: " (discarded)" });
+      await press("Escape", "Escape", 27);
+      await until("editor closed by Escape", () => !document.querySelector("textarea"));
+      assert(
+        await call(
+          (r) => document.body.textContent.includes(r) && !document.body.textContent.includes("(discarded)"),
+          role,
+        ),
+        `${tag}: Escape kept the draft`,
+      );
+
+      // Escape closes the handoff panel.
+      await clickEl(await settled("handoff button", handoffButton, labels.handoffTitle, labels.handoffOpen));
+      await clickEl(await settled("paste tab", handoffButton, labels.handoffTitle, labels.handoffPaste));
+      await until("paste box", () => document.activeElement?.tagName === "TEXTAREA");
+      await press("Escape", "Escape", 27);
+      await until("handoff closed by Escape", () => !document.querySelector("textarea"));
+      await settled("handoff button back", handoffButton, labels.handoffTitle, labels.handoffOpen);
+
+      if (width < 768) {
+        // Escape closes the sidebar opened over the page.
+        await clickEl(
+          await until(
+            "menu button",
+            (label) => {
+              const el = document.querySelector(`button[aria-label="${label}"]`);
+              const r = el?.getBoundingClientRect();
+              return r?.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+            },
+            labels.navMenu,
+          ),
+        );
+        await until("drawer open", () => !!document.querySelector("div.fixed.inset-0"));
+        await press("Escape", "Escape", 27);
+        await until("drawer closed by Escape", () => !document.querySelector("div.fixed.inset-0"));
+      }
+      assert(await call(pageFits), `${tag}: horizontal overflow`);
+    };
+    await shortcutScenario("en-US", LOCALES["en-US"], 1440);
+    passed++;
+    console.log("shortcuts en-US 1440: passed");
+    await shortcutScenario("zh-CN", LOCALES["zh-CN"], 560);
+    passed++;
+    console.log("shortcuts zh-CN 560: passed");
 
     // --- one agent on two WeChat accounts: name the second owner under Contacts (MING-55, MING-80) ---
     const ownerScenario = async (localeName, labels, width) => {
