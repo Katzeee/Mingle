@@ -3,6 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.19
+
+- An installed agent app no longer flickers between "installed" and "not installed". Checking whether a harness such as CodeBuddy is installed launches several probes at once — especially slow on Windows, where each probe starts a `.cmd` shim and Node — and a single timed-out probe used to replace the earlier answer, so the harness picker and the install status in Settings could lose a working harness. Mingle now remembers where each harness was last found, keeps it while the program is still on disk, and only reports "not installed" when the program ran and refused or its file is gone. The picker and Settings also share one probe instead of running their own at the same time, and starting a session trusts the remembered copy, so one missed probe can no longer fail with "not installed".
+
 ## 0.1.18
 
 - The console and the desktop app answer the keys each platform already uses — Command on macOS, Ctrl on Windows and Linux. ⌘N / Ctrl+N starts a new agent, ⌘, / Ctrl+, opens settings, and ⌘1–⌘9 / Ctrl+1–9 jumps to that agent in the sidebar. In the app, ⌘[ and ⌘] (Alt+← and Alt+→ on Windows and Linux) go back and forward, ⌘W / Ctrl+W closes the window while Mingle keeps running, and ⌘Q / Ctrl+Q quits, asking first while agents are online. Esc backs out of every in-place question and editor, and ⌘Return / Ctrl+Enter submits a multi-line field. The Mac app gains the standard menu bar — Settings, File, Edit, View and Window — and sidebar buttons show their shortcut on hover.
