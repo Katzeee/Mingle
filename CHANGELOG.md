@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.14
+
+- Agent settings puts identity first — name and picture, then role and brain — and gives each chat app its own page in place, like a Mac settings pane: the bot and its actions, the access rule for that app, and the people who wrote to it. Contacts and Access are no longer separate sections; decided people carry their decision in their contact row, and the "ask about new people" switch shows only on apps where it changes anything.
+- "Diagnose a problem" now copies a prompt for a local agent (Claude Code or Codex) on the same computer: it reads Mingle's log and the source at the running version, finds the cause, and drafts a redacted GitHub issue for your approval. A new `mingle log` command reads the log files directly, so it works even when Mingle is down.
+- Finished harness updates are no longer reported as failed. A console left open used to show "The update did not finish" for updates that had succeeded, and an update offered for the version already installed counted its own success output as a failure.
+- GitHub setup now warns to keep `Participating, @mentions and custom` set to `On GitHub` in the agent account's notification settings, or the agent never sees mentions.
+- Chinese text that inserts a platform name now spaces it correctly ("在 Telegram 上"), with the spacing handled automatically for every such message.
+
 ## 0.1.13
 
 - Strangers can no longer put your agent to work without asking. On public chat apps (Telegram, Discord, QQ), a new person's first DM, or the first @mention in a new group, is held for your approval under "Needs you" before it reaches the agent. Approving delivers the held messages in order; declining keeps them on record only. The decided people and groups can be revoked or re-allowed from Settings → "Access", where one switch extends the same approval to organization apps. Everyone already talking to your agent, and every existing group, stays allowed.
