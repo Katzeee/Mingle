@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { type AccessEntry, type AgentView, api, type ConnectionView } from "./api.ts";
+import { type AccessEntry, type AgentView, api, type ConnectionView, type PlatformInfo } from "./api.ts";
+import { QrFlow } from "./Connect.tsx";
 import { AllMe, Contacts } from "./Contacts.tsx";
+import { useCached } from "./cache.ts";
 import { errorText, type MessageKey, useI18n } from "./i18n.ts";
 import { PlatformIcon } from "./platforms.tsx";
 import { Button, Group, GroupRow, MoreMenu, PlusIcon, Section, StatusDot } from "./ui.tsx";
@@ -123,9 +125,58 @@ export function BotPage({
           <ConnectionRow connection={connection} onChanged={onChanged} onRemoved={onBack} />
         </Group>
       </section>
+      <BotPermissions agent={agent} connection={connection} onChanged={onChanged} />
       <BotAccess agent={agent} connection={connection} onChanged={onChanged} />
       <Contacts key={`contacts-${agent.id}`} agent={agent} connection={connection.id} onChanged={onChanged} />
     </>
+  );
+}
+
+/**
+ * The platform permissions this bot's app was granted (docs/spec.md 6.1). Where the platform can add
+ * grants to an existing app, a button runs its scan again in place: the confirm page lists what is
+ * being added, and the same connection keeps working.
+ */
+function BotPermissions({
+  agent,
+  connection,
+  onChanged,
+}: {
+  agent: AgentView;
+  connection: ConnectionView;
+  onChanged: () => void;
+}) {
+  const { t } = useI18n();
+  const { value: platforms } = useCached<PlatformInfo[]>("platforms", api.platforms, []);
+  const [updating, setUpdating] = useState(false);
+  const info = platforms?.find((p) => p.platform === connection.platform);
+  if (!info?.reauthorize) return null;
+  return (
+    <Section title={t("connection.permissions")}>
+      {updating ? (
+        <div className="flex flex-col items-start gap-4 rounded-card border border-line bg-card px-4 py-3.5">
+          <QrFlow
+            agent={agent}
+            info={info}
+            update={connection.id}
+            onDone={() => {
+              setUpdating(false);
+              void onChanged();
+            }}
+          />
+          <Button variant="ghost" small onClick={() => setUpdating(false)}>
+            {t("agent.cancel")}
+          </Button>
+        </div>
+      ) : (
+        <>
+          <p className="-mt-1 px-1 text-small text-ink2">{t("connection.permissionsHint")}</p>
+          <Button variant="ghost" small className="self-start" onClick={() => setUpdating(true)}>
+            {t("connection.permissionsUpdate")}
+          </Button>
+        </>
+      )}
+    </Section>
   );
 }
 

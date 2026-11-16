@@ -26,14 +26,22 @@ import { withTextSent } from "../channel.ts";
  * long connection for events. No public callback address is needed.
  */
 
-/** Tenant scopes requested when the app is created. Group messages that do not @ the bot are not requested (docs/spec.md 13). */
+/**
+ * Tenant scopes requested when the app is created — the same reach a person has in a chat
+ * (docs/spec.md 4.2): every group message arrives, not only @mentions, and group history can be
+ * read. An app created before `im:message.group_msg` was added gets it by scanning again from the
+ * bot's settings page, which runs the update flow (docs/spec.md 6.1).
+ */
 export const FEISHU_SCOPES = [
   "im:message.p2p_msg:readonly",
   "im:message.group_at_msg:readonly",
+  // Every group message the way a member sees it, plus group history via the messages API.
+  "im:message.group_msg",
   "im:message:readonly",
   "im:message:send_as_bot",
   "im:message.reactions:write_only",
   "im:resource",
+  // Group info and the member list.
   "im:chat:readonly",
   // Display names of people who message the bot; Feishu events carry only their open_id.
   "contact:user.base:readonly",
@@ -45,7 +53,7 @@ const CAPABILITIES: Capabilities = {
   typingIndicator: false,
   fileUpload: true,
   fileDownload: true,
-  listMembers: false,
+  listMembers: true,
   maxTextLength: 8000,
 };
 
@@ -70,6 +78,8 @@ export interface FeishuApi {
   register(options: {
     signal: AbortSignal;
     agentName?: string;
+    /** Re-authorize an existing app: the confirm page shows the permissions being added. */
+    appId?: string;
     onQRCodeReady: (info: { url: string; expireIn: number }) => void;
   }): Promise<{ appId: string; appSecret: string; ownerId?: string; domain: Domain }>;
   botInfo(credentials: { appId: string; appSecret: string; domain: Domain }): Promise<BotInfo>;
@@ -106,6 +116,8 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
     platform: "feishu",
     // Only people in the organization can message the bot or add it to a group.
     trust: "org",
+    // Scanning again with an app's credentials updates that app's permissions (registerApp appId).
+    reauthorize: true,
     onboarding: { kind: "qr", desktopLink: true },
     manualSetupUrl: "https://open.feishu.cn/app",
     manualFields: [
@@ -142,6 +154,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
         .register({
           signal,
           ...(context?.agentName ? { agentName: context.agentName } : {}),
+          ...(context?.reauthorize?.appId ? { appId: context.reauthorize.appId } : {}),
           onQRCodeReady: ({ url, expireIn }) =>
             push({ kind: "qr_ready", qrContent: url, expiresAt: Date.now() + expireIn * 1000 }),
         })
@@ -233,8 +246,9 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           transport: "websocket",
           loggerLevel: lark.LoggerLevel.warn,
           source: "mingle",
-          // Mingle does its own batching and access rules.
-          policy: { dmMode: "open", requireMention: true, respondToMentionAll: false },
+          // Mingle does its own batching and access rules. Group messages that do not @ the bot
+          // still come through: they are stored as background the agent can read (docs/spec.md 4.2).
+          policy: { dmMode: "open", requireMention: false, respondToMentionAll: false },
           safety: { batch: { text: { delayMs: 0 }, media: { delayMs: 0 } } },
         });
         channel = instance;
@@ -379,8 +393,27 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           await response.writeFile(toPath);
         },
 
-        async listMembers() {
-          return [];
+        async listMembers(chat: ChatRef) {
+          if (!channel) return [];
+          const members: { id: string; name: string; isBot: boolean }[] = [];
+          try {
+            let pageToken: string | undefined;
+            for (let page = 0; page < 10; page++) {
+              const response = await channel.rawClient.im.v1.chatMembers.get({
+                path: { chat_id: chat.platformId },
+                params: { member_id_type: "open_id", page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
+              });
+              for (const item of response.data?.items ?? []) {
+                members.push({ id: item.member_id ?? "", name: item.name ?? "", isBot: false });
+              }
+              if (!response.data?.has_more || !response.data.page_token) break;
+              pageToken = response.data.page_token;
+            }
+          } catch {
+            // Not in the chat, a missing im:chat:readonly grant, or a network error: report nobody.
+            return [];
+          }
+          return members;
         },
 
         async messageUser(userId: string, text: string) {
@@ -466,15 +499,20 @@ function sendFailure(error: unknown): SendResult {
 
 function officialApi(): FeishuApi {
   return {
-    async register({ signal, agentName, onQRCodeReady }) {
+    async register({ signal, agentName, appId, onQRCodeReady }) {
       const result = await lark.registerApp({
         source: "mingle",
         signal,
-        createOnly: true,
-        appPreset: {
-          name: agentName ? `${agentName}` : "Mingle Agent",
-          desc: "An agent that lives in your chats, run by Mingle on its owner's computer.",
-        },
+        // Updating an existing app: the confirm page shows only the added permissions.
+        ...(appId
+          ? { appId }
+          : {
+              createOnly: true,
+              appPreset: {
+                name: agentName ? `${agentName}` : "Mingle Agent",
+                desc: "An agent that lives in your chats, run by Mingle on its owner's computer.",
+              },
+            }),
         addons: {
           scopes: { tenant: [...FEISHU_SCOPES] },
           events: { items: { tenant: ["im.message.receive_v1", "im.chat.member.bot.added_v1"] } },
