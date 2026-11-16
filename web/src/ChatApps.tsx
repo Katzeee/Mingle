@@ -12,6 +12,7 @@ import { AllMe, Contacts } from "./Contacts.tsx";
 import { useCached } from "./cache.ts";
 import { errorText, type MessageKey, useI18n } from "./i18n.ts";
 import { PlatformIcon } from "./platforms.tsx";
+import { onEscape } from "./shortcuts.ts";
 import { Button, Group, GroupRow, MoreMenu, PlusIcon, Section, StatusDot } from "./ui.tsx";
 
 export const connectionRowId = (id: string) => `connection-${id}`;
@@ -377,7 +378,13 @@ function ConnectionRow({
         </span>
       </span>
       {confirming ? (
-        <span className="flex shrink-0 items-center gap-1.5">
+        // biome-ignore lint/a11y/noStaticElementInteractions: Escape backs out of the question it belongs to
+        <span
+          className="flex shrink-0 items-center gap-1.5"
+          onKeyDown={onEscape(() => {
+            if (!removing) setConfirming(false);
+          })}
+        >
           <span className="hidden text-small text-ink2 sm:inline">{t("connection.removeAsk")}</span>
           <Button
             small
@@ -400,7 +407,7 @@ function ConnectionRow({
           >
             {t("connection.removeYes")}
           </Button>
-          <Button small variant="ghost" onClick={() => setConfirming(false)}>
+          <Button small variant="ghost" autoFocus disabled={removing} onClick={() => setConfirming(false)}>
             {t("agent.cancel")}
           </Button>
         </span>
