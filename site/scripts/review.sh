@@ -14,7 +14,7 @@ $spec
 EOS
   prof=$(mktemp -d)
   scheme=1; [ "$th" = dark ] && scheme=0
-  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$prof" --window-size="$w,9800" \
+  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$prof" --window-size="$w,11000" \
     --blink-settings=preferredColorScheme=$scheme --force-prefers-reduced-motion --virtual-time-budget=4000 \
     --screenshot=".site-review/$n.png" "http://127.0.0.1:$PORT$p" 2>/dev/null || true
   rm -rf "$prof"
