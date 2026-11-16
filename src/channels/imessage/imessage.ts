@@ -31,6 +31,12 @@ import { withTextSent } from "../channel.ts";
  * In the self-chat everything is "from me", the owner's words and the agent's alike. The agent's
  * messages end with an invisible marker and are remembered when sent, so they are never read back
  * as the owner's.
+ *
+ * Every message to oneself is stored twice: as sent, in the thread of the address it went to (shown
+ * on the right), and as received, in the thread of the address it came from (shown on the left).
+ * When the owner writes from one address to another, the agent answers in the thread of the
+ * owner's sending address, from the address the owner wrote to: its received copy then lands in the
+ * owner's thread on the left, opposite the owner's own words (docs/spec.md 6.6).
  */
 
 /** Runs an AppleScript with arguments and resolves with its output. */
@@ -166,21 +172,37 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
       let timer: NodeJS.Timeout | undefined;
 
       /** Text the agent sent, and the files it is sending, so their rows are not taken for the owner's. */
-      const sentTexts: { text: string; at: number }[] = [];
+      const sentTexts: { text: string; at: number; sent: boolean; received: boolean }[] = [];
       const sendingFiles = new Map<string, number>();
       /** Recent owner messages, to drop the second copy when the phone's message shows up twice. */
       const seen: { text: string; fromMe: boolean; at: number }[] = [];
+      /** The address Messages was seen sending from, by chat: what decides where a reply's copies land. */
+      const sendsFrom = new Map<string, string>();
+      /** The owner's thread with the agent, where messages the agent starts go. */
+      let lastChat: string | undefined;
 
       const isAgents = (row: SelfRow, text: string, files: readonly AttachmentRow[]): boolean => {
         const t = now();
         prune(sentTexts, t - ECHO_MS);
         const marked = text.endsWith(AGENT_MARK);
-        // Each sent text explains one row, so the owner can still say the same words later.
+        // Each sent text explains its two copies, so the owner can still say the same words later.
         const words = (marked ? text.slice(0, -AGENT_MARK.length) : text).trim();
-        const i = row.fromMe && words ? sentTexts.findIndex((s) => s.text === words) : -1;
-        if (i >= 0) sentTexts.splice(i, 1);
-        if (marked || i >= 0) return true;
-        if (row.fromMe && !text.replace(/￼/g, "").trim() && files.length > 0) {
+        const at = fromAppleDate(row.date);
+        const i = words
+          ? sentTexts.findIndex((s) =>
+              row.fromMe
+                ? !s.sent && s.text === words
+                : !s.received && s.text === words && Math.abs(s.at - at) < TWIN_MS,
+            )
+          : -1;
+        const hit = sentTexts[i];
+        if (hit) {
+          if (row.fromMe) hit.sent = true;
+          else hit.received = true;
+          if (hit.sent && hit.received) sentTexts.splice(i, 1);
+        }
+        if (marked || hit) return true;
+        if (!text.replace(/￼/g, "").trim() && files.length > 0) {
           for (const [name, until] of sendingFiles) if (until < t) sendingFiles.delete(name);
           return files.every((f) => f.name && sendingFiles.has(f.name));
         }
@@ -201,6 +223,24 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
         return false;
       };
 
+      /**
+       * The thread to answer the owner in. Both copies of one message give the same answer, so it
+       * does not depend on which copy Messages wrote first.
+       */
+      const replyChat = (row: SelfRow): string => {
+        const here = lower(row.chatIdentifier);
+        const other = row.to ? lower(row.to) : here;
+        // Sent copies sit in the thread of the address written to; received ones in the sender's.
+        const to = row.fromMe ? here : other;
+        const from = row.fromMe ? other : here;
+        const toChat = selfChat(db, to);
+        if (to !== from) {
+          const back = selfChat(db, from);
+          if (back && (sendsFrom.get(back.guid) ?? back.lastAddressed) === to) return back.guid;
+        }
+        return toChat?.guid ?? row.chatGuid;
+      };
+
       const read = () => {
         for (const row of selfMessages(db, lastRowId, handles)) {
           lastRowId = Math.max(lastRowId, row.rowid);
@@ -208,8 +248,10 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
           const files = attachmentsOf(db, row.rowid);
           if (isAgents(row, raw, files)) continue;
           if (isTwin(row, raw)) continue;
-          const inbound = toInbound(row, raw, files, owner);
-          if (inbound) events.onMessage(inbound);
+          const inbound = toInbound({ ...row, chatGuid: replyChat(row) }, raw, files, owner);
+          if (!inbound) continue;
+          lastChat = inbound.chat.platformId;
+          events.onMessage(inbound);
         }
       };
 
@@ -242,21 +284,27 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
       };
       timer = setTimeout(tick, 0);
 
-      /** The newest message this account sent in a chat after `after`, to learn a sent message's id. */
+      /**
+       * The newest message this account sent in a chat after `after`, to learn a sent message's id,
+       * and the address it went out from.
+       */
       const findSent = async (chatGuid: string, after: number): Promise<string | undefined> => {
         const deadline = now() + sentLookupMs;
         while (!closed) {
           try {
             const row = db
               .prepare(
-                `SELECT m.guid AS guid FROM message m
+                `SELECT m.guid AS guid, m.destination_caller_id AS sender FROM message m
                  JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
                  JOIN chat c ON c.ROWID = cmj.chat_id
                  WHERE c.guid = ? AND m.is_from_me = 1 AND m.ROWID > ?
                  ORDER BY m.ROWID DESC LIMIT 1`,
               )
-              .get(chatGuid, after) as { guid: string } | undefined;
-            if (row) return row.guid;
+              .get(chatGuid, after) as { guid: string; sender: string | null } | undefined;
+            if (row) {
+              if (row.sender) sendsFrom.set(chatGuid, lower(row.sender));
+              return row.guid;
+            }
           } catch {}
           if (now() >= deadline) return undefined;
           await sleep(Math.min(250, pollMs));
@@ -275,7 +323,7 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
       /** Mark and remember a text before it goes out, so the poller never mistakes it for the owner. */
       const outgoing = (markdown: string): string => {
         const text = plain(markdown).trim();
-        sentTexts.push({ text, at: now() });
+        sentTexts.push({ text, at: now(), sent: false, received: false });
         return `${text}${AGENT_MARK}`;
       };
 
@@ -321,7 +369,11 @@ export function imessageChannel(options: IMessageOptions = {}): Channel {
         },
 
         async messageUser(userId: string, text: string) {
-          await runScript(SEND_TO_HANDLE_SCRIPT, [outgoing(text), userId], 30_000);
+          if (lastChat) {
+            const before = maxRow();
+            await runScript(SEND_TEXT_SCRIPT, [outgoing(text), lastChat], 30_000);
+            await findSent(lastChat, before);
+          } else await runScript(SEND_TO_HANDLE_SCRIPT, [outgoing(text), userId], 30_000);
         },
 
         async listMembers() {
@@ -506,6 +558,10 @@ export interface SelfRow {
   date: number;
   fromMe: boolean;
   chatGuid: string;
+  /** The address the thread is with: for a self-chat, one of this account's own. */
+  chatIdentifier: string;
+  /** This account's other address on the message: the one it was sent from, or received at. */
+  to: string | null;
 }
 
 export interface AttachmentRow {
@@ -550,7 +606,8 @@ function selfMessages(db: DatabaseSync, afterRow: number, handles: ReadonlySet<s
     .prepare(
       `SELECT m.ROWID AS rowid, m.guid AS guid, m.text AS text, m.attributedBody AS attributedBody,
               CASE WHEN m.date > 1000000000000 THEN m.date / 1000000 ELSE m.date * 1000 END AS date,
-              m.is_from_me AS fromMe, c.guid AS chatGuid
+              m.is_from_me AS fromMe, c.guid AS chatGuid, c.chat_identifier AS chatIdentifier,
+              m.destination_caller_id AS "to"
        FROM message m
        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
        JOIN chat c ON c.ROWID = cmj.chat_id
@@ -560,6 +617,27 @@ function selfMessages(db: DatabaseSync, afterRow: number, handles: ReadonlySet<s
     )
     .all(afterRow, ...list) as unknown as (Omit<SelfRow, "fromMe"> & { fromMe: number })[];
   return rows.map((r) => ({ ...r, fromMe: r.fromMe === 1 }));
+}
+
+/**
+ * This account's thread with one of its own addresses, and the address Messages last saw written
+ * to in it, which it answers from. Text messages (SMS) threads come last.
+ */
+function selfChat(db: DatabaseSync, address: string): { guid: string; lastAddressed?: string } | undefined {
+  let row: { guid: string; lastAddressed: string | null } | undefined;
+  try {
+    row = db
+      .prepare(
+        `SELECT guid, last_addressed_handle AS lastAddressed FROM chat
+         WHERE style = 45 AND lower(chat_identifier) = ?
+         ORDER BY guid LIKE 'SMS;%', ROWID DESC LIMIT 1`,
+      )
+      .get(address) as typeof row;
+  } catch {
+    // An older schema without last_addressed_handle: answer in the thread written to.
+    return undefined;
+  }
+  return row && { guid: row.guid, ...(row.lastAddressed ? { lastAddressed: lower(row.lastAddressed) } : {}) };
 }
 
 function attachmentsOf(db: DatabaseSync, rowid: number): AttachmentRow[] {
@@ -753,8 +831,12 @@ function prune<T extends { at: number }>(list: T[], before: number): void {
   while (list.length && (list[0]?.at ?? 0) < before) list.shift();
 }
 
+/** One address in one form: lower case, without the "e:" / "p:" Messages sometimes puts in front. */
 function lower(s: string): string {
-  return s.trim().toLowerCase();
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/^[ep]:/, "");
 }
 
 function expandHome(path: string): string {

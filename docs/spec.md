@@ -769,8 +769,14 @@ stateDiagram-v2
   权限给的是哪个 App 就写哪个 App 的名字（"Mingle"、"iTerm"），由 bundle id 经 Spotlight 找到 App 路径得出；不在任何 App 里运行时是 Node.js 可执行文件本身。
 - **接入**：不用填任何东西。点连接时 Mingle 读一次 `chat.db`（没有完全磁盘访问权限 → `permission_missing`），再用 AppleScript 读「信息」里的 iMessage 账号（触发 macOS 的"允许控制「信息」"提示，被拒也是 `permission_missing`；没登录 → `not_signed_in`）。这个账号就是 owner。账号的所有地址（Apple ID 邮箱和手机号）都算自聊：iPhone 给自己发消息可能落在手机号那个对话里。接入成功后 Agent 在自聊里发一条问候。
 - **只读自聊**：只看 `chat.style = 45` 且对方是本账号某个地址的对话，跳过点回应（`associated_message_type ≠ 0`）和系统行（`item_type ≠ 0`）。别人的私聊和群消息不读、不存、不回。正文在新版 macOS 上只放在 `attributedBody`（typedstream 格式的 NSAttributedString），从中取出文本。`date` 是 2001 年起的纳秒数，超出 JS 数字的精确范围，在 SQL 里先换成毫秒。
-- **不读回自己的话**：自聊里 owner 和 Agent 的消息都是"我发的"。Agent 发出的每条消息末尾带一个看不见的标记（U+200B U+2060），读到带标记的一律跳过；另外记住最近 10 分钟发出的文本，标记万一丢了也能认出来，每条只抵消一次，owner 之后说同样的话仍然算数。Agent 发的文件按文件名记住，同样跳过。
+- **不读回自己的话**：自聊里 owner 和 Agent 的消息都是"我发的"。Agent 发出的每条消息末尾带一个看不见的标记（U+200B U+2060），读到带标记的一律跳过；另外记住最近 10 分钟发出的文本，标记万一丢了也能认出来，每条只抵消它的两份副本（发出的那份，和 60 秒内回到收件一侧的那份），owner 之后说同样的话仍然算数。Agent 发的文件按文件名记住，两份副本都跳过。
 - **去重**：同一条消息若同时以"发出"和"收到"出现在 60 秒内，只算一次；每份副本只配对一次，owner 连发两句一样的话仍是两条。
+- **左右两侧**（MING-90）：给自己发的每条消息在 `chat.db` 里都有两份：发出的一份（`is_from_me = 1`）在"发往的地址"那个对话里，显示在右边；收到的一份（`is_from_me = 0`）在"发出的地址"那个对话里，显示在左边。`destination_caller_id` 在发出的一份里是发出地址，在收到的一份里是收到地址，所以任何一份都能还原出"从哪个地址发到哪个地址"。原先按先读到的那份副本所在的对话回复，两份谁先写入不固定，Agent 就时而回到邮箱对话、时而回到手机号对话，owner 跟着通知在两个对话间来回，看到自己的话在左边、Agent 的话在右边或两边都有。现在：
+  - 回复对话只由"从哪发到哪"决定，与先读到哪份无关。
+  - owner 从地址 B 发到地址 A（A ≠ B，例如 iPhone 用手机号发给自己的 Apple ID 邮箱）时，Agent 回到 B 那个对话，并且要从 A 发出：它收到的那份就落在 owner 正在用的 A 对话里、显示在左边，和 owner 自己的话（右边）分开。「信息」在一个对话里从 `chat.last_addressed_handle`（对方最近写给的那个地址）发出；B 对话里 owner 的消息都是写给 A 的，所以预期从 A 发出。发出后读这条消息的 `destination_caller_id` 核对实际发出地址，不是 A 就改回 A 对话回复，最多错一条。
+  - A = B（从同一个地址发给自己）时两份副本都在同一个对话里，每条消息左右各出现一次，是「信息」自聊本身的显示方式，Mingle 改变不了。
+  - Agent 主动发的消息（问候、提醒）发到最近一次回复 owner 的对话；还没有时按 owner 的 Apple ID 发。
+  - 待验证：在真机上确认 A ≠ B 时 Mac 的实际发出地址，以及 iPhone 上 A 对话里 Agent 的消息只在左边出现。
 - **发消息**：AppleScript `send … to chat id <chat.guid>`；主动私聊 owner 用 `participant`。文件要先复制到 `~/Library/Messages/Attachments/mingle/` 下再发：实测「信息」只从自己的附件目录发文件，放在别处时会发出一个空气泡且不报错。发出后在 `chat.db` 里找到这条消息的 guid 作为 id。能力降级：不能引用回复（`quote_dropped`）、不能点回应、没有"正在输入"、Markdown 转纯文本。
 - **补投和断线重连**：连上时补投最近 10 分钟（不早于接入时间）的自聊消息，核心按消息 id 去重，所以 Mingle 没运行时发的消息也会回复。每次轮询检查数据库文件是否还是原来那个；读失败或文件被替换时上报 `reconnecting` 并退避重开，从上次读到的行继续。权限被收回时上报 `permission_missing`，停下等用户（6.4）。
 
