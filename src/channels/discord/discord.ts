@@ -2,6 +2,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import type {
   BotIdentity,
+  BotPermission,
   Capabilities,
   Channel,
   ChannelConnection,
@@ -65,6 +66,8 @@ const INTENT = {
   directMessages: 1 << 12,
   messageContent: 1 << 15,
 };
+/** How long a read of the application's flags stays fresh. */
+const PERMISSIONS_TTL_MS = 15_000;
 /** Application flags: the Message Content intent is switched on in the Developer Portal. */
 const FLAG_MESSAGE_CONTENT = (1 << 18) | (1 << 19);
 
@@ -468,9 +471,40 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
           () => {},
         );
 
+      let intentRead: { at: number; read: Promise<readonly BotPermission[]> } | undefined;
+      const readIntent = async (): Promise<readonly BotPermission[]> => {
+        try {
+          const { app } = await identify(token);
+          const granted = ((app.flags ?? 0) & FLAG_MESSAGE_CONTENT) !== 0;
+          if (granted && !messageContent) {
+            // Switched on in the Developer Portal since we connected: identify again to ask for it.
+            messageContent = true;
+            sessionId = undefined;
+            resumeUrl = undefined;
+            socket?.close(4000);
+          }
+          if (granted) return [{ id: "group_messages", granted }];
+          return [
+            {
+              id: "group_messages",
+              granted,
+              grant: { url: `https://discord.com/developers/applications/${app.id}/bot`, steps: "discord" },
+            },
+          ];
+        } catch {
+          return [];
+        }
+      };
+
       return {
         bot,
         capabilities: () => CAPABILITIES,
+
+        permissions() {
+          if (!intentRead || Date.now() - intentRead.at > PERMISSIONS_TTL_MS)
+            intentRead = { at: Date.now(), read: readIntent() };
+          return intentRead.read;
+        },
 
         async send(message: OutboundMessage): Promise<SendResult> {
           try {

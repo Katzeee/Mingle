@@ -90,6 +90,28 @@ describe("bots in a chat", () => {
     expect(contacts.stdout).toMatch(/"Bob"\s+bot/);
   });
 
+  it("keeps a group's earlier messages as background, even the ones that @ it", async () => {
+    const { mingle, channel, agentId, turns } = await setup();
+    channel.receive({ text: "@alex where on Saturday?", earlier: true, sentAt: Date.now() - 60_000 });
+    channel.receive({
+      text: "deploy failed",
+      sender: bob,
+      mentioned: true,
+      earlier: true,
+      sentAt: Date.now() - 30_000,
+    });
+    const chat = mingle.store.agentChats(agentId)[0] as { id: string };
+    await until(() => mingle.store.chatMessages(chat.id, 10).length === 2);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(turns).toHaveLength(0);
+    expect(mingle.store.chatMessages(chat.id, 10).every((m) => m.state === "ignored")).toBe(true);
+    // Read when someone asks now: the past is there, counted as unseen.
+    channel.receive({ text: "@alex so, where?" });
+    await until(() => turns.length === 1);
+    const read = await runCli(env, ["message", "read", chat.id]);
+    expect(read.stdout).toContain("where on Saturday?");
+  });
+
   it("stops bots waking it after five turns in a row, until a person speaks", async () => {
     const { mingle, channel, agentId, turns } = await setup();
     const ask = (text: string) => channel.receive({ text, sender: bob, mentioned: true });

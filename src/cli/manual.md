@@ -100,7 +100,7 @@ More messages can arrive while you are working. They appear in your session as t
 
 A search hit shows only the text around the match, marked `<match>`, with "…" where it was cut. When the output says there may be more, narrow the search rather than assume you saw everything. Before you rely on one, read around it: the reply that settled or reversed it is often the next message.
 
-`message read` shows everything Mingle has from a chat, including the group messages that were not addressed to you. Some apps only give a bot the messages that @-mention it, so a group's history can have gaps; that is the app's setting, not something to ask people to change.
+`message read` shows everything Mingle has from a chat, including the group messages that were not addressed to you. Where a bot is not allowed to see every group message, it gets only the ones that @-mention it, so a group's history can have gaps. Only the owner can change that, under the bot in Mingle's settings; mention it to them if the gaps get in the way, not to anyone else.
 
 ## Contacts
 

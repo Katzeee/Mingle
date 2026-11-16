@@ -1055,6 +1055,17 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json(mingle.issueClaim(c.req.param("id")));
   });
 
+  /**
+   * What the owner can still grant this bot on the platform, read live (docs/spec.md 4.2). Empty
+   * while the bot is offline or the platform has nothing to grant.
+   */
+  app.get("/v1/admin/connections/:id/permissions", async (c) => {
+    if (!store.connection(c.req.param("id"))) throw notFound("connection", c.req.param("id"));
+    const live = mingle.liveConnection(c.req.param("id"));
+    const permissions = (await live?.permissions?.().catch(() => [])) ?? [];
+    return c.json({ permissions });
+  });
+
   app.delete("/v1/admin/connections/:id", async (c) => {
     if (!store.connection(c.req.param("id"))) throw notFound("connection", c.req.param("id"));
     await mingle.removeConnection(c.req.param("id"));

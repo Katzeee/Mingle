@@ -217,6 +217,11 @@ export interface InboundMessage {
    */
   readonly mentioned?: boolean;
   readonly sentAt: number;
+  /**
+   * Read from the chat's history when the bot joined, not delivered as it was sent. The core keeps
+   * it as background and never answers it, whatever it @-mentions (docs/spec.md 4.2).
+   */
+  readonly earlier?: true;
 }
 
 export interface OutboundMessage {
@@ -341,6 +346,27 @@ export interface ChannelConnection {
   /** Open a direct conversation with a user by sending the first message. Where the platform allows it. */
   messageUser?(userId: string, text: string): Promise<void>;
   listMembers(chat: ChatRef): Promise<readonly Sender[]>;
+  /**
+   * Permissions the owner can grant this bot on the platform, read live (docs/spec.md 4.2). Absent
+   * where the platform has none to grant. Best effort; never throws, leaves out what it cannot tell.
+   */
+  permissions?(): Promise<readonly BotPermission[]>;
 
   close(): Promise<void>;
+}
+
+/**
+ * A permission the owner grants a bot on the platform itself.
+ * `group_messages`: every message in the bot's groups, not only the ones that @ it; on Feishu also
+ * the group's earlier messages.
+ */
+export interface BotPermission {
+  readonly id: "group_messages";
+  readonly granted: boolean;
+  /**
+   * How the owner grants it on the platform's site. Absent where it cannot be granted there, or
+   * where the console grants it itself (`Channel.reauthorize`). `url` opens the platform's page with the change prefilled where the
+   * platform allows; `steps` picks the console's instructions for that page (`permission.steps.<steps>`).
+   */
+  readonly grant?: { readonly url: string; readonly steps?: string };
 }
