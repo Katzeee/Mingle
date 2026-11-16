@@ -8,6 +8,7 @@ import { NewAgent } from "./NewAgent.tsx";
 import { onNavigateRequest } from "./online.ts";
 import { usePolling } from "./poll.ts";
 import { SettingsPage } from "./Settings.tsx";
+import { ariaShortcut, shortcutLabel, useShellShortcuts } from "./shortcuts.ts";
 import { Avatar, Button, Eyebrow, PlusIcon, SettingsIcon, StatusDot, UpdateIcon, Waiting } from "./ui.tsx";
 import { updates, useUpdates } from "./updates.ts";
 import { Welcome } from "./Welcome.tsx";
@@ -118,6 +119,16 @@ function Shell() {
   }, []);
 
   usePolling(refresh, 2000, Boolean(token));
+
+  useShellShortcuts({
+    newAgent: () => navigate({ kind: "new" }),
+    settings: () => navigate({ kind: "settings" }),
+    agent: (index) => {
+      const agent = agents?.[index];
+      if (agent) navigate({ kind: "agent", slug: agent.slug });
+    },
+    escape: () => setMenuOpen(false),
+  });
 
   // A new agent goes into the list right away, so routing to its page does not race the next
   // status poll and fall back to the first agent.
@@ -235,7 +246,7 @@ function Sidebar({
       </div>
       <Eyebrow>{t("sidebar.agents")}</Eyebrow>
       <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-        {agents.map((a) => {
+        {agents.map((a, i) => {
           const on = currentId === a.id;
           // One name per chat app, even with several bots in it.
           const apps = [...new Set(a.connections.map((c) => c.platform))]
@@ -245,7 +256,8 @@ function Sidebar({
             <button
               key={a.id}
               type="button"
-              title={a.name}
+              title={i < 9 ? `${a.name} (${shortcutLabel(String(i + 1))})` : a.name}
+              aria-keyshortcuts={i < 9 ? ariaShortcut(String(i + 1)) : undefined}
               onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
               aria-current={on ? "page" : undefined}
               className={`${row} min-h-[46px] py-1.5`}
@@ -267,6 +279,8 @@ function Sidebar({
         <button
           type="button"
           onClick={() => onNavigate({ kind: "new" })}
+          title={`${t("agents.new")} (${shortcutLabel("N")})`}
+          aria-keyshortcuts={ariaShortcut("N")}
           aria-current={view.kind === "new" ? "page" : undefined}
           className={`${row} h-8 text-ink2 hover:text-ink`}
         >
@@ -292,6 +306,8 @@ function Sidebar({
         <button
           type="button"
           onClick={() => onNavigate({ kind: "settings" })}
+          title={`${t("settings.title")} (${shortcutLabel(",")})`}
+          aria-keyshortcuts={ariaShortcut(",")}
           aria-current={view.kind === "settings" ? "page" : undefined}
           className={`${row} h-8 text-ink2 hover:text-ink aria-[current=page]:text-ink`}
         >

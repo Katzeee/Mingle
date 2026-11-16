@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import type { AgentStatus } from "./api.ts";
 import { useI18n } from "./i18n.ts";
+import { withMod } from "./shortcuts.ts";
 
 /** The building blocks DESIGN.md defines. Nothing here takes a raw color. */
 
@@ -78,8 +79,24 @@ export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInpu
   return <input className={`h-[34px] ${control} ${className}`} {...props} />;
 }
 
-export function Textarea({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={`min-h-24 resize-y py-2 leading-5 ${control} ${className}`} {...props} />;
+/** Return writes a new line; Command-Return (Ctrl+Enter elsewhere) submits the form it is in. */
+export function Textarea({ className = "", onKeyDown, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={`min-h-24 resize-y py-2 leading-5 ${control} ${className}`}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || event.key !== "Enter" || !withMod(event) || event.nativeEvent.isComposing) return;
+        const form = event.currentTarget.form;
+        if (!form) return;
+        event.preventDefault();
+        // As Return in a field: nothing while the form's button is disabled (busy, or not ready).
+        const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+        if (!button?.disabled) form.requestSubmit(button ?? undefined);
+      }}
+      {...props}
+    />
+  );
 }
 
 export function Select({ className = "", ...props }: SelectHTMLAttributes<HTMLSelectElement>) {

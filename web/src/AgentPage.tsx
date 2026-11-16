@@ -31,6 +31,7 @@ import { Profile } from "./Profile.tsx";
 import { PlatformIcon } from "./platforms.tsx";
 import { usePolling } from "./poll.ts";
 import { OnlineRows } from "./Settings.tsx";
+import { onEscape } from "./shortcuts.ts";
 import {
   AgentStatusText,
   ApiKeyHint,
@@ -1024,7 +1025,13 @@ function WorkRow({
         {detail ? <span className="text-caption text-ink2">{detail}</span> : null}
       </span>
       {confirming ? (
-        <span className="flex w-full items-center justify-end gap-1.5">
+        // biome-ignore lint/a11y/noStaticElementInteractions: Escape backs out of the question it belongs to
+        <span
+          className="flex w-full items-center justify-end gap-1.5"
+          onKeyDown={onEscape(() => {
+            if (!busy) setConfirming(false);
+          })}
+        >
           <span className="sr-only">{ask}</span>
           <Button
             small
@@ -1048,7 +1055,7 @@ function WorkRow({
           >
             {confirm}
           </Button>
-          <Button small variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+          <Button small variant="ghost" autoFocus disabled={busy} onClick={() => setConfirming(false)}>
             {t("work.keep")}
           </Button>
         </span>
@@ -1118,17 +1125,24 @@ function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void 
       }
     >
       {editing ? (
-        <div className="flex flex-col gap-2">
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+          onKeyDown={onEscape(() => setEditing(false))}
+        >
           <Textarea autoFocus rows={6} value={draft} onChange={(e) => setDraft(e.target.value)} />
           <div className="flex gap-2">
-            <Button variant="primary" small onClick={save}>
+            <Button type="submit" variant="primary" small>
               {t("agent.save")}
             </Button>
             <Button variant="ghost" small onClick={() => setEditing(false)}>
               {t("agent.cancel")}
             </Button>
           </div>
-        </div>
+        </form>
       ) : agent.role.trim() ? (
         <div className="selectable rounded-card border border-line bg-card px-4 py-3 whitespace-pre-wrap wrap-anywhere">
           {agent.role.trim()}
