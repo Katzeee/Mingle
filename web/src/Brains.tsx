@@ -1,9 +1,18 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { api, type BrainStatus, type InstallPlan, type Job, type SignInState, type UpdateInfo } from "./api.ts";
+import {
+  type AccountUsage,
+  api,
+  type BrainStatus,
+  type InstallPlan,
+  type Job,
+  type SignInState,
+  type UpdateInfo,
+  type UsageWindow,
+} from "./api.ts";
 import { useCached } from "./cache.ts";
 import { type MessageKey, useI18n } from "./i18n.ts";
 import { followJob } from "./jobs.ts";
-import { Button, HarnessIcon, Input, LinkButton, Problem, StatusDot, Waiting } from "./ui.tsx";
+import { Button, HarnessIcon, Input, LinkButton, Problem, StatusDot, shortDateTime, Waiting } from "./ui.tsx";
 
 /**
  * Every harness OAR drives, installed or not. One that is missing can be installed from here
@@ -194,6 +203,61 @@ function useUpdate(brain: BrainStatus) {
   return { update: value, recheck: () => void reload() };
 }
 
+/** The signed-in account's quota, where the harness reports it. Re-read when shown; the server holds it a minute. */
+function useUsage(brain: BrainStatus, state: SignInState | null) {
+  const id = brain.installed && !brain.disabled && state?.kind === "signed_in" ? brain.id : null;
+  const { value } = useCached<AccountUsage>(id === null ? null : `usage:${id}`, () => api.accountUsage(id ?? ""), {
+    kind: "unknown",
+  });
+  return value;
+}
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** "5-hour", "Weekly": by the window's length where the harness gives one, its own label otherwise. */
+function windowName(t: ReturnType<typeof useI18n>["t"], w: UsageWindow): string {
+  const ms = w.durationMs;
+  if (ms === DAY_MS) return t("usage.day");
+  if (ms === 7 * DAY_MS) return t("usage.week");
+  if (ms !== undefined && ms >= 28 * DAY_MS && ms <= 31 * DAY_MS) return t("usage.month");
+  if (ms !== undefined && ms < DAY_MS && ms % HOUR_MS === 0) return t("usage.hours", { count: String(ms / HOUR_MS) });
+  return w.label;
+}
+
+/** Nearly gone: from here on the line says when the window starts over. */
+const NEAR = 0.8;
+
+/**
+ * One quiet line under a signed-in harness: how much of each limit is gone. Amber only when a
+ * limit is reached, with when it comes back and what happens to messages meanwhile.
+ */
+function UsageLine({ usage }: { usage: AccountUsage | null }) {
+  const { t, locale } = useI18n();
+  if (usage?.kind !== "available") return null;
+  const full = usage.windows.filter((w) => w.used >= 1);
+  if (usage.rateLimited || full.length) {
+    // Every full window has to start over before a turn can run: the latest reset is the one.
+    const back = Math.max(...full.map((w) => w.resetsAt ?? 0));
+    return (
+      <span className="text-caption text-amber">
+        {back > Date.now() ? t("usage.reachedUntil", { time: shortDateTime(back, locale) }) : t("usage.reached")}
+      </span>
+    );
+  }
+  if (!usage.windows.length) return null;
+  const parts = usage.windows.map((w) => {
+    const text = t("usage.used", {
+      window: windowName(t, w),
+      percent: `${Math.min(99, Math.round(w.used * 100))}%`,
+    });
+    return w.used >= NEAR && w.resetsAt
+      ? t("usage.usedResets", { used: text, time: shortDateTime(w.resetsAt, locale) })
+      : text;
+  });
+  return <span className="selectable truncate text-caption text-ink3">{parts.join(" · ")}</span>;
+}
+
 /** Resume a job the catalog reports running, and remember the start function once set. */
 function useResumableJob(resumeId: string | undefined) {
   // Set once: a finished job refreshes the catalog, which drops the running job; the
@@ -212,6 +276,7 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
   const { state, reread } = useSignIn(brain);
   const [open, setOpen] = useState(false);
   const { update, recheck } = useUpdate(brain);
+  const usage = useUsage(brain, state);
   const [startInstall, setStartInstall] = useResumableJob(brain.installJob?.id);
   // A job that is gone may have changed things too: read them again.
   const installJob = useJob(startInstall, (job) => job?.state !== "failed" && onChanged(), brain.installJob);
@@ -270,6 +335,7 @@ export function BrainRow({ brain, onChanged }: { brain: BrainStatus; onChanged: 
               {status}
             </span>
           </span>
+          {busy ? null : <UsageLine usage={usage} />}
         </span>
         {action && !expanded ? (
           <Button small onClick={() => setOpen(true)}>

@@ -170,6 +170,45 @@ export type SignInState =
   | { readonly kind: "signed_out"; readonly detail?: string }
   | { readonly kind: "unknown" };
 
+/** One usage limit of the signed-in account: how much of it is gone and when it starts over. */
+export interface UsageWindow {
+  /** The harness's own name for it, in English; the console names it by `durationMs` where it can. */
+  readonly label: string;
+  /** Consumed fraction, 0 to 1. */
+  readonly used: number;
+  /** Epoch ms of the next reset, where the harness reports it. */
+  readonly resetsAt?: number;
+  readonly durationMs?: number;
+}
+
+/**
+ * The account's quota as the harness reports it, for this computer's own sign-in. `unknown`
+ * covers a harness that cannot tell, a signed-out account (the sign-in state says so) and a
+ * read that failed: none of them is something to show.
+ */
+export type AccountUsage =
+  | { readonly kind: "available"; readonly rateLimited: boolean; readonly windows: readonly UsageWindow[] }
+  | { readonly kind: "unknown" };
+
+/**
+ * The windows worth a line: per length the one closest to its limit (Claude reports a week for
+ * all models, one for Opus, one for OAuth apps, and the fullest is the one that stops a turn),
+ * shortest first. Windows without a length (extra usage, pay as you go) only when there is
+ * nothing else. At most three.
+ */
+export function usageWindows(windows: readonly UsageWindow[]): UsageWindow[] {
+  const timed = new Map<number, UsageWindow>();
+  for (const w of windows) {
+    if (w.durationMs === undefined) continue;
+    const held = timed.get(w.durationMs);
+    if (!held || w.used > held.used) timed.set(w.durationMs, w);
+  }
+  const picked = timed.size
+    ? [...timed.values()].sort((a, b) => (a.durationMs ?? 0) - (b.durationMs ?? 0))
+    : [...windows];
+  return picked.slice(0, 3);
+}
+
 export type InstallPlanInfo =
   | { readonly kind: "plan"; readonly steps: readonly string[]; readonly source: string }
   | {
@@ -206,6 +245,8 @@ export interface Harness {
   install?(id: string): Promise<{ ok: boolean; detail?: string }>;
   /** Read only: asks the harness's update source, never installs. */
   updateCheck?(id: string): Promise<UpdateInfo>;
+  /** The signed-in account's quota. Asks the harness or its vendor, so it can take seconds. */
+  accountUsage?(id: string): Promise<AccountUsage>;
   /** Runs the harness's own updater, judged by the version it reports afterwards. */
   upgrade?(id: string): Promise<{ ok: boolean; detail?: string }>;
   signIn?(id: string, interaction: SignInInteraction): Promise<{ ok: boolean; detail?: string }>;
@@ -455,6 +496,28 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
       if (status?.kind === "logged_out")
         return { kind: "signed_out", ...(status.detail ? { detail: status.detail } : {}) };
       return { kind: "unknown" };
+    },
+
+    async accountUsage(id) {
+      const runtime = lookup(id);
+      if (!runtime.accountUsage) return { kind: "unknown" };
+      const usage = await runtime
+        .accountUsage(await installation(runtime), { timeoutMs: 15_000, limitResetDetails: false })
+        .catch(() => undefined);
+      if (usage?.kind !== "available") return { kind: "unknown" };
+      const windows = usage.windows.flatMap((w): UsageWindow[] => {
+        if (!Number.isFinite(w.usedRatio)) return [];
+        const resetsAt = w.resetsAt ? Date.parse(w.resetsAt) : Number.NaN;
+        return [
+          {
+            label: w.label,
+            used: Math.min(1, Math.max(0, w.usedRatio)),
+            ...(Number.isFinite(resetsAt) ? { resetsAt } : {}),
+            ...(w.durationMs ? { durationMs: w.durationMs } : {}),
+          },
+        ];
+      });
+      return { kind: "available", rateLimited: usage.rateLimited, windows: usageWindows(windows) };
     },
 
     async installPlan(id) {

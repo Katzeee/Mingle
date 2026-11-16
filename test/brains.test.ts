@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Brains, type JobView } from "../src/core/brains.ts";
+import { Brains, type JobView, USAGE_TTL_MS } from "../src/core/brains.ts";
 import type { Harness } from "../src/harness/harness.ts";
 import { rig, until } from "./helpers.ts";
 
@@ -23,6 +23,41 @@ function fakeHarness(): Harness & { installs: string[] } {
     },
   };
 }
+
+describe("account usage", () => {
+  it("reads once a minute per harness, and again after a sign-in", async () => {
+    let reads = 0;
+    const harness = fakeHarness();
+    harness.accountUsage = async () => {
+      reads++;
+      return { kind: "available", rateLimited: false, windows: [{ label: "Current session", used: reads / 10 }] };
+    };
+    const brains = new Brains(harness, () => {});
+    const [a, b] = await Promise.all([brains.usage("claude", 0), brains.usage("claude", 10)]);
+    expect(a).toEqual(b);
+    expect(reads).toBe(1);
+    await brains.usage("codex", 10);
+    expect(reads).toBe(2);
+    await brains.usage("claude", USAGE_TTL_MS + 1);
+    expect(reads).toBe(3);
+    const job = brains.signIn("claude");
+    await until(() => brains.get(job.id).prompt !== undefined);
+    brains.answer(job.id, "123");
+    await until(() => brains.get(job.id).state === "done");
+    await brains.usage("claude", USAGE_TTL_MS + 2);
+    expect(reads).toBe(4);
+    brains.dispose();
+  });
+
+  it("answers unknown when the read fails or the harness cannot tell", async () => {
+    const harness = fakeHarness();
+    expect(await new Brains(harness, () => {}).usage("claude")).toEqual({ kind: "unknown" });
+    harness.accountUsage = async () => {
+      throw new Error("not installed");
+    };
+    expect(await new Brains(harness, () => {}).usage("claude")).toEqual({ kind: "unknown" });
+  });
+});
 
 describe("harness installs and sign-ins", () => {
   it("updates once per harness and never alongside an install", async () => {

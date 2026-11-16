@@ -240,6 +240,16 @@ export type UpdateInfo =
   | { kind: "current"; version: string }
   | { kind: "unknown" };
 
+export interface UsageWindow {
+  label: string;
+  /** Consumed fraction, 0 to 1. */
+  used: number;
+  resetsAt?: number;
+  durationMs?: number;
+}
+
+export type AccountUsage = { kind: "available"; rateLimited: boolean; windows: UsageWindow[] } | { kind: "unknown" };
+
 export type SignInState =
   | { kind: "signed_in"; account?: string; plan?: string }
   | { kind: "signed_out"; detail?: string }
@@ -324,6 +334,7 @@ export const api = {
   installPlan: (harness: string) => call<InstallPlan>("GET", `/v1/admin/brains/${harness}/install-plan`),
   install: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/install`),
   updateCheck: (harness: string) => call<UpdateInfo>("GET", `/v1/admin/brains/${harness}/update`),
+  accountUsage: (harness: string) => call<AccountUsage>("GET", `/v1/admin/brains/${harness}/usage`),
   upgrade: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/upgrade`),
   signIn: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/sign-in`),
   job: (id: string) => call<Job>("GET", `/v1/admin/jobs/${id}`),

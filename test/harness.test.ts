@@ -15,7 +15,7 @@ import { createSessionKernel } from "@botiverse/oar/kernel";
 import { eventsOf, usageOf } from "@botiverse/oar/observe";
 import { scriptedRuntime } from "@botiverse/oar/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { oarHarness } from "../src/harness/harness.ts";
+import { oarHarness, usageWindows } from "../src/harness/harness.ts";
 
 const PROMPT = "Mingle test instructions";
 const ENV = { MINGLE_TEST: "present" };
@@ -162,6 +162,57 @@ describe("harness updates", () => {
     const harness = harnessOf(rest);
     expect(await harness.updateCheck?.("codex")).toEqual({ kind: "unknown" });
     expect((await harness.catalog?.())?.[0]?.canUpdate).toBe(false);
+  });
+});
+
+describe("account usage", () => {
+  const claudeWith = (overrides: Partial<Runtime>): Runtime => ({
+    ...defaultRuntimes.require("claude"),
+    installation: async () => ({ kind: "available", via: "executable", command: "claude", version: "2.1.0" }),
+    ...overrides,
+  });
+  const harnessOf = (runtime: Runtime) => oarHarness({ require: () => runtime, list: () => [runtime] });
+  const HOUR = 3_600_000;
+  const WEEK = 7 * 24 * HOUR;
+
+  it("keeps the fullest window of each length, shortest first", async () => {
+    const accountUsage = vi.fn().mockResolvedValue({
+      kind: "available",
+      rateLimited: false,
+      windows: [
+        { label: "Current week (all models)", usedRatio: 0.3, durationMs: WEEK, resetsAt: "2026-11-20T09:00:00.000Z" },
+        { label: "Current week (Opus)", usedRatio: 0.85, durationMs: WEEK },
+        { label: "Current session", usedRatio: 1.2, durationMs: 5 * HOUR, resetsAt: "2026-11-16T15:00:00.000Z" },
+        { label: "Extra usage", usedRatio: 0.1 },
+      ],
+    });
+    const usage = await harnessOf(claudeWith({ accountUsage })).accountUsage?.("claude");
+    expect(usage).toEqual({
+      kind: "available",
+      rateLimited: false,
+      windows: [
+        { label: "Current session", used: 1, durationMs: 5 * HOUR, resetsAt: Date.parse("2026-11-16T15:00:00.000Z") },
+        { label: "Current week (Opus)", used: 0.85, durationMs: WEEK },
+      ],
+    });
+    expect(accountUsage.mock.calls[0]?.[1]).toMatchObject({ limitResetDetails: false });
+  });
+
+  it("shows untimed windows only when there is nothing else", () => {
+    expect(usageWindows([{ label: "Pay-as-you-go", used: 0.4 }])).toEqual([{ label: "Pay-as-you-go", used: 0.4 }]);
+  });
+
+  it("reports nothing it cannot show", async () => {
+    const accountUsage = vi.fn();
+    const harness = harnessOf(claudeWith({ accountUsage }));
+    accountUsage.mockResolvedValueOnce({ kind: "reauth_required", reason: "not_authenticated" });
+    expect(await harness.accountUsage?.("claude")).toEqual({ kind: "unknown" });
+    accountUsage.mockResolvedValueOnce({ kind: "unsupported", reason: "unsupported_auth_mode" });
+    expect(await harness.accountUsage?.("claude")).toEqual({ kind: "unknown" });
+    accountUsage.mockRejectedValueOnce(new Error("offline"));
+    expect(await harness.accountUsage?.("claude")).toEqual({ kind: "unknown" });
+    const { accountUsage: _none, ...rest } = claudeWith({});
+    expect(await harnessOf(rest).accountUsage?.("claude")).toEqual({ kind: "unknown" });
   });
 });
 

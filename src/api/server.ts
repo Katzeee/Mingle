@@ -587,6 +587,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       (await mingle.options.harness.updateCheck?.(c.req.param("id")).catch(() => undefined)) ?? { kind: "unknown" },
     ),
   );
+  app.get("/v1/admin/brains/:id/usage", async (c) => c.json(await mingle.brains.usage(c.req.param("id"))));
   app.post("/v1/admin/brains/:id/upgrade", (c) => c.json(mingle.brains.upgrade(c.req.param("id"))));
   app.post("/v1/admin/brains/:id/sign-in", (c) => c.json(mingle.brains.signIn(c.req.param("id"))));
   app.get("/v1/admin/jobs/:id", (c) => c.json(mingle.brains.get(c.req.param("id"))));
