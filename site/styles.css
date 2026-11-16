@@ -264,17 +264,13 @@ h1 {
   font-size: 13px;
   margin: 16px 0 0;
 }
-.hero-stage {
-  position: relative;
-  margin: 56px auto 0;
-  max-width: 1040px;
-  text-align: left;
+.also {
+  margin: 18px 0 0;
+  color: var(--ink2);
+  font-size: 14px;
 }
-.chat-float {
-  position: absolute;
-  right: -28px;
-  bottom: -28px;
-  width: 340px;
+.also a {
+  font-weight: 550;
 }
 
 /* A window around a screenshot */
@@ -313,156 +309,7 @@ h1 {
   height: auto;
 }
 
-/* The chat that plays itself */
-.chat {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.chat-head {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-}
-.chat-head b {
-  display: block;
-  font-size: 14px;
-}
-.chat-head small {
-  color: var(--ink3);
-  font-size: 12px;
-}
-.chat-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  min-height: 330px;
-  background: var(--bg2);
-}
-.msg {
-  position: relative;
-  max-width: 86%;
-  padding: 8px 12px;
-  border-radius: 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  transform: translateY(8px);
-  opacity: 0;
-  transition:
-    transform 180ms var(--ease),
-    opacity 180ms var(--ease);
-}
-.msg.shown,
-.static .msg,
-html:not(.js) .msg {
-  transform: none;
-  opacity: 1;
-}
-.msg p {
-  margin: 0;
-}
-.msg .who {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink3);
-}
-.msg.out {
-  align-self: flex-end;
-  background: var(--accent-tint);
-  border-color: transparent;
-}
-.msg.out .who {
-  color: var(--accent);
-}
-.react {
-  position: absolute;
-  right: -8px;
-  bottom: -10px;
-  font-size: 13px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0 5px;
-  transform: scale(0);
-  transition: transform 180ms var(--ease);
-}
-.react.shown {
-  transform: scale(1);
-}
-.typing {
-  color: var(--ink3);
-}
-.typing[hidden] {
-  display: none;
-}
-.dots {
-  display: inline-flex;
-  gap: 3px;
-  margin-right: 4px;
-  vertical-align: middle;
-}
-.dots i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ink3);
-  animation: blink 1s infinite;
-}
-.dots i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.dots i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes blink {
-  0%,
-  80%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.4;
-  }
-  40% {
-    transform: translateY(-3px);
-    opacity: 1;
-  }
-}
-
-/* Chat apps */
-.apps {
-  padding: 72px 0 24px;
-  text-align: center;
-}
-.apps-title {
-  margin: 0 0 24px;
-  color: var(--ink2);
-  font-weight: 600;
-}
-.apps-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 28px 36px;
-}
-.apps-row li {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--ink2);
-  transition: transform 180ms var(--ease);
-}
-.apps-row li:hover {
-  transform: translateY(-3px);
-}
+/* Chat app marks */
 .app-icon {
   display: inline-flex;
   flex-shrink: 0;
@@ -478,6 +325,140 @@ html:not(.js) .msg {
   .app-icon {
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
   }
+}
+
+/* The hero's hub: any harness, one agent, any chat app. */
+.hub {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(40px, 96px) auto minmax(40px, 96px) minmax(0, 1fr);
+  align-items: center;
+  max-width: 1040px;
+  margin: 64px auto 0;
+  text-align: left;
+}
+.hub-side {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.hub-label {
+  margin: 0 0 12px 8px;
+  color: var(--ink3);
+  font-size: 13px;
+  font-weight: 600;
+}
+.hub-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+.hub-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 550;
+  transition:
+    background 300ms var(--ease),
+    color 300ms var(--ease);
+}
+.hub-list li.on {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.hub-list .app-icon {
+  border-radius: 7px;
+}
+.hub-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-wire {
+  position: relative;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--line2) 0 6px, transparent 6px 11px);
+  overflow: hidden;
+}
+.hub-wire i {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 18px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: wire 2.2s var(--ease) infinite;
+}
+.hub-wire-late i {
+  animation-delay: 0.5s;
+}
+@keyframes wire {
+  from {
+    transform: translateX(-24px);
+  }
+  to {
+    transform: translateX(110px);
+  }
+}
+.hub-core {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  width: 200px;
+  padding: 26px 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.hub-core b {
+  font-size: 18px;
+}
+.hub-core small {
+  color: var(--ink3);
+  font-size: 12px;
+}
+.hub-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 14px 0 0;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: var(--bg3);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hub-pair span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hub-pair i {
+  color: var(--accent);
+  font-style: normal;
+}
+.hub-pair.swap {
+  animation: swap 400ms var(--ease);
+}
+@keyframes swap {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.hub-caption {
+  margin: 28px auto 0;
+  color: var(--ink2);
+  font-size: 15px;
 }
 
 /* Sections */
@@ -535,11 +516,6 @@ h3 {
 }
 .step > * {
   min-width: 0;
-}
-.step .chat {
-  max-width: 440px;
-  justify-self: center;
-  width: 100%;
 }
 .step-text p {
   color: var(--ink2);
@@ -602,23 +578,6 @@ h3 {
   .tint .card {
     background: var(--card);
   }
-}
-
-/* The same memory in two apps */
-.memory {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 20px;
-  align-items: center;
-  margin-top: 48px;
-}
-.memory .chat-body {
-  min-height: 0;
-}
-.memory-link {
-  justify-self: center;
-  font-size: 24px;
-  color: var(--accent);
 }
 
 /* The interactive demo: a phone that wears each chat app's look. Skins are approximations, colors per app below. */
@@ -886,6 +845,9 @@ html:not(.js) .demo-section {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+.im-send.pressed {
+  transform: scale(0.94);
 }
 .im-send:disabled {
   opacity: 0.35;
@@ -1543,6 +1505,144 @@ html:not(.js) .demo-section {
   }
 }
 
+/* The same memory in two apps: two phones, one Alex between them. */
+.memory {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) auto minmax(0, 360px);
+  justify-content: center;
+  gap: 28px;
+  align-items: center;
+  margin-top: 56px;
+}
+.memory-link {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: 120px;
+  color: var(--ink2);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+.hub-avatar {
+  --size: 64px;
+  margin-bottom: 10px;
+  font-size: 26px;
+  box-shadow: 0 0 0 6px var(--accent-tint);
+}
+.link-avatar {
+  --size: 44px;
+  font-size: 18px;
+  box-shadow: 0 0 0 6px var(--accent-tint);
+}
+
+/* Phones with a fixed conversation (site/scripts/build.mjs phone()): newest at the bottom, like a real chat. */
+.phone-static {
+  height: 520px;
+}
+.step .phone {
+  max-width: 380px;
+  height: 600px;
+  justify-self: center;
+  width: 100%;
+}
+.phone-static .im-log {
+  justify-content: flex-end;
+  overflow: hidden;
+  /* Older messages scroll off the top, as in a real chat: fade them rather than cut them. */
+  mask-image: linear-gradient(transparent, #000 40px);
+}
+.phone-static .rx .chip {
+  transform: scale(0);
+}
+.phone-static .rx .chip.on {
+  transform: none;
+}
+.is-typing {
+  color: var(--im-accent);
+}
+html:not(.js) .m,
+html:not(.js) .phone-static .rx .chip {
+  opacity: 1;
+  transform: none;
+}
+
+/* Privacy: the path a message takes, with no Mingle server on it. */
+.privacy h2 {
+  max-width: 900px;
+}
+.flow {
+  display: grid;
+  grid-template-columns: 1fr minmax(32px, 120px) 1fr minmax(32px, 120px) 1fr;
+  align-items: center;
+  max-width: 920px;
+  margin: 56px auto 0;
+}
+.flow-node {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 22px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg);
+  text-align: center;
+}
+@media (prefers-color-scheme: dark) {
+  .flow-node {
+    background: var(--card);
+  }
+}
+.flow-node b {
+  margin-top: 8px;
+  font-size: 15px;
+}
+.flow-node small {
+  color: var(--ink3);
+  font-size: 13px;
+}
+.flow-me {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-tint);
+}
+.flow-apps {
+  display: flex;
+}
+.flow-apps > * {
+  border-radius: 9px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.flow-apps > * + * {
+  margin-left: -6px;
+}
+.flow-glyph {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  color: var(--ink2);
+}
+.flow-me .flow-glyph {
+  color: var(--accent);
+}
+.flow-line {
+  height: 2px;
+  background: var(--line2);
+}
+.flow-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 20px auto 0;
+  padding: 5px 14px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 600;
+}
+
 /* Brains */
 .brains {
   display: flex;
@@ -1810,6 +1910,9 @@ html:not(.js) .demo-section {
     opacity: 1;
     transform: none;
   }
+  .hub-wire i {
+    display: none;
+  }
 }
 
 /* Narrow screens */
@@ -1817,13 +1920,45 @@ html:not(.js) .demo-section {
   .nav-links {
     display: none;
   }
-  .chat-float {
-    position: relative;
-    right: auto;
-    bottom: auto;
-    width: auto;
-    max-width: 420px;
-    margin: -40px auto 0;
+  .hub {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    max-width: 560px;
+  }
+  .hub-side {
+    width: 100%;
+  }
+  .hub-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .hub-wire {
+    width: 2px;
+    height: 36px;
+    background: repeating-linear-gradient(180deg, var(--line2) 0 6px, transparent 6px 11px);
+  }
+  .hub-wire i {
+    top: 0;
+    left: -2px;
+    width: 6px;
+    height: 14px;
+    animation-name: wire-down;
+  }
+  @keyframes wire-down {
+    from {
+      transform: translateY(-16px);
+    }
+    to {
+      transform: translateY(40px);
+    }
+  }
+  .flow {
+    grid-template-columns: minmax(0, 320px);
+    justify-content: center;
+  }
+  .flow-line {
+    justify-self: center;
+    width: 2px;
+    height: 28px;
   }
   .step {
     grid-template-columns: 1fr;
@@ -1836,7 +1971,14 @@ html:not(.js) .demo-section {
     grid-template-columns: 1fr;
   }
   .memory {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 380px);
+    gap: 20px;
+  }
+  .memory-link {
+    width: auto;
+    grid-auto-flow: column;
+    justify-content: center;
+    align-items: center;
   }
   .demo-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1860,9 +2002,6 @@ html:not(.js) .demo-section {
     flex: none;
     width: 240px;
     scroll-snap-align: start;
-  }
-  .memory-link {
-    transform: rotate(90deg);
   }
   .grid-3,
   .grid-4 {
@@ -1894,8 +2033,25 @@ html:not(.js) .demo-section {
   .nav-end .icon-link {
     display: none;
   }
-  .chat-float {
-    margin-top: 16px;
+  /* On a phone the hub shows marks only; the pair under Alex names the two that are lit. */
+  .hub-side {
+    padding: 14px;
+  }
+  .hub-label {
+    margin-left: 4px;
+  }
+  .hub-list {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    justify-items: center;
+  }
+  .hub-list li {
+    padding: 8px;
+  }
+  .hub-name {
+    display: none;
+  }
+  .phone-static {
+    height: 440px;
   }
   .demo-list {
     margin: 24px -18px 0;
