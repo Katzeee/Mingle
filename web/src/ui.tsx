@@ -14,7 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import type { AgentStatus } from "./api.ts";
 import { useI18n } from "./i18n.ts";
-import { withMod } from "./shortcuts.ts";
+import { type Keys, keysAria, keysLabel, useShortcutHints, withMod } from "./shortcuts.ts";
 
 /** The building blocks DESIGN.md defines. Nothing here takes a raw color. */
 
@@ -103,7 +103,7 @@ export function Select({ className = "", ...props }: SelectHTMLAttributes<HTMLSe
   return <select className={`h-[34px] ${control} ${className}`} {...props} />;
 }
 
-/** A row of choices where one is on: appearance, language. */
+/** A row of choices where one is on: appearance, language, an agent's tabs (with their keys). */
 export function Segmented<T extends string>({
   value,
   options,
@@ -111,26 +111,144 @@ export function Segmented<T extends string>({
   label,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; keys?: Keys }[];
   onChange: (value: T) => void;
   label: string;
 }) {
   return (
     <div role="radiogroup" aria-label={label} className="inline-flex rounded-control bg-bg3 p-0.5">
-      {options.map((o) => (
-        // biome-ignore lint/a11y/useSemanticElements: a styled choice; a native radio cannot take this look
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className="h-7 rounded-small px-3 text-small text-ink2 transition-colors duration-[120ms] aria-checked:bg-card aria-checked:font-medium aria-checked:text-ink aria-checked:shadow-card"
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o) => {
+        const choice = (
+          // biome-ignore lint/a11y/useSemanticElements: a styled choice; a native radio cannot take this look
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={value === o.value}
+            aria-keyshortcuts={o.keys ? keysAria(o.keys) : undefined}
+            onClick={() => onChange(o.value)}
+            className="h-7 rounded-small px-3 text-small text-ink2 transition-colors duration-[120ms] aria-checked:bg-card aria-checked:font-medium aria-checked:text-ink aria-checked:shadow-card"
+          >
+            {o.label}
+          </button>
+        );
+        return o.keys ? (
+          <Shortcut key={o.value} label={o.label} keys={o.keys} side="bottom">
+            {choice}
+          </Shortcut>
+        ) : (
+          choice
+        );
+      })}
     </div>
+  );
+}
+
+/** A key as it is printed on the keyboard: "⌘N", "Ctrl+N". */
+export function Kbd({ keys, className = "" }: { keys: Keys; className?: string }) {
+  return (
+    <kbd
+      className={`inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-line2 bg-bg2 px-1 font-sans text-[11px] leading-none font-medium tracking-[0.02em] whitespace-nowrap text-ink2 ${className}`}
+    >
+      {keysLabel(keys)}
+    </kbd>
+  );
+}
+
+/** Moving from one tooltip to the next shows it at once, as in macOS. */
+let tipShownAt = 0;
+const TIP_DELAY = 400;
+const TIP_WARM = 600;
+
+/**
+ * A button that has a shortcut. Pointing at it shows its name and keys in a small tooltip, soon
+ * and without the browser's long delay; holding the modifier shows the keys beside it for every
+ * such button at once (useShortcutHints). Touch shows neither.
+ */
+export function Shortcut({
+  label,
+  keys,
+  side,
+  className = "",
+  children,
+}: {
+  label: string;
+  keys: Keys | undefined;
+  /** Where the tooltip and the held-modifier key go: right of a sidebar row, or below a button. */
+  side: "right" | "bottom";
+  className?: string;
+  children: ReactNode;
+}) {
+  const hints = useShortcutHints();
+  const box = useRef<HTMLSpanElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const tip = useRef<HTMLSpanElement>(null);
+  const id = useId();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  // Kept inside the window: the header's buttons sit near its right edge.
+  useLayoutEffect(() => {
+    const el = tip.current;
+    if (!el || !at) return;
+    const r = el.getBoundingClientRect();
+    const shift = Math.min(0, innerWidth - 8 - r.right) || Math.max(0, 8 - r.left);
+    if (shift) el.style.marginLeft = `${shift}px`;
+  }, [at]);
+  if (!keys) return <>{children}</>;
+  const show = (now: boolean) => {
+    clearTimeout(timer.current);
+    const place = () => {
+      const r = box.current?.getBoundingClientRect();
+      if (!r) return;
+      setAt(
+        side === "right" ? { x: r.right + 8, y: r.top + r.height / 2 } : { x: r.left + r.width / 2, y: r.bottom + 6 },
+      );
+      tipShownAt = Date.now();
+    };
+    if (now || Date.now() - tipShownAt < TIP_WARM) place();
+    else timer.current = setTimeout(place, TIP_DELAY);
+  };
+  const hide = () => {
+    clearTimeout(timer.current);
+    if (at) tipShownAt = Date.now();
+    setAt(null);
+  };
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: it only watches the button it wraps, to show its tooltip
+    <span
+      ref={box}
+      className={`relative ${side === "right" ? "flex" : "inline-flex"} ${className}`}
+      aria-describedby={at ? id : undefined}
+      onPointerEnter={(e) => e.pointerType === "mouse" && show(false)}
+      onPointerLeave={hide}
+      onPointerDown={hide}
+      onFocus={(e) => e.target.matches(":focus-visible") && show(true)}
+      onBlur={hide}
+      onKeyDown={(e) => e.key === "Escape" && hide()}
+    >
+      {children}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute z-30 transition-opacity duration-[120ms] ${hints ? "opacity-100" : "opacity-0"} ${side === "right" ? "top-1/2 right-2 -translate-y-1/2" : "top-full left-1/2 mt-1.5 -translate-x-1/2"}`}
+      >
+        <Kbd keys={keys} className="shadow-card" />
+      </span>
+      {at && !hints
+        ? createPortal(
+            <span
+              ref={tip}
+              id={id}
+              role="tooltip"
+              style={{ left: at.x, top: at.y }}
+              className={`pointer-events-none fixed z-50 flex max-w-[280px] items-center gap-2 rounded-control border border-line bg-card py-1 pr-1 pl-2.5 text-small text-ink shadow-card ${side === "right" ? "-translate-y-1/2" : "-translate-x-1/2"}`}
+            >
+              <span className="min-w-0 truncate">{label}</span>
+              <Kbd keys={keys} />
+            </span>,
+            document.body,
+          )
+        : null}
+    </span>
   );
 }
 

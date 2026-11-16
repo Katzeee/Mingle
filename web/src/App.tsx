@@ -8,8 +8,8 @@ import { NewAgent } from "./NewAgent.tsx";
 import { onNavigateRequest } from "./online.ts";
 import { usePolling } from "./poll.ts";
 import { SettingsPage } from "./Settings.tsx";
-import { ariaShortcut, shortcutLabel, useShellShortcuts } from "./shortcuts.ts";
-import { Avatar, Button, Eyebrow, PlusIcon, SettingsIcon, StatusDot, UpdateIcon, Waiting } from "./ui.tsx";
+import { KEYS, keysAria, useShellShortcuts } from "./shortcuts.ts";
+import { Avatar, Button, Eyebrow, PlusIcon, SettingsIcon, Shortcut, StatusDot, UpdateIcon, Waiting } from "./ui.tsx";
 import { updates, useUpdates } from "./updates.ts";
 import { Welcome } from "./Welcome.tsx";
 
@@ -252,41 +252,44 @@ function Sidebar({
           const apps = [...new Set(a.connections.map((c) => c.platform))]
             .map((p) => t(`platform.${p}` as MessageKey))
             .join(t("list.separator"));
+          const keys = KEYS.agent(i);
           return (
-            <button
-              key={a.id}
-              type="button"
-              title={i < 9 ? `${a.name} (${shortcutLabel(String(i + 1))})` : a.name}
-              aria-keyshortcuts={i < 9 ? ariaShortcut(String(i + 1)) : undefined}
-              onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
-              aria-current={on ? "page" : undefined}
-              className={`${row} min-h-[46px] py-1.5`}
-            >
-              <Avatar name={a.name} src={a.avatar} size={28} />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate font-medium">{a.name}</span>
-                <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">
-                  <StatusDot state={a.status} />
-                  <span className="truncate">
-                    {t(`status.${a.status}`)}
-                    {apps ? ` · ${apps}` : ""}
+            <Shortcut key={a.id} label={a.name} keys={keys} side="right">
+              <button
+                type="button"
+                title={keys ? undefined : a.name}
+                aria-keyshortcuts={keys ? keysAria(keys) : undefined}
+                onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
+                aria-current={on ? "page" : undefined}
+                className={`${row} min-h-[46px] py-1.5`}
+              >
+                <Avatar name={a.name} src={a.avatar} size={28} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate font-medium">{a.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">
+                    <StatusDot state={a.status} />
+                    <span className="truncate">
+                      {t(`status.${a.status}`)}
+                      {apps ? ` · ${apps}` : ""}
+                    </span>
                   </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </Shortcut>
           );
         })}
-        <button
-          type="button"
-          onClick={() => onNavigate({ kind: "new" })}
-          title={`${t("agents.new")} (${shortcutLabel("N")})`}
-          aria-keyshortcuts={ariaShortcut("N")}
-          aria-current={view.kind === "new" ? "page" : undefined}
-          className={`${row} h-8 text-ink2 hover:text-ink`}
-        >
-          <PlusIcon className="mx-1.5" />
-          {t("agents.new")}
-        </button>
+        <Shortcut label={t("agents.new")} keys={KEYS.newAgent} side="right">
+          <button
+            type="button"
+            onClick={() => onNavigate({ kind: "new" })}
+            aria-keyshortcuts={keysAria(KEYS.newAgent)}
+            aria-current={view.kind === "new" ? "page" : undefined}
+            className={`${row} h-8 text-ink2 hover:text-ink`}
+          >
+            <PlusIcon className="mx-1.5" />
+            {t("agents.new")}
+          </button>
+        </Shortcut>
       </nav>
       <div className="flex-1" />
       <div className="flex flex-col gap-0.5 border-t border-line pt-2">
@@ -303,17 +306,18 @@ function Sidebar({
             </span>
           </button>
         ) : null}
-        <button
-          type="button"
-          onClick={() => onNavigate({ kind: "settings" })}
-          title={`${t("settings.title")} (${shortcutLabel(",")})`}
-          aria-keyshortcuts={ariaShortcut(",")}
-          aria-current={view.kind === "settings" ? "page" : undefined}
-          className={`${row} h-8 text-ink2 hover:text-ink aria-[current=page]:text-ink`}
-        >
-          <SettingsIcon className="mx-1.5" />
-          {t("settings.title")}
-        </button>
+        <Shortcut label={t("settings.title")} keys={KEYS.settings} side="right">
+          <button
+            type="button"
+            onClick={() => onNavigate({ kind: "settings" })}
+            aria-keyshortcuts={keysAria(KEYS.settings)}
+            aria-current={view.kind === "settings" ? "page" : undefined}
+            className={`${row} h-8 text-ink2 hover:text-ink aria-[current=page]:text-ink`}
+          >
+            <SettingsIcon className="mx-1.5" />
+            {t("settings.title")}
+          </button>
+        </Shortcut>
       </div>
     </div>
   );

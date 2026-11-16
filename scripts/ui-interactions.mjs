@@ -1329,6 +1329,68 @@ export async function reviewInteractions({
         first,
       );
 
+      // The agent's tabs: ⇧⌘[ ⇧⌘] on macOS, Ctrl+Page Up / Down elsewhere.
+      await goto(`/a/${slug}`, labels);
+      const tabChecked = (label) =>
+        [...document.querySelectorAll('header [role="radio"]')].some(
+          (b) => b.textContent.trim() === label && b.getAttribute("aria-checked") === "true",
+        );
+      if (modifier === 4) await press("}", "BracketRight", 221, modifier | 8);
+      else await press("PageDown", "PageDown", 34, modifier);
+      await until("settings tab by shortcut", tabChecked, labels.settings);
+      if (modifier === 4) await press("{", "BracketLeft", 219, modifier | 8);
+      else await press("PageUp", "PageUp", 33, modifier);
+      await until("activity tab by shortcut", tabChecked, labels.activity);
+
+      // Holding the modifier alone shows every shortcut beside its button; letting go hides them.
+      const hintsShown = () => {
+        const badges = [...document.querySelectorAll("span[aria-hidden] > kbd")].map((k) => k.parentElement);
+        const shown = badges.filter((b) => b.offsetParent && getComputedStyle(b).opacity === "1");
+        return badges.length > 0 && shown.length === badges.filter((b) => b.offsetParent).length ? shown.length : 0;
+      };
+      const hintsHidden = () =>
+        [...document.querySelectorAll("span[aria-hidden] > kbd")].every(
+          (k) => getComputedStyle(k.parentElement).opacity === "0",
+        );
+      const modKey = modifier === 4 ? ["Meta", "MetaLeft", 91] : ["Control", "ControlLeft", 17];
+      await send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: modKey[0],
+        code: modKey[1],
+        windowsVirtualKeyCode: modKey[2],
+        modifiers: modifier,
+      });
+      await sleep(200);
+      assert(await call(hintsHidden), `${tag}: hints showed before the hold delay`);
+      const shown = await until("hints while held", hintsShown);
+      // Two tabs, at least two agents, New agent and Settings.
+      assert(shown >= (width < 768 ? 2 : 6), `${tag}: only ${shown} hints`);
+      assert(await call(pageFits), `${tag}: horizontal overflow with hints`);
+      await shot(`${localeName}-${width}-shortcut-hints`);
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: modKey[0],
+        code: modKey[1],
+        windowsVirtualKeyCode: modKey[2],
+      });
+      await until("hints hidden on release", hintsHidden);
+
+      if (width >= 768) {
+        // Pointing at a sidebar row shows its name and keys, soon.
+        const rowAt = await call(() => {
+          const el = document.querySelector("aside nav button");
+          const r = el?.getBoundingClientRect();
+          return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+        });
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: rowAt.x, y: rowAt.y });
+        const started = Date.now();
+        await until("tooltip", () => !!document.querySelector('[role="tooltip"] kbd'));
+        assert(Date.now() - started < 1500, `${tag}: tooltip took ${Date.now() - started} ms`);
+        await shot(`${localeName}-${width}-shortcut-tooltip`);
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: width - 4, y: 880 });
+        await until("tooltip gone", () => !document.querySelector('[role="tooltip"]'));
+      }
+
       // Command-Return saves the role; Escape leaves the editor without saving.
       await goto(`/a/${slug}`, labels);
       await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));

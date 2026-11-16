@@ -31,7 +31,7 @@ import { Profile } from "./Profile.tsx";
 import { PlatformIcon } from "./platforms.tsx";
 import { usePolling } from "./poll.ts";
 import { OnlineRows } from "./Settings.tsx";
-import { onEscape } from "./shortcuts.ts";
+import { KEYS, keysAria, onEscape, usePageShortcuts } from "./shortcuts.ts";
 import {
   AgentStatusText,
   ApiKeyHint,
@@ -49,6 +49,7 @@ import {
   Section,
   Segmented,
   Select,
+  Shortcut,
   StatusDot,
   Step,
   Steps,
@@ -201,6 +202,20 @@ export function AgentPage({
   useEffect(() => setNotice(null), [tab]);
 
   const busy = agent.status === "thinking" || agent.status === "working";
+  const stop = async () => {
+    try {
+      const { stopped } = await api.stop(agent.id);
+      setNotice(t(stopped ? "agent.stopped" : "agent.idleNothing"));
+    } catch (error) {
+      setNotice(errorText(t, error));
+    }
+  };
+  usePageShortcuts({
+    tab: (index) => setTab(index === 0 ? "activity" : "settings"),
+    stop: () => {
+      if (busy) void stop();
+    },
+  });
   const paused = agent.status === "paused";
   const [switching, setSwitching] = useState(false);
   const [pauseFailure, setPauseFailure] = useState<string | null>(null);
@@ -302,25 +317,16 @@ export function AgentPage({
               value={tab}
               onChange={setTab}
               options={[
-                { value: "activity", label: t("agent.tabActivity") },
-                { value: "settings", label: t("agent.tabSettings") },
+                { value: "activity", label: t("agent.tabActivity"), keys: KEYS.tab(0) },
+                { value: "settings", label: t("agent.tabSettings"), keys: KEYS.tab(1) },
               ]}
             />
             {busy ? (
-              <Button
-                small
-                title={t("agent.stopHint")}
-                onClick={async () => {
-                  try {
-                    const { stopped } = await api.stop(agent.id);
-                    setNotice(t(stopped ? "agent.stopped" : "agent.idleNothing"));
-                  } catch (error) {
-                    setNotice(errorText(t, error));
-                  }
-                }}
-              >
-                {t("agent.stop")}
-              </Button>
+              <Shortcut label={t("agent.stopHint")} keys={KEYS.stop} side="bottom">
+                <Button small aria-keyshortcuts={keysAria(KEYS.stop)} onClick={stop}>
+                  {t("agent.stop")}
+                </Button>
+              </Shortcut>
             ) : null}
           </>
         }
