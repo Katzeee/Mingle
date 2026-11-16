@@ -3,9 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
-## Unreleased
+## 0.1.17
 
 - iMessage keeps the agent in one thread. Every message to yourself is stored twice, once per address, and the agent used to answer in whichever copy Messages wrote first, so its replies jumped between your email and phone-number threads and both sides of each looked mixed up. It now picks the thread from where you wrote from and to: when you write from your number to your Apple ID, your words stay on the right and the agent's land on the left. Its own reflected copies are never read back as yours, even if the invisible marker is lost.
+- A bot's page now says in its Permissions section when the bot only hears group messages that @ it — covering Telegram and Discord too, with a "Turn on" link to each platform's setting — and it is checked again when the window regains focus. A Feishu bot added to a group also reads its recent messages as background the agent can read, and Feishu @all messages are kept instead of dropped.
 - A Feishu bot added back to a group no longer reads its own earlier messages there as another bot's.
 - A Slack bot's own posts that arrive under its bot ID alone are no longer read back as another bot's.
 
