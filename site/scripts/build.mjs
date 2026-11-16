@@ -145,7 +145,7 @@ function phone(key, t, chat, msgs, cls = "") {
   </div>`;
 }
 
-// The hero's phone: Alex answering in a group, in WeChat for Chinese readers and Telegram for English ones.
+// Step 3's phone: Alex answering in a group, in WeChat for Chinese readers and Telegram for English ones.
 function heroPhone(key, t) {
   const c = t.chat;
   const app = key === "zh" ? "wechat" : "telegram";
@@ -228,12 +228,14 @@ function demoSection(key, t) {
   const json = JSON.stringify(data).replaceAll("<", "\\u003c");
   const apps = (s) => [...new Set(Object.values(s.chats).map((c) => c.app))];
   return `
-<section id="demo" class="section tint demo-section">
+<section id="demo" class="section demo-section">
+  <div class="wrap">
+    <p class="eyebrow">${t.agent.eyebrow}</p>
+    <h2>${t.agent.title}</h2>
+    <p class="lead">${t.agent.lead} ${t.demo.lead}</p>
+  </div>
   <div class="wrap demo-grid">
     <div class="demo-intro">
-      <p class="eyebrow">${t.demo.eyebrow}</p>
-      <h2>${t.demo.title}</h2>
-      <p class="lead">${t.demo.lead}</p>
       <div class="demo-list" role="tablist" aria-label="${esc(t.demo.scenes)}">
         ${d.scenes
           .map(
@@ -269,6 +271,11 @@ function demoSection(key, t) {
       <p class="demo-caption"><span class="av av-agent" aria-hidden="true">A</span>${esc(d.ui.caption)}</p>
     </div>
   </div>
+  <div class="wrap">
+    <ul class="table table-3 reveal">
+      ${t.agent.points.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
+    </ul>
+  </div>
   <script type="application/json" id="demo-data">${json}</script>
 </section>`;
 }
@@ -299,7 +306,7 @@ function page(key) {
       (s, i) => `
       <li class="step reveal">
         <div class="step-text"><span class="num">${i + 1}</span><h3>${s.title}</h3><p>${s.body}</p></div>
-        ${shot(s.img, lang, s.alt)}
+        ${s.img ? shot(s.img, lang, s.alt) : heroPhone(key, t)}
       </li>`,
     )
     .join("");
@@ -344,28 +351,29 @@ ${Object.values(copy)
 
 <main>
 <section class="hero">
-  <div class="wrap hero-grid">
-    <div class="hero-text">
-      <h1 class="rise">${t.hero.title}</h1>
-      <p class="lead rise">${t.hero.lead}</p>
-      <ul class="pairs rise" aria-label="${esc(t.logos.harnesses)} → ${esc(t.logos.apps)}">${pairs
-        .map(
-          ([id, name, app]) =>
-            `<li>${brainIcon(id)}<b>${name}</b><span class="pair-arrow" aria-hidden="true">→</span>${platformIcon(app, 18)}${t.platforms[app]}</li>`,
-        )
-        .join("")}</ul>
-      <div class="cta rise">
-        <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
-           data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
-           data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
-        <a class="btn" href="#cli">${t.installTerminal}</a>
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <h1 class="rise">${t.hero.title}</h1>
+        <ul class="pairs rise" aria-label="${esc(t.logos.harnesses)} → ${esc(t.logos.apps)}">${pairs
+          .map(
+            ([id, name, app]) =>
+              `<li>${brainIcon(id)}<b>${name}</b><span class="pair-arrow" aria-hidden="true">→</span>${platformIcon(app, 18)}${t.platforms[app]}</li>`,
+          )
+          .join("")}</ul>
       </div>
-      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
+      <div class="hero-text">
+        <p class="lead rise">${t.hero.lead}</p>
+        <div class="cta rise">
+          <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
+             data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
+             data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
+          <a class="btn" href="#cli">${t.installTerminal}</a>
+        </div>
+        <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
+      </div>
     </div>
-    <div class="hero-stage rise">
-      ${shot("agent", lang, t.how.steps[2].alt, "hero-window")}
-      ${heroPhone(key, t).replace("phone phone-static ", "phone phone-static hero-phone ")}
-    </div>
+    ${shot("agent", lang, t.hero.alt, "hero-shot rise")}
   </div>
 </section>
 
@@ -381,31 +389,6 @@ ${logos(t)}
       ${t.privacy.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
     <p class="note">${t.privacy.note}</p>
-  </div>
-</section>
-
-<section id="agent" class="section">
-  <div class="wrap">
-    <p class="eyebrow">${t.agent.eyebrow}</p>
-    <h2>${t.agent.title}</h2>
-    <p class="lead">${t.agent.lead}</p>
-    <div class="memory" data-seq-group>
-      ${t.agent.memory
-        .map((m, i) =>
-          phone(
-            key,
-            t,
-            { app: m.app, name: m.chat, members: m.members, when: m.when, hour: i ? 19 : 10 },
-            m.msgs.map(([dir, who, text], j) => [dir, who, text, { seq: i * 10 + j, typing: who === "agent" }]),
-          ),
-        )
-        .join(
-          `<div class="memory-link" aria-hidden="true"><span class="av av-agent link-avatar">A</span><small>${t.agent.link}</small></div>`,
-        )}
-    </div>
-    <ul class="table table-3 reveal">
-      ${t.agent.points.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
-    </ul>
   </div>
 </section>
 
@@ -433,13 +416,19 @@ ${demoSection(key, t)}
   </div>
 </section>
 
-<section id="details" class="section">
-  <div class="wrap">
-    <p class="eyebrow">${t.details.eyebrow}</p>
-    <h2>${t.details.title}</h2>
-    <ul class="table table-3 reveal">
-      ${t.details.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
-    </ul>
+<section id="handoff" class="section">
+  <div class="wrap split">
+    <div>
+      <p class="eyebrow">${t.handoff.eyebrow}</p>
+      <h2>${t.handoff.title}</h2>
+      <p class="lead">${t.handoff.lead}</p>
+    </div>
+    <figure class="crop reveal">
+      <picture>
+        <source srcset="/img/handoff-${lang}-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="/img/handoff-${lang}-light.png" alt="${esc(t.handoff.alt)}" width="1296" height="1294" loading="lazy" decoding="async">
+      </picture>
+    </figure>
   </div>
 </section>
 

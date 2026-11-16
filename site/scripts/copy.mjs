@@ -8,13 +8,7 @@ export const copy = {
     title: "Mingle: any agent, in any chat app",
     description:
       "Mingle connects any coding agent you already use, like Claude Code, Codex or Cursor, to any chat app: WeChat, Feishu, Slack, Telegram and more, plus GitHub and iMessage. One agent with a name, a role and a memory, in all of them at once. It runs on your computer. There is no Mingle server.",
-    nav: {
-      privacy: "No server",
-      agent: "One agent",
-      demo: "Demo",
-      how: "Get started",
-      cli: "CLI",
-    },
+    nav: { privacy: "No server", demo: "One agent", how: "Get started", handoff: "Handoff", cli: "CLI" },
     download: "Download",
     downloadFor: {
       mac: "Download for Mac",
@@ -28,6 +22,7 @@ export const copy = {
       title: "Any agent,<br><span>in any chat app.</span>",
       lead: "Mingle brings the coding agent you already use, like Claude Code, Codex or Cursor, into WeChat, Feishu, Slack, Telegram and the rest of your chats, as one agent with a name, a role and a memory. It runs on your computer. There is no Mingle server.",
       open: "Open source",
+      alt: "The Mingle console: four agents, and Alex connected to Telegram, Slack, Discord, WeChat and GitHub, with its recent messages, tasks and a reminder",
     },
     logos: { harnesses: "Harnesses", apps: "Chat apps" },
     chat: {
@@ -41,9 +36,7 @@ export const copy = {
       reply2: "Done. I'll post the time and meeting point here on Friday at 8 pm.",
     },
     demo: {
-      eyebrow: "Demo",
-      title: "Real work, in the apps you already use.",
-      lead: "Each scene plays by itself; pick one to jump to it. Alex keeps its name, face and memory in every app, and each app shows its own receipts and progress.",
+      lead: "Each scene plays by itself; pick one to jump to it.",
       scenes: "Scenes",
     },
     platforms: {
@@ -77,42 +70,14 @@ export const copy = {
         {
           title: "Talk to it",
           body: "Message it directly, or @ it in a group. It reacts as soon as it starts, and the reply fills in while it works. You're its owner: the one who scanned the code, or who sends it the 6-digit code the console shows.",
-          img: "agent",
-          alt: "Alex's activity in the Mingle console: messages from a Telegram group and a Slack direct message, its tasks and a reminder",
+          img: null,
         },
       ],
     },
     agent: {
       eyebrow: "One agent",
       title: "Like a person, not a bot per app.",
-      lead: "Alex isn't a separate bot in each app. It's one someone, with the same name, face and memory in your WeChat group and your Telegram chats. Tell it something in one app and it knows it in the other. There is no <code>/new</code> and no <code>/switch</code>; the one command is <code>/stop</code>.",
-      link: "Same Alex, one memory",
-      memory: [
-        {
-          app: "wechat",
-          chat: "Weekend hikers",
-          members: 5,
-          when: "Tuesday",
-          msgs: [
-            ["out", "Maya", "Saturday's hike is on. Who's in?"],
-            ["in", "Leo", "@Alex heads up, I'm vegetarian. And I can't do more than 600 m of climbing."],
-            ["in", "agent", "Noted. I'll keep both in mind when I plan Saturday."],
-          ],
-        },
-        {
-          app: "telegram",
-          chat: "Alex",
-          when: "Friday",
-          msgs: [
-            ["out", "Maya", "Which route on Saturday, and what should I bring for everyone's lunch?"],
-            [
-              "in",
-              "agent",
-              "The north loop: 540 m of climbing, under Leo's limit. Make lunch vegetarian; Leo said so in the WeChat group on Tuesday.",
-            ],
-          ],
-        },
-      ],
+      lead: "Alex isn't a separate bot in each app. It's one someone, with the same name, face and memory in every chat app it joins. Tell it something in one app and it knows it in the next. There is no <code>/new</code> and no <code>/switch</code>; the one command is <code>/stop</code>.",
       points: [
         ["Remembers across apps", "One agent, one memory, in every chat app it joins."],
         [
@@ -176,38 +141,11 @@ export const copy = {
       ],
       note: "Your messages still pass through the chat app and your model provider. That part is theirs, not ours.",
     },
-    details: {
-      eyebrow: "Details",
-      title: "Small, quiet and out of the way.",
-      items: [
-        ["A desktop app", "Lives in the menu bar or tray, keeps Mingle running, opens at login and updates itself."],
-        [
-          "Needs you, in one place",
-          "A broken connection, a pending admin approval or an unanswered message, each with what to do.",
-        ],
-        [
-          "Retry what it missed",
-          "A message it failed or didn't answer gets a Retry button. It knows the answer is late.",
-        ],
-        [
-          "Errors in plain words",
-          "Signed out, out of usage, busy: the chat and the console say what happened and what helps. Usage limits wait and retry by themselves.",
-        ],
-        [
-          "Catch it up",
-          "Have another Claude Code or Codex session write a handoff; the agent files it into its own memory and tasks.",
-        ],
-        [
-          "Diagnose a problem",
-          "One click copies a prompt for a local agent to read Mingle's log, find the cause and draft an issue for you.",
-        ],
-        [
-          "A name and a face",
-          "Rename it and give it a picture. Pause it when you need quiet; it picks up where it left off.",
-        ],
-        ["Light and dark, two languages", "Follows your system's appearance. English and Chinese."],
-        ["Open source", "MIT licensed. Read it, build it, change it."],
-      ],
+    handoff: {
+      eyebrow: "Handoff",
+      title: "Catch it up from any conversation.",
+      lead: "Been working on something in Claude Code or Codex? Copy one prompt into that conversation and it writes Alex a handoff: the progress, the decisions, your preferences. Alex files it into its memory and tasks without stopping what it's doing.",
+      alt: "The Handoff panel in Alex's settings: copy a prompt, send it to the agent you're using, and Alex files it into its memory",
     },
     cli: {
       eyebrow: "Terminal",
@@ -250,7 +188,7 @@ export const copy = {
     title: "Mingle：任意 Agent，接入任意聊天软件",
     description:
       "Mingle 把你已经在用的任意 coding agent，比如 Claude Code、Codex、Cursor，接入任意聊天软件：微信、飞书、Slack、Telegram 等，还有 GitHub 和 iMessage。一个有名字、有角色、有记忆的 Agent，同时出现在所有地方。在你自己的电脑上运行，没有 Mingle 服务器。",
-    nav: { privacy: "无服务器", agent: "一个 Agent", demo: "演示", how: "怎么用", cli: "命令行" },
+    nav: { privacy: "无服务器", demo: "一个 Agent", how: "怎么用", handoff: "交接", cli: "命令行" },
     download: "下载",
     downloadFor: { mac: "下载 Mac 版", windows: "下载 Windows 版", linux: "下载 Linux 版", any: "下载" },
     alsoFor: { mac: "macOS", windows: "Windows", linux: "Linux", pair: "{a} 与 {b}", intel: "Intel Mac" },
@@ -259,6 +197,7 @@ export const copy = {
       title: "任意 Agent，<br><span>接入任意聊天软件。</span>",
       lead: "Mingle 把你已经在用的 coding agent，比如 Claude Code、Codex、Cursor，接进微信、飞书、Slack、Telegram 等聊天软件，成为一个有名字、有角色、有记忆的 Agent。它在你自己的电脑上运行，没有 Mingle 服务器。",
       open: "开源",
+      alt: "Mingle 控制台：四个 Agent，Alex 接入了微信、飞书、Telegram、钉钉和 GitHub，旁边是它最近的消息、任务和提醒",
     },
     logos: { harnesses: "支持的 harness", apps: "支持的聊天软件" },
     chat: {
@@ -272,9 +211,7 @@ export const copy = {
       reply2: "好的。周五晚上 8 点我会在群里发集合时间和地点。",
     },
     demo: {
-      eyebrow: "演示",
-      title: "在你已经在用的软件里干活。",
-      lead: "每个场景会自动播放，也可以点选跳到任意一个。Alex 在每个聊天软件里都是同一个名字、同一个头像、同一份记忆；回执和进度按各家的样子显示。",
+      lead: "每个场景会自动播放，也可以点选跳到任意一个。",
       scenes: "场景",
     },
     platforms: {
@@ -308,38 +245,14 @@ export const copy = {
         {
           title: "和它说话",
           body: "私聊它，或在群里 @ 它。它一开始处理就会回应，回复边做边更新。你是它的 owner：扫码的人就是你，或者把控制台显示的 6 位验证码私聊发给它。",
-          img: "agent",
-          alt: "Mingle 控制台里 Alex 的动态：来自 Telegram 群和飞书私聊的消息、它的任务和一个提醒",
+          img: null,
         },
       ],
     },
     agent: {
       eyebrow: "一个 Agent",
       title: "像一个人，而不是一群机器人。",
-      lead: "Alex 不是每个聊天软件里各自独立的机器人，而是同一个“人”：在微信群和 Telegram 里，名字、头像、记忆都一样。你在一个软件里告诉它的事，到了另一个软件它也知道。没有 <code>/new</code>，也没有 <code>/switch</code>，唯一的命令是 <code>/stop</code>。",
-      link: "同一个 Alex，同一份记忆",
-      memory: [
-        {
-          app: "wechat",
-          chat: "周末徒步群",
-          members: 5,
-          when: "周二",
-          msgs: [
-            ["out", "李雷", "周六徒步照常，谁来？"],
-            ["in", "韩梅梅", "@Alex 提前说一下，我吃素，而且爬升别超过 600 米。"],
-            ["in", "agent", "记下了。规划周六路线时会考虑这两点。"],
-          ],
-        },
-        {
-          app: "telegram",
-          chat: "Alex",
-          when: "周五",
-          msgs: [
-            ["out", "李雷", "周六走哪条线？中午给大家带什么吃的？"],
-            ["in", "agent", "走香山北线，爬升 540 米，在韩梅梅说的范围内。午饭准备素食，她周二在微信群里提过。"],
-          ],
-        },
-      ],
+      lead: "Alex 不是每个聊天软件里各自独立的机器人，而是同一个“人”：在它加入的每个聊天软件里，名字、头像、记忆都一样。你在一个软件里告诉它的事，到了另一个软件它也知道。没有 <code>/new</code>，也没有 <code>/switch</code>，唯一的命令是 <code>/stop</code>。",
       points: [
         ["跨软件记得事", "一个 Agent，一份记忆，加入的每个聊天软件都通用。"],
         ["听得见群里在聊什么", "群里的对话它当作背景留着，回答前先补看错过的消息。"],
@@ -397,23 +310,11 @@ export const copy = {
       ],
       note: "消息仍然会经过聊天软件和你的模型服务商。那一段属于它们，不在我们的承诺范围内。",
     },
-    details: {
-      eyebrow: "细节",
-      title: "小巧、安静、不打扰。",
-      items: [
-        ["桌面应用", "住在菜单栏或托盘里，让 Mingle 一直运行，可开机启动，自动更新。"],
-        ["需要你处理的，集中一处", "连接出错、等管理员审核、没回复的消息，每条都写清楚怎么办。"],
-        ["漏掉的可以重试", "没回复或失败的消息旁边有“重试”。它知道这条回复晚了。"],
-        [
-          "出错说人话",
-          "没登录、额度用完、正忙：聊天里和控制台里都会说明发生了什么、怎么办。额度用完会自己等到恢复再重试。",
-        ],
-        ["给它补上下文", "让另一个 Claude Code 或 Codex 会话写一份交接，Agent 会把它整理进自己的记忆和任务。"],
-        ["一键诊断", "复制一段提示词给本机的 Agent，它会读 Mingle 的日志、找出原因，替你起草一个 issue。"],
-        ["名字和头像", "可以改名、换头像。需要安静时暂停它，恢复后接着来。"],
-        ["明暗两色，中英双语", "跟随系统外观。支持中文和英文。"],
-        ["开源", "MIT 许可。可以读、可以构建、可以改。"],
-      ],
+    handoff: {
+      eyebrow: "交接",
+      title: "从任何一段对话，给它补上下文。",
+      lead: "在 Claude Code 或 Codex 里聊了半天？把一段提示词复制过去，那段对话就会给 Alex 写一份交接：进展、决定、你的偏好。Alex 会把它整理进自己的记忆和任务，不打断手上的事。",
+      alt: "Alex 设置里的交接面板：复制提示词，发给你正在用的 agent，Alex 收到后整理进记忆",
     },
     cli: {
       eyebrow: "终端",
