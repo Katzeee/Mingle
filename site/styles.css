@@ -473,6 +473,12 @@ html:not(.js) .msg {
   border-radius: calc(var(--size) * 0.26);
   color: #fff;
 }
+/* A hairline so dark marks (GitHub) keep their edge on the dark page. */
+@media (prefers-color-scheme: dark) {
+  .app-icon {
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
+  }
+}
 
 /* Sections */
 .section {

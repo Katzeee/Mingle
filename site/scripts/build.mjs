@@ -12,6 +12,7 @@ import { parseArgs } from "node:util";
 import { assetURL, releaseVersion, validateRelease } from "../../scripts/releases.ts";
 import { copy } from "./copy.mjs";
 import { demo } from "./demo.mjs";
+import { harnesses } from "./harnesses.mjs";
 
 const { values } = parseArgs({ options: { release: { type: "string" }, out: { type: "string" } } });
 if (!values.release)
@@ -58,7 +59,8 @@ const marksSource = platformsSource
   .slice(platformsSource.indexOf("const marks"), platformsSource.indexOf("export function PlatformIcon"))
   .replace(/^const marks:[^=]+=/, "return");
 const marks = new Function(marksSource)();
-const platformOrder = ["wechat", "wecom", "feishu", "dingtalk", "qq", "slack", "discord", "telegram"];
+const chatApps = ["wechat", "wecom", "feishu", "dingtalk", "qq", "slack", "discord", "telegram"];
+const platformOrder = [...chatApps, "github", "imessage"];
 const platformIcon = (id, size = 40) => {
   const mark = marks[id];
   const inner = mark.path
@@ -66,16 +68,6 @@ const platformIcon = (id, size = 40) => {
     : `<svg viewBox="${mark.svg.viewBox}" width="62%" height="62%">${mark.svg.body}</svg>`;
   return `<span class="app-icon" style="--size:${size}px;background:${mark.color}" aria-hidden="true">${inner}</span>`;
 };
-
-const harnesses = [
-  ["claude", "Claude Code"],
-  ["codex", "Codex"],
-  ["opencode", "OpenCode"],
-  ["kimi", "Kimi Code"],
-  ["qwen", "Qwen Code"],
-  ["grok", "Grok Build"],
-  ["pi", "Pi"],
-];
 
 const esc = (s) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 const shot = (name, lang, alt, cls = "") => `
@@ -285,7 +277,7 @@ ${demoSection(key, t)}
         )
         .join('<div class="memory-link" aria-hidden="true">→</div>')}
     </div>
-    <ul class="grid grid-4">
+    <ul class="grid grid-3 points">
       ${t.agent.points.map(([h, p]) => `<li class="card reveal"><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
   </div>
@@ -398,11 +390,15 @@ Key facts:
 ## What it does
 
 - You create an agent on your own computer: a name, a role (ROLE.md), a memory (MEMORY.md, notes/) and a home folder.
-- A coding agent you already have installed and signed in to drives it: ${harnesses.map(([, n]) => n).join(", ")}. Tested end to end with Claude Code and Codex. Mingle never calls a model itself.
-- The agent joins ${platformOrder.map((id) => t.platforms[id]).join(", ")} as a bot, through each app's official bot API. People message it directly or @ it in a group.
+- A coding agent you already have installed and signed in to drives it: ${harnesses.map(([, n]) => n).join(", ")}. Tested end to end with Claude Code, Codex, OpenCode and Kimi Code. Mingle never calls a model itself; the console can install, sign in to and update harnesses and shows each one's quota.
+- The agent joins ${chatApps.map((id) => t.platforms[id]).join(", ")} as a bot, through each app's official bot API. People message it directly or @ it in a group.
+- On GitHub it uses an account of its own and answers @mentions in issues, pull requests and review threads from repository owners, members and collaborators.
+- On a Mac, it talks with you in iMessage in your chat with yourself, on your own Apple ID.
 - One agent keeps one long-lived session and one memory across every chat app. There are no session commands; the owner can send /stop.
-- It keeps tasks and reminders, shows progress (a reaction, then a live reply), sends and receives files, and reports back where it was asked.
+- It keeps tasks, reminders and an address book (one person's accounts across apps can be linked), reads group conversations as background, shows progress (a reaction, then a live reply), sends and receives files, and reports back where it was asked.
+- The owner is whoever scanned the code, or whoever sends the bot the 6-digit claim code the console shows. On public apps (Telegram, Discord, QQ), a new person or group waits for the owner's approval before the agent acts for them.
 - Managed from a desktop app (macOS, Windows, Linux; menu bar or tray, auto-update), a local web console on 127.0.0.1, or the \`mingle\` command.
+- Mingle connects chat apps through their official bot APIs; iMessage, which has none, runs locally on the owner's Apple ID. No cloud bridge.
 - Bot credentials are stored only in the macOS Keychain, Windows DPAPI or the Linux Secret Service.
 
 ## Command line
@@ -414,7 +410,9 @@ Build from source (Node.js 24, pnpm): \`git clone ${REPO}.git && cd Mingle && pn
 - \`mingle harnesses\`: harnesses installed on this computer
 - \`mingle agent create --name <n> --harness <id> [--model <m>] [--role <text> | --role-file <path>]\`
 - \`mingle connect <agent> telegram\`: bot token on standard input
-- Inside a session, agents use \`mingle message reply|send|read|search\`, \`mingle chat list|info\`, \`mingle file get\`, \`mingle task create|list|update\`, \`mingle reminder set|list|cancel\`, and \`mingle manual\` for their full guide.
+- \`mingle handoff <agent>\`: hand the agent what another conversation knows, on standard input
+- \`mingle log\`: the end of Mingle's log, even when it is not running
+- Inside a session, agents use \`mingle message reply|send|read|search\`, \`mingle chat list|info\`, \`mingle contact list|info|name|link|note\`, \`mingle file get\`, \`mingle task create|list|update\`, \`mingle reminder set|list|snooze|cancel\`, and \`mingle manual\` for their full guide.
 - Add \`--json\` for machine-readable output.
 
 ## Docs

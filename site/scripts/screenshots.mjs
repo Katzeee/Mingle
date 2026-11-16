@@ -7,11 +7,12 @@
 // content here is meant to look ordinary, not to stress the layout.
 
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { harnesses as siteHarnesses } from "./harnesses.mjs";
 
 const run = promisify(execFile);
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -129,6 +130,17 @@ async function shoot({ url, adminToken, path, file, locale, theme, width = 1280,
   }
 }
 
+// Marks for the site's harnesses, straight from OAR's brand assets ("on-light" / "on-dark", or one
+// file for both), so ones not installed here are covered too. Installed ones are rewritten below.
+const brands = resolve("node_modules/@botiverse/oar/assets/brands");
+for (const [id] of siteHarnesses) {
+  const file = `${id}.svg`;
+  for (const theme of ["light", "dark"]) {
+    const variant = join(brands, `${id}-on-${theme}.svg`);
+    copyFileSync(existsSync(variant) ? variant : join(brands, file), resolve(`site/icons/${id}-${theme}.svg`));
+  }
+}
+
 let port = 7600 + Math.floor(Math.random() * 100);
 for (const [lang, c] of Object.entries(copy)) {
   const m = await startMingle(port++);
@@ -222,7 +234,7 @@ for (const [lang, c] of Object.entries(copy)) {
       ["agent", `/a/${alex.slug}`],
       // Smaller windows for the step-by-step shots, so the console reads at the size it's shown.
       ["new", "/new", 1000, 760],
-      ["connect", `/a/${alex.slug}/connect`, 1000, 600],
+      ["connect", `/a/${alex.slug}/connect`, 1000, 640],
     ];
     for (const theme of ["light", "dark"])
       await Promise.all(
