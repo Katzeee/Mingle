@@ -160,9 +160,9 @@ erDiagram
 - 触发消息的来源行带 `unseen=N`：这个群里，从 Agent 上次在这里发言到这条消息之间，有 N 条没 @ 它的消息。N 为 0 时不写。在投递时计算，之后再来的消息不改变已投递的来源行。
 - **线程有所属的群。** Slack 的线程是一个独立聊天，背景却在频道里。适配器给线程聊天报上所属的群（`ChatRef.parent`，存为 `chats.parent_id`），来源行带 `in=<群聊天ID>`。线程的 `unseen` 同时数线程自己和所属的群，"上次发言"以这个频道里任一处为准：Agent 在频道的任一线程里说过话，之前的频道消息就不算没看到。
 - 操作指南只给一条规则：`unseen` 不为 0 且问题依赖前文时，先 `message read`（线程读 `in=` 指向的聊天）；否则直接回答，不必每条都回读。
-- **默认能看到群里所有消息（MING-89）。** Mingle 是私聊加群聊的 Agent，只看得到 @ 它的消息时，问"你怎么看"它没有前文，很难用。所以能在创建时就要的权限默认就要：飞书扫码建应用时直接申请"获取群组中所有消息"（`im:message.group_msg`，敏感权限；有它才能收到没 @ 的群消息，也才能用接口读群的历史消息）。飞书 SDK 的 `LarkChannel` 默认丢掉没 @ 机器人的群消息（`policy.requireMention`），适配器关掉它，交给核心存为背景；@所有人 的消息同样存为背景。之前飞书的这一条其实从未生效。
+- **权限尽量对齐一个真人（MING-89）。** Agent 在群里是个普通成员，默认该有群成员有的权限：看得到群里所有消息，进群能往上翻，能看到群成员。Mingle 是私聊加群聊的 Agent，只看得到 @ 它的消息时，问"你怎么看"它没有前文，很难用。所以能在创建时就要的权限默认就要：飞书扫码建应用时直接申请"获取群组中所有消息"（`im:message.group_msg`，敏感权限；有它才能收到没 @ 的群消息，也才能用接口读群的历史消息）。飞书 SDK 的 `LarkChannel` 默认丢掉没 @ 机器人的群消息（`policy.requireMention`），适配器关掉它，交给核心存为背景；@所有人 的消息同样存为背景。之前飞书的这一条其实从未生效。
 - **进群先看前文。** 人被拉进群可以往上翻；机器人也一样：飞书机器人被拉进群时，适配器用 `im/v1/messages` 读这个群最近 50 条消息（需要上面这项权限，没有就什么都不读，从现在开始），以 `InboundMessage.earlier` 交给核心。核心把它们存为背景：不触发、不进熔断计数、不论里面有没有 @ 它，都不会去回答过去的话；它们计入之后第一条触发消息的 `unseen`，Agent 需要时 `message read` 就能看到。系统消息（某人进群、改群名）和已撤回的不读。其他平台待做：Telegram 的 Bot API 读不了历史；Discord、Slack 有读历史的接口和权限（`Read Message History`、`channels:history`），进服务器或频道时的回读另行实现。
-- **创建后补开。** 建好以后才能开的（Telegram 的隐私模式、Discord 的 Message Content Intent），以及手填凭据接入的旧飞书应用，在控制台连接行下面说明"在群里只看得到 @ 它的消息"，给出平台上对应的操作和"去开启"按钮：飞书打开开放平台这个应用的权限页并预填这一项（和飞书缺权限报错里给的链接同一格式，添加后要发布新版本，需要审核的租户等管理员通过）；Telegram 打开 BotFather，`/setprivacy` 选 Disable，已在的群要把机器人重新拉进去才生效；Discord 打开 Developer Portal 这个应用的 Bot 页。权限按机器人实例实时读（`ChannelConnection.permissions()`，`GET /v1/admin/connections/:id/permissions`）：飞书读 `GET /open-apis/application/v6/scopes`（不需要额外权限），Telegram 读 `getMe` 的 `can_read_all_group_messages`，Discord 读应用的 flags；每个结果缓存 15 秒，控制台在窗口重新获得焦点时再读一次，开好了提示自己消失。Discord 发现 intent 新开了就重新 identify，不用手动重连。读不出来时不显示任何东西。钉钉、企业微信、QQ 平台只把 @ 机器人的群消息给机器人，没有可开的权限；Slack 建应用时已带 `channels:history`、`groups:history`。
+- **创建后补开。** 更早创建、没有这项权限的飞书应用（包括手填凭据接入的），在机器人设置的"权限"一节再扫一次码补到同一个应用上（6.1）。建好以后才能在平台上开的（Telegram 的隐私模式、Discord 的 Message Content Intent），同一节说明"在群里只看得到 @ 它的消息"，给出平台上对应的操作和"去开启"按钮：Telegram 打开 BotFather，`/setprivacy` 选 Disable，已在的群要把机器人重新拉进去才生效；Discord 打开 Developer Portal 这个应用的 Bot 页。权限按机器人实例实时读（`ChannelConnection.permissions()`，`GET /v1/admin/connections/:id/permissions`）：飞书读 `GET /open-apis/application/v6/scopes`（不需要额外权限），Telegram 读 `getMe` 的 `can_read_all_group_messages`，Discord 读应用的 flags；每个结果缓存 15 秒，控制台在窗口重新获得焦点、补权限扫码完成后再读一次，开好了提示自己消失。Discord 发现 intent 新开了就重新 identify，不用手动重连。读不出来时只显示原来的说明。钉钉、企业微信、QQ 平台只把 @ 机器人的群消息给机器人，没有可开的权限；Slack 建应用时已带 `channels:history`、`groups:history`。
 
 ```text
 [msg=m9c1d chat=c31 im=slack group="C0123:1731.42" in=c30 from="张三" user=u7k2p time=2026-11-15T10:20+08:00 unseen=7]
@@ -655,7 +655,7 @@ MSG
 
 | 平台 | 接入方式 | 连接方式 | 可能需要管理员审核 |
 |---|---|---|---|
-| 飞书 | 扫码创建机器人（或在已登录的浏览器里打开授权链接），或填已有应用的 App ID / Secret | 官方 SDK 长连接 | 视租户设置 |
+| 飞书 | 扫码创建机器人（或在已登录的浏览器里打开授权链接），或填已有应用的 App ID / Secret；已接入的机器人在其设置里再扫一次码可以给同一个应用补权限 | 官方 SDK 长连接 | 视租户设置 |
 | 钉钉 | 扫码或在电脑上打开授权页创建应用，或填 Client ID / Secret | Stream 长连接 | 需要组织管理员创建应用 |
 | 企业微信 | 扫码创建智能机器人，或填 Bot ID / Secret | 官方 WebSocket 长连接 | 是 |
 | Slack | 预置 App Manifest 创建应用，填两个 token | Socket Mode | 视工作区设置 |
@@ -1181,7 +1181,7 @@ docs/             文档
 | 长期单会话 | 持续数周的会话在压缩后的表现，`MEMORY.md` 恢复是否足够 | 实际使用一段时间 |
 | 交接（4.12） | 真实 Claude Code / Codex 按提示词写出交接并运行命令；接收的 Agent 读完后把要点合并进 `MEMORY.md`、建任务、不在 IM 里回复 | 有额度的真实 harness |
 | 飞书管理员审核 | 需要审核的租户里的实际表现 | 一个开启了应用审核的飞书租户 |
-| 飞书群消息权限（MING-89） | 扫码建应用时带上敏感权限 `im:message.group_msg` 后，免审核租户是否仍即时可用；没 @ 的群消息是否进 `message read`；旧应用在开放平台添加并发布后，`scopes` 接口和收消息是否立即反映；拉进有历史的群时是否读到最近的消息 | 真机扫码新建一个飞书应用，以及一个缺这项权限的旧应用 |
+| 飞书群消息权限（MING-89） | 扫码建应用时带上敏感权限 `im:message.group_msg` 后，免审核租户是否仍即时可用；没 @ 的群消息是否进 `message read`；旧应用再扫一次码补权限后，`scopes` 接口和收消息是否立即反映；拉进有历史的群时是否读到最近的消息 | 真机扫码新建一个飞书应用，以及一个缺这项权限的旧应用 |
 | 飞书回归：回执转换 | 完整 OnIt → DONE 转换 | 在可观察的客户端复测完整转换；收 PNG/PDF、实时卡片更新和发文件已有实测结论（12.1） |
 | `/stop` 后后台任务仍回复 | 飞书真机上叫停后不再收到原任务的完成回复 | MING-43 已修复（4.3）。2026-11-14 用真实 Claude Code 2.1.322 + 模拟聊天复测：修复前叫停后约 30 秒仍发 `TASK-DONE`，修复后不再发送，之后的新消息照常回复（`test/e2e.test.ts`）。还需飞书真机按 12.1 的 #6 步骤复测 |
 | 个人微信端到端 | 扫码、验证码、私聊收发、"正在输入"、图片和文件收发 | 手机微信扫码及可能的验证码；2026-11-14 出码成功，本轮未提供 Pinky 操作入口 |

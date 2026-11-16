@@ -40,6 +40,7 @@ function fakeLark() {
   const sent: { to: string; input: unknown; opts: unknown }[] = [];
   const reactions: string[] = [];
   const streams: { to: string; opts: unknown; contents: string[] }[] = [];
+  const memberCalls: { chatId: string; pageToken: string | undefined }[] = [];
   let connected = false;
   let failNext: string | undefined;
   let history: unknown[] | undefined;
@@ -96,6 +97,20 @@ function fakeLark() {
               return { code: 0, data: { items: history } };
             },
           },
+          chatMembers: {
+            async get({ path, params }: { path: { chat_id: string }; params?: { page_token?: string } }) {
+              memberCalls.push({ chatId: path.chat_id, pageToken: params?.page_token });
+              return {
+                data: {
+                  items: params?.page_token
+                    ? [{ member_id: "ou_2", name: "李四" }]
+                    : [{ member_id: "ou_1", name: "张三" }],
+                  has_more: !params?.page_token,
+                  page_token: params?.page_token ? undefined : "next",
+                },
+              };
+            },
+          },
         },
       },
       contact: {
@@ -107,6 +122,7 @@ function fakeLark() {
   return {
     channel,
     sent,
+    memberCalls,
     isConnected: () => connected,
     reactions,
     streams,
@@ -126,9 +142,11 @@ function fakeApi(options: {
   deny?: boolean;
   hold?: Promise<void>;
   scopes?: () => ReadonlyMap<string, boolean>;
+  onRegister?: (options: { appId: string | undefined }) => void;
 }): FeishuApi {
   return {
-    async register({ onQRCodeReady }) {
+    async register({ appId, onQRCodeReady }) {
+      options.onRegister?.({ appId });
       onQRCodeReady({ url: "https://open.feishu.cn/page/launcher?user_code=ABCD", expireIn: 600 });
       await (options.hold ?? new Promise((r) => setTimeout(r, 20)));
       if (options.deny) throw Object.assign(new Error("denied"), { code: "access_denied" });
@@ -222,6 +240,18 @@ describe("feishu onboarding", () => {
       },
     ]);
   });
+
+  it("asks to update the same app when re-authorizing a connected bot", async () => {
+    const updated: (string | undefined)[] = [];
+    const channel = feishuChannel({
+      api: fakeApi({ activated: () => true, onRegister: ({ appId }) => updated.push(appId) }),
+    });
+    const events = await collect(
+      channel.onboard(undefined, new AbortController().signal, { reauthorize: { appId: "cli_1" } }),
+    );
+    expect(updated).toEqual(["cli_1"]);
+    expect(events.at(-1)).toMatchObject({ kind: "succeeded", credentials: { appId: "cli_1" } });
+  });
 });
 
 describe("feishu connection", () => {
@@ -294,6 +324,31 @@ describe("feishu connection", () => {
     rmSync(dir, { recursive: true, force: true });
     await connection.close();
   });
+
+  it("relays group messages that do not @ the bot, and lists chat members", async () => {
+    const lark = fakeLark();
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const received: InboundMessage[] = [];
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: (m) => received.push(m), onState: () => {}, onMembership: () => {} },
+    );
+    // requireMention is off, so background talk reaches the core as a non-triggering message.
+    await lark.emit("message", message({ mentionedBot: false }));
+    await until(() => received.length === 1, 2000);
+    expect(received[0]?.addressedToBot).toBe(false);
+
+    expect(connection.capabilities().listMembers).toBe(true);
+    expect(await connection.listMembers({ platformId: "oc_1", kind: "group" })).toEqual([
+      { id: "ou_1", name: "张三", isBot: false },
+      { id: "ou_2", name: "李四", isBot: false },
+    ]);
+    expect(lark.memberCalls).toEqual([
+      { chatId: "oc_1", pageToken: undefined },
+      { chatId: "oc_1", pageToken: "next" },
+    ]);
+    await connection.close();
+  });
 });
 
 describe("feishu group messages permission", () => {
@@ -315,7 +370,7 @@ describe("feishu group messages permission", () => {
     await connection.close();
   });
 
-  it("reports the scope with a link to add it, and reads it again once granted", async () => {
+  it("reports whether the scope is granted, and reads it again once it is", async () => {
     let granted = new Map<string, boolean>();
     const now = Date.now();
     const clock = { at: now };
@@ -327,16 +382,8 @@ describe("feishu group messages permission", () => {
         createChannel: () => fakeLark().channel,
       });
       const connection = await channel.connect({ appId: "cli_1", appSecret: "s", domain: "lark" }, events);
-      expect(await connection.permissions?.()).toEqual([
-        {
-          id: "group_messages",
-          granted: false,
-          grant: {
-            url: "https://open.larksuite.com/app/cli_1/auth?q=im%3Amessage.group_msg&op_from=openapi&token_type=tenant",
-            steps: "feishu",
-          },
-        },
-      ]);
+      // No link: Feishu adds it to the same app by scanning again from the bot's settings.
+      expect(await connection.permissions?.()).toEqual([{ id: "group_messages", granted: false }]);
       granted = new Map([[GROUP_MESSAGES_SCOPE, true]]);
       expect((await connection.permissions?.())?.[0]?.granted).toBe(false);
       clock.at += 20_000;
@@ -526,5 +573,59 @@ describe("QR onboarding through the console API", () => {
 
     active = true;
     await until(() => mingle.store.connection(result.connectionId as string)?.state === "connected", 3000);
+  });
+
+  it("re-authorizes a connected bot: the scan updates the same app and reuses the connection", async () => {
+    const lark = fakeLark();
+    const holds: { release: () => void }[] = [];
+    const updated: (string | undefined)[] = [];
+    current = await rig(async () => {}, {
+      channels: {
+        feishu: feishuChannel({
+          api: fakeApi({
+            activated: () => true,
+            hold: new Promise<void>((resolve) => holds.push({ release: resolve })),
+            onRegister: ({ appId }) => updated.push(appId),
+          }),
+          createChannel: () => lark.channel,
+        }),
+      },
+    });
+    const { admin, agentId, mingle } = current;
+    const platforms = (await admin("GET", "/v1/admin/platforms")).json as {
+      platform: string;
+      reauthorize: boolean;
+    }[];
+    expect(platforms.find((p) => p.platform === "feishu")?.reauthorize).toBe(true);
+
+    // First scan creates the app and its connection.
+    const first = (await admin("POST", `/v1/admin/agents/${agentId}/onboarding`, { platform: "feishu" })).json as {
+      id: string;
+    };
+    holds.shift()?.release();
+    const created = await eventually(async () => {
+      const state = (await admin("GET", `/v1/admin/onboarding/${first.id}`)).json as {
+        state: string;
+        connectionId?: string;
+      };
+      return state.state === "done" ? state : undefined;
+    });
+    const connectionId = created.connectionId as string;
+    expect(updated).toEqual([undefined]);
+
+    // Scanning again for that connection updates the same app instead of creating a bot.
+    const second = (await admin("POST", `/v1/admin/agents/${agentId}/onboarding`, { platform: "feishu", connectionId }))
+      .json as { id: string };
+    holds.shift()?.release();
+    const redone = await eventually(async () => {
+      const state = (await admin("GET", `/v1/admin/onboarding/${second.id}`)).json as {
+        state: string;
+        connectionId?: string;
+      };
+      return state.state === "done" ? state : undefined;
+    });
+    expect(updated).toEqual([undefined, "cli_1"]);
+    expect(redone.connectionId).toBe(connectionId);
+    expect(mingle.store.connections(agentId).filter((n) => n.platform === "feishu")).toHaveLength(1);
   });
 });

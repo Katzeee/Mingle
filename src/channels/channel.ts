@@ -123,6 +123,12 @@ export interface OnboardingContext {
    * platform recognize a rebind instead of treating every scan as a new client. Read only on demand.
    */
   readonly knownCredentials?: () => Promise<readonly Credentials[]>;
+  /**
+   * Credentials of an already-connected bot being re-authorized (only where `Channel.reauthorize`
+   * is set): the platform updates that app's grants instead of creating a new bot, and the result
+   * rebinds the existing connection.
+   */
+  readonly reauthorize?: Credentials;
 }
 
 export type OnboardingFailure =
@@ -289,6 +295,12 @@ export interface Channel {
   readonly manualSetupUrl?: string;
   /** Local prerequisites the console checks live before connecting. */
   readonly setup?: ChannelSetup;
+  /**
+   * This platform's onboarding can add permissions to an already-connected bot: starting it with
+   * `OnboardingContext.reauthorize` carrying the connection's credentials updates that app rather
+   * than making a new one.
+   */
+  readonly reauthorize?: boolean;
   /** Where the owner adds a connected bot to a server or group, for platforms where that is a separate step. */
   inviteUrl?(bot: BotIdentity): string;
   /** Who can reach its bots. Absent means `public`: the safe side for a platform not described here. */
@@ -352,7 +364,8 @@ export interface BotPermission {
   readonly id: "group_messages";
   readonly granted: boolean;
   /**
-   * How the owner grants it. `url` opens the platform's page with the change prefilled where the
+   * How the owner grants it on the platform's site. Absent where it cannot be granted there, or
+   * where the console grants it itself (`Channel.reauthorize`). `url` opens the platform's page with the change prefilled where the
    * platform allows; `steps` picks the console's instructions for that page (`permission.steps.<steps>`).
    */
   readonly grant?: { readonly url: string; readonly steps?: string };

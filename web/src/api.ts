@@ -94,7 +94,7 @@ export interface ConnectionView {
 export interface BotPermission {
   id: "group_messages";
   granted: boolean;
-  grant?: { url: string; steps?: "feishu" | "telegram" | "discord" };
+  grant?: { url: string; steps?: "telegram" | "discord" };
 }
 
 /** A person or group waiting for the owner to let them talk to the agent (docs/spec.md 4.7). */
@@ -302,6 +302,8 @@ export interface PlatformInfo {
   manualSetupUrl: string | null;
   /** The platform has local prerequisites to check before connecting (iMessage). */
   setup: boolean;
+  /** Onboarding can add permissions to an already-connected bot (Feishu). */
+  reauthorize: boolean;
 }
 
 export type SetupCheckState = "ok" | "missing" | "denied" | "unknown";
@@ -430,8 +432,11 @@ export const api = {
   /** A fresh code for claiming a bot that has no owner yet. */
   claim: (connectionId: string) =>
     call<{ code: string; expiresAt: number }>("POST", `/v1/admin/connections/${connectionId}/claim`),
-  startOnboarding: (id: string, platform: Platform) =>
-    call<{ id: string }>("POST", `/v1/admin/agents/${id}/onboarding`, { platform }),
+  startOnboarding: (id: string, platform: Platform, connectionId?: string) =>
+    call<{ id: string }>("POST", `/v1/admin/agents/${id}/onboarding`, {
+      platform,
+      ...(connectionId ? { connectionId } : {}),
+    }),
   onboarding: (id: string) => call<OnboardingState>("GET", `/v1/admin/onboarding/${id}`),
   cancelOnboarding: (id: string) => call("DELETE", `/v1/admin/onboarding/${id}`),
   submitCode: (id: string, code: string) => call("POST", `/v1/admin/onboarding/${id}/code`, { code }),

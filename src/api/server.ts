@@ -625,14 +625,16 @@ export function createApi(mingle: Mingle): Hono<Env> {
           let manualFields: readonly CredentialField[] = [];
           let manualSetupUrl: string | null = null;
           let setup = false;
+          let reauthorize = false;
           try {
             const channel = mingle.channel(platform);
             onboarding = channel.onboarding;
             manualFields = channel.manualFields ?? [];
             manualSetupUrl = channel.manualSetupUrl ?? null;
             setup = Boolean(channel.setup);
+            reauthorize = Boolean(channel.reauthorize);
           } catch {}
-          return { platform, onboarding, manualFields, manualSetupUrl, setup };
+          return { platform, onboarding, manualFields, manualSetupUrl, setup, reauthorize };
         }),
     );
   });
@@ -1007,8 +1009,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   /** QR onboarding: start, then poll. The QR is rendered here so the console needs no encoder. */
   app.post("/v1/admin/agents/:id/onboarding", async (c) => {
-    const { platform } = await c.req.json<{ platform: Platform }>();
-    const session = mingle.startOnboarding(c.req.param("id"), platform);
+    const { platform, connectionId } = await c.req.json<{ platform: Platform; connectionId?: string }>();
+    const session = mingle.startOnboarding(c.req.param("id"), platform, connectionId || undefined);
     return c.json({ id: session.id });
   });
 
