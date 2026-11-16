@@ -1,11 +1,10 @@
-// The website's few behaviors: the download button for this OS, copy buttons, reveal on scroll,
-// the hero's harness-to-app pairing, the phones that play their chats, and the demo. Nothing here is needed to read the page.
+// The website's few behaviors: the download buttons for this OS, copy buttons, reveal on scroll,
+// the phones that play their chats, and the demo. Nothing here is needed to read the page.
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// Point the hero's button at this computer's download, and say which other systems have one too.
-const button = document.querySelector("[data-os-download]");
-if (button) {
+// Point the download buttons at this computer's build, and name the other systems that have one too.
+{
   const ua = navigator.userAgent;
   const os = /Windows/.test(ua)
     ? "windows"
@@ -14,20 +13,19 @@ if (button) {
       : /Linux|X11/.test(ua) && !/Android/.test(ua)
         ? "linux"
         : null;
-  if (os) {
-    button.href = button.dataset[os];
-    button.textContent = button.dataset[`label${os[0].toUpperCase()}${os.slice(1)}`];
-    const also = document.querySelector("[data-also]");
-    const others = ["mac", "windows", "linux"].filter((o) => o !== os);
-    if (also) {
-      const link = (o) => `<a href="#download">${also.dataset[o]}</a>`;
-      also.innerHTML = `${also.dataset.prefix} ${link(others[0])} ${also.dataset.and} ${link(others[1])}`;
-    }
-  } else {
-    // A phone or tablet: no installer runs here, so send them to every download.
-    button.href = "#download";
-    button.textContent = button.dataset.labelAny;
+  for (const button of document.querySelectorAll("[data-os-download]")) {
+    // A phone or tablet runs no installer: send it to every download.
+    button.href = os ? button.dataset[os] : "#download";
+    button.dataset.os = os === "linux" || !os ? "any" : os;
+    const name = os ? `${os[0].toUpperCase()}${os.slice(1)}` : "Any";
+    button.querySelector("[data-label]").textContent = button.dataset[`label${name}`];
   }
+  const also = document.querySelector("[data-also]");
+  if (also && os) {
+    const [a, b] = ["mac", "windows", "linux"].filter((o) => o !== os);
+    also.textContent = also.dataset.pair.replace("{a}", also.dataset[a]).replace("{b}", also.dataset[b]);
+  }
+  if (os && os !== "mac") document.querySelector("[data-intel]")?.remove();
 }
 
 for (const copy of document.querySelectorAll("[data-copy]")) {
@@ -42,38 +40,6 @@ for (const copy of document.querySelectorAll("[data-copy]")) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// The hero: light up one harness and one chat app at a time. Any brain, any app.
-const hub = document.querySelector("[data-hub]");
-if (hub && !reduced) {
-  const brains = [...hub.querySelectorAll("[data-brains] li")];
-  const apps = [...hub.querySelectorAll("[data-apps] li")];
-  const brainName = hub.querySelector("[data-pair-brain]");
-  const appName = hub.querySelector("[data-pair-app]");
-  const pair = hub.querySelector(".hub-pair");
-  let b = 0;
-  let a = 0;
-  const pick = (n, not) => {
-    const i = Math.floor(Math.random() * (n - 1));
-    return i >= not ? i + 1 : i;
-  };
-  const show = () => {
-    for (const [i, li] of brains.entries()) li.classList.toggle("on", i === b);
-    for (const [i, li] of apps.entries()) li.classList.toggle("on", i === a);
-    brainName.textContent = brains[b].dataset.name;
-    appName.textContent = apps[a].dataset.name;
-    pair.classList.remove("swap");
-    void pair.offsetWidth;
-    pair.classList.add("swap");
-  };
-  show();
-  setInterval(() => {
-    if (document.hidden) return;
-    b = pick(brains.length, b);
-    a = pick(apps.length, a);
-    show();
-  }, 2200);
-}
 
 // Phones with a short conversation: messages appear in order (data-seq) once they're on screen,
 // with the app's typing indicator before Alex's replies. A group of phones plays as one conversation.
