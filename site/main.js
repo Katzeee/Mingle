@@ -1,23 +1,33 @@
-// The website's few behaviors: the download button for this OS, copy buttons,
-// reveal on scroll, and the chat that plays itself. Nothing here is needed to read the page.
+// The website's few behaviors: the download button for this OS, copy buttons, reveal on scroll,
+// the hero's harness-to-app pairing, the phones that play their chats, and the demo. Nothing here is needed to read the page.
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// Point the hero's button at this computer's download.
+// Point the hero's button at this computer's download, and say which other systems have one too.
 const button = document.querySelector("[data-os-download]");
 if (button) {
   const ua = navigator.userAgent;
   const os = /Windows/.test(ua)
     ? "windows"
-    : /Mac/.test(ua) && !/iPhone|iPad/.test(ua)
+    : /Mac/.test(ua) && !/iPhone|iPad/.test(ua) && navigator.maxTouchPoints < 2
       ? "mac"
       : /Linux|X11/.test(ua) && !/Android/.test(ua)
         ? "linux"
         : null;
   if (os) {
-    button.href = os === "linux" ? "#download" : button.dataset[os];
+    button.href = button.dataset[os];
     button.textContent = button.dataset[`label${os[0].toUpperCase()}${os.slice(1)}`];
-  } else button.href = "#download";
+    const also = document.querySelector("[data-also]");
+    const others = ["mac", "windows", "linux"].filter((o) => o !== os);
+    if (also) {
+      const link = (o) => `<a href="#download">${also.dataset[o]}</a>`;
+      also.innerHTML = `${also.dataset.prefix} ${link(others[0])} ${also.dataset.and} ${link(others[1])}`;
+    }
+  } else {
+    // A phone or tablet: no installer runs here, so send them to every download.
+    button.href = "#download";
+    button.textContent = button.dataset.labelAny;
+  }
 }
 
 for (const copy of document.querySelectorAll("[data-copy]")) {
@@ -31,46 +41,72 @@ for (const copy of document.querySelectorAll("[data-copy]")) {
   });
 }
 
-// Plays a chat once it's on screen: a question, a reaction, "thinking", the answer typed out, and a follow-up.
-function play(chat) {
-  const steps = [...chat.querySelectorAll(".msg")];
-  const answer = chat.querySelector(".answer");
-  const typing = chat.querySelector(".typing");
-  const text = answer.dataset.text;
-  if (reduced) {
-    for (const s of steps) s.classList.add("shown");
-    typing.hidden = true;
-    answer.textContent = text;
-    chat.querySelector(".react")?.classList.add("shown");
-    return;
-  }
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  (async () => {
-    for (;;) {
-      for (const s of steps) s.classList.remove("shown");
-      chat.querySelector(".react")?.classList.remove("shown");
-      typing.hidden = false;
-      answer.textContent = "";
-      await wait(500);
-      steps[0].classList.add("shown");
-      await wait(700);
-      chat.querySelector(".react")?.classList.add("shown");
-      await wait(500);
-      steps[1].classList.add("shown");
-      await wait(1400);
-      typing.hidden = true;
-      for (let i = 0; i <= text.length; i += 2) {
-        answer.textContent = text.slice(0, i);
-        await wait(28);
-      }
-      answer.textContent = text;
-      await wait(1200);
-      steps[2].classList.add("shown");
-      await wait(1100);
-      steps[3].classList.add("shown");
-      await wait(6000);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The hero: light up one harness and one chat app at a time. Any brain, any app.
+const hub = document.querySelector("[data-hub]");
+if (hub && !reduced) {
+  const brains = [...hub.querySelectorAll("[data-brains] li")];
+  const apps = [...hub.querySelectorAll("[data-apps] li")];
+  const brainName = hub.querySelector("[data-pair-brain]");
+  const appName = hub.querySelector("[data-pair-app]");
+  const pair = hub.querySelector(".hub-pair");
+  let b = 0;
+  let a = 0;
+  const pick = (n, not) => {
+    const i = Math.floor(Math.random() * (n - 1));
+    return i >= not ? i + 1 : i;
+  };
+  const show = () => {
+    for (const [i, li] of brains.entries()) li.classList.toggle("on", i === b);
+    for (const [i, li] of apps.entries()) li.classList.toggle("on", i === a);
+    brainName.textContent = brains[b].dataset.name;
+    appName.textContent = apps[a].dataset.name;
+    pair.classList.remove("swap");
+    void pair.offsetWidth;
+    pair.classList.add("swap");
+  };
+  show();
+  setInterval(() => {
+    if (document.hidden) return;
+    b = pick(brains.length, b);
+    a = pick(apps.length, a);
+    show();
+  }, 2200);
+}
+
+// Phones with a short conversation: messages appear in order (data-seq) once they're on screen,
+// with the app's typing indicator before Alex's replies. A group of phones plays as one conversation.
+async function playPhones(root) {
+  const phones = root.matches(".phone") ? [root] : [...root.querySelectorAll(".phone")];
+  const msgs = phones
+    .flatMap((p) => [...p.querySelectorAll(".m[data-seq]")].map((m) => ({ m, p })))
+    .sort((x, y) => x.m.dataset.seq - y.m.dataset.seq);
+  for (const { m, p } of msgs) {
+    if (reduced) {
+      m.classList.add("shown");
+      m.querySelector(".rx .chip")?.classList.add("on");
+      continue;
     }
-  })();
+    const typing = m.hasAttribute("data-typing") && p.querySelector(".typing-text")?.textContent;
+    if (typing) {
+      const label = p.querySelector(".im-sub") ?? p.querySelector(".im-title");
+      const was = label.textContent;
+      await sleep(400);
+      label.textContent = typing;
+      label.classList.add("is-typing");
+      await sleep(1300);
+      label.textContent = was;
+      label.classList.remove("is-typing");
+    } else await sleep(700);
+    m.classList.add("shown");
+    const chip = m.querySelector(".rx .chip");
+    if (chip) {
+      await sleep(500);
+      chip.classList.add("pop", "on");
+    }
+    await sleep(500);
+  }
 }
 
 const seen = new IntersectionObserver(
@@ -78,17 +114,19 @@ const seen = new IntersectionObserver(
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
       seen.unobserve(entry.target);
-      if (entry.target.matches(".chat:not(.static)")) play(entry.target);
+      if (entry.target.matches("[data-seq-group], .phone-static")) playPhones(entry.target);
       else entry.target.classList.add("in");
     }
   },
   { rootMargin: "0px 0px -8% 0px" },
 );
-for (const el of document.querySelectorAll(".reveal, .chat:not(.static)")) seen.observe(el);
+for (const el of document.querySelectorAll(".reveal, [data-seq-group], .phone-static:not([data-seq-group] .phone)"))
+  seen.observe(el);
 
 // The homepage demo: Alex in several chat apps, scenes from site/scripts/demo.mjs.
-// One run at a time; starting a scene cancels the one playing. Reduced motion skips the pauses and typing,
-// but the visitor still taps Send on their turns.
+// One run at a time; starting a scene cancels the one playing. It plays by itself: on the visitor's turn
+// it taps Send after a beat (they can tap sooner), and at the end of a scene it moves on to the next.
+// It only advances while it's on screen. Reduced motion skips the pauses and typing, and leaves Send to the visitor.
 const demoData = document.getElementById("demo-data");
 if (demoData) demoPlayer(JSON.parse(demoData.textContent), document.getElementById("demo"));
 
@@ -107,6 +145,17 @@ function demoPlayer(data, root) {
   let run = 0;
   let current = 0;
   let pendingSend = null;
+  let visible = false;
+  const auto = !reduced;
+  // Resolves after ms of the demo being on screen; rejects if another run started meanwhile.
+  async function onScreenFor(ms, token) {
+    let left = ms;
+    while (left > 0) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (token !== run) throw CANCEL;
+      if (visible && !document.hidden) left -= 100;
+    }
+  }
 
   const esc = (s) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const inline = (s) =>
@@ -320,10 +369,23 @@ function demoPlayer(data, root) {
         input.classList.add("draft");
         send.disabled = false;
         send.classList.add("pulse");
-        send.dataset.tip = ui.tap;
-        send.focus({ preventScroll: true });
+        if (!auto) {
+          send.dataset.tip = ui.tap;
+          send.focus({ preventScroll: true });
+        } else delete send.dataset.tip;
         await new Promise((resolve, reject) => {
-          pendingSend = { resolve, reject };
+          const turn = { resolve, reject };
+          pendingSend = turn;
+          if (auto)
+            onScreenFor(1700, token).then(
+              () => {
+                if (pendingSend !== turn) return; // they tapped first
+                send.classList.add("pressed");
+                setTimeout(() => send.classList.remove("pressed"), 180);
+                turn.resolve();
+              },
+              () => {}, // a new run already rejected this turn
+            );
         });
         pendingSend = null;
         send.disabled = true;
@@ -383,6 +445,10 @@ function demoPlayer(data, root) {
     end.hidden = false;
     // The end buttons take the composer's place and can be taller: keep the closing note in view.
     chat.log.scrollTop = chat.log.scrollHeight;
+    if (auto) {
+      await onScreenFor(4000, token);
+      start(next);
+    }
   }
 
   send.addEventListener("click", () => pendingSend?.resolve());
@@ -399,10 +465,12 @@ function demoPlayer(data, root) {
       start(to);
     });
   });
+  let started = false;
   const onScreen = new IntersectionObserver(
     (entries) => {
-      if (!entries.some((e) => e.isIntersecting)) return;
-      onScreen.disconnect();
+      visible = entries.some((e) => e.isIntersecting);
+      if (!visible || started) return;
+      started = true;
       start(0);
     },
     { rootMargin: "0px 0px -15% 0px" },
