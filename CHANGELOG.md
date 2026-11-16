@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.16
+
+- Feishu bots join groups like a person: apps created by scanning now ask for "all group messages" (`im:message.group_msg`) by default, so every group message is kept as background the agent can read — with the `unseen` count on the next trigger — and group history works through the messages API, instead of the bot only hearing @mentions.
+- A connected Feishu bot can pick up new permissions without being reconnected: its settings page has a Permissions section with "Update permissions…", which runs the same scan to add the missing grants to the existing app; Feishu's confirm page lists exactly what is being added.
+- Feishu chats can list their members now, using the group-info permission the app already had.
+
 ## 0.1.15
 
 - Settings → "Brains" now shows each harness's quota under its row: one line with the signed-in account's usage windows for Claude Code, Codex, Grok and Kimi Code, turning amber with the reset time once a limit is reached.
