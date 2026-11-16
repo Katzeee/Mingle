@@ -847,10 +847,19 @@ export class Mingle {
     throw new MingleError("onboarding_unknown", "the chat app did not finish connecting; try again");
   }
 
-  /** Start a QR (or other multi-step) onboarding the console follows by polling `onboarding(id)`. */
-  startOnboarding(agentId: string, platform: Platform): OnboardingSession {
+  /**
+   * Start a QR (or other multi-step) onboarding the console follows by polling `onboarding(id)`.
+   * With `connectionId`, this is a re-authorization of that already-connected bot: the platform
+   * adds permissions to the same app instead of creating a new one (`Channel.reauthorize`).
+   */
+  startOnboarding(agentId: string, platform: Platform, connectionId?: string): OnboardingSession {
     const agent = this.agent(agentId);
     const channel = this.channel(platform);
+    const updating = connectionId ? this.store.connection(connectionId) : undefined;
+    if (connectionId && (!updating || updating.agentId !== agent.id || updating.platform !== platform))
+      throw notFound("connection", connectionId);
+    if (updating && !channel.reauthorize)
+      throw new MingleError("reauthorize_unsupported", `${platform} cannot add permissions to a connected bot`);
     for (const [id, old] of this.onboardings) {
       if (old.agentId === agent.id && old.platform === platform) this.cancelOnboarding(id);
     }
@@ -878,10 +887,15 @@ export class Mingle {
             };
           });
         const knownCredentials = () => this.knownCredentials(platform);
+        // Re-authorizing a connected bot: the platform updates that app instead of making one.
+        const reauthorize = updating ? await this.credentials(updating) : undefined;
+        if (updating && !reauthorize)
+          throw new MingleError("credentials_missing", "the bot's credentials are gone; connect it again");
         for await (const event of channel.onboard(undefined, abort.signal, {
           agentName: agent.name,
           awaitCode,
           knownCredentials,
+          ...(reauthorize ? { reauthorize } : {}),
         })) {
           if (event.kind === "qr_ready") set({ kind: "qr", content: event.qrContent, expiresAt: event.expiresAt });
           else if (event.kind === "scanned") set({ kind: "scanned" });

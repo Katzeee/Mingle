@@ -584,7 +584,7 @@ function DeviceFlow({
   const { t } = useI18n();
   const platform = info.platform;
   const platformName = t(`platform.${platform}` as MessageKey);
-  const { sessionId, state, now, restart } = useOnboarding(agent.id, platform, (next) => {
+  const { sessionId, state, now, restart } = useOnboarding(agent.id, platform, undefined, (next) => {
     if (next.state === "done") setTimeout(onDone, 4000);
   });
   const [opened, setOpened] = useState(false);
@@ -681,7 +681,12 @@ function DeviceFlow({
 }
 
 /** Start an onboarding session and follow it until it is done; `restart` begins a new one. */
-function useOnboarding(agentId: string, platform: Platform, onState?: (state: OnboardingState) => void) {
+function useOnboarding(
+  agentId: string,
+  platform: Platform,
+  update: string | undefined,
+  onState?: (state: OnboardingState) => void,
+) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [state, setState] = useState<OnboardingState>({ state: "starting" });
   const [attempt, setAttempt] = useState(0);
@@ -695,7 +700,7 @@ function useOnboarding(agentId: string, platform: Platform, onState?: (state: On
     let stopped = false;
     setState({ state: "starting" });
     api
-      .startOnboarding(agentId, platform)
+      .startOnboarding(agentId, platform, update)
       .then((r) => {
         id = r.id;
         if (stopped) api.cancelOnboarding(r.id).catch(() => {});
@@ -706,7 +711,7 @@ function useOnboarding(agentId: string, platform: Platform, onState?: (state: On
       stopped = true;
       if (id) api.cancelOnboarding(id).catch(() => {});
     };
-  }, [agentId, platform, attempt]);
+  }, [agentId, platform, update, attempt]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -741,20 +746,27 @@ function useOnboarding(agentId: string, platform: Platform, onState?: (state: On
   return { sessionId, state, now, restart };
 }
 
-/** Scan-to-create: the QR, then the phone's confirmation, then (maybe) an admin's approval. */
-function QrFlow({
+/**
+ * Scan-to-create: the QR, then the phone's confirmation, then (maybe) an admin's approval.
+ * `update` is the connection being re-authorized instead: the platform adds permissions to the
+ * existing app rather than creating a new bot.
+ */
+export function QrFlow({
   agent,
   info,
+  update,
   onDone,
   onManual,
 }: {
   agent: AgentView;
   info: PlatformInfo;
+  /** Connection id when re-authorizing an already-connected bot (Channel.reauthorize). */
+  update?: string;
   onDone: () => void;
   onManual?: () => void;
 }) {
   const { t } = useI18n();
-  const { sessionId, state, now, restart } = useOnboarding(agent.id, info.platform, (next) => {
+  const { sessionId, state, now, restart } = useOnboarding(agent.id, info.platform, update, (next) => {
     if (next.state === "done") setTimeout(onDone, next.pendingApproval ? 2500 : 1200);
   });
   const platformName = t(`platform.${info.platform}` as MessageKey);
@@ -762,7 +774,7 @@ function QrFlow({
   const existing = agent.connections.filter((c) => c.platform === info.platform).length;
   const anotherKey = `${info.platform}.another`;
   const another =
-    existing > 0 && t(anotherKey as MessageKey) !== anotherKey
+    !update && existing > 0 && t(anotherKey as MessageKey) !== anotherKey
       ? t(anotherKey as MessageKey, { count: String(existing) })
       : null;
 
@@ -784,7 +796,11 @@ function QrFlow({
 
   return (
     <div className="flex flex-col gap-6">
-      <FlowTitle platform={info.platform} title={t("connect.flowTitle", { platform: platformName })} />
+      <FlowTitle
+        platform={info.platform}
+        title={t(update ? "connect.reauthTitle" : "connect.flowTitle", { platform: platformName })}
+      />
+      {update ? <p className="text-small text-ink2">{t("connect.reauthHint")}</p> : null}
       <Steps>
         <Step n={1} state={at(1)} title={t(`${info.platform}.qr1` as MessageKey)}>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -850,7 +866,12 @@ function QrFlow({
         <Step
           n={2}
           state={at(2)}
-          title={t(`${info.platform}.qr2` as MessageKey, { name: agent.name })}
+          title={
+            update
+              ? (optionalText(t, `${info.platform}.qr2Update`, { name: agent.name }) ??
+                t(`${info.platform}.qr2` as MessageKey, { name: agent.name }))
+              : t(`${info.platform}.qr2` as MessageKey, { name: agent.name })
+          }
           {...(nameHint ? { hint: <GuideText text={nameHint} vars={guideVars(agent)} /> } : {})}
         >
           {state.state === "needs_code" && sessionId ? (
@@ -865,7 +886,11 @@ function QrFlow({
       </Steps>
       {state.state === "done" ? (
         <p className="rise text-headline font-medium text-green">
-          {state.pendingApproval ? t("qr.donePending") : t("qr.done", { platform: platformName })}
+          {update
+            ? t("qr.updated")
+            : state.pendingApproval
+              ? t("qr.donePending")
+              : t("qr.done", { platform: platformName })}
         </p>
       ) : null}
     </div>

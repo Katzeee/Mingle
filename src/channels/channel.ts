@@ -123,6 +123,12 @@ export interface OnboardingContext {
    * platform recognize a rebind instead of treating every scan as a new client. Read only on demand.
    */
   readonly knownCredentials?: () => Promise<readonly Credentials[]>;
+  /**
+   * Credentials of an already-connected bot being re-authorized (only where `Channel.reauthorize`
+   * is set): the platform updates that app's grants instead of creating a new bot, and the result
+   * rebinds the existing connection.
+   */
+  readonly reauthorize?: Credentials;
 }
 
 export type OnboardingFailure =
@@ -284,6 +290,12 @@ export interface Channel {
   readonly manualSetupUrl?: string;
   /** Local prerequisites the console checks live before connecting. */
   readonly setup?: ChannelSetup;
+  /**
+   * This platform's onboarding can add permissions to an already-connected bot: starting it with
+   * `OnboardingContext.reauthorize` carrying the connection's credentials updates that app rather
+   * than making a new one.
+   */
+  readonly reauthorize?: boolean;
   /** Where the owner adds a connected bot to a server or group, for platforms where that is a separate step. */
   inviteUrl?(bot: BotIdentity): string;
   /** Who can reach its bots. Absent means `public`: the safe side for a platform not described here. */

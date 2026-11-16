@@ -141,6 +141,10 @@ const en = {
   "connection.detail.credentials_missing":
     "This bot's credentials are no longer on this computer. Remove it and connect it again.",
   "connection.reconnect": "Reconnect",
+  "connection.permissions": "Permissions",
+  "connection.permissionsHint":
+    "The bot asks for the permissions it needs when it is created. Missing one? Scan again to add it to the same app.",
+  "connection.permissionsUpdate": "Update permissions…",
   "connection.none": "No chat app yet. Connect one so people can talk to it.",
   "chat.dm": "Direct message",
   "chat.group": "Group",
@@ -248,6 +252,7 @@ const en = {
   "slack.appToken": "App-level token (xapp-…)",
   "feishu.qr1": "Open Feishu on your phone and scan the code.",
   "feishu.qr2": "Confirm. The name {name} and the permissions are filled in.",
+  "feishu.qr2Update": "Confirm. The page lists the permissions being added.",
   "feishu.qr3": "Add the bot to a group, or message it directly.",
   "feishu.manualSteps":
     "Open your app on the Feishu open platform. No app yet? Create a custom app named `{name}`.\nUnder Add features, add Bot. Under Permissions, turn on the permissions to receive and send messages.\nUnder Events & callbacks, choose to receive events through a long connection, add the event `im.message.receive_v1`, and release a version.\nCopy the App ID and App Secret from Credentials & basic info.",
@@ -303,6 +308,7 @@ const en = {
   "wechat.another":
     "Scan with a different WeChat account to add it as well. The {count} already connected stay connected, each with its own chat.",
   "qr.done": "Connected to {platform}.",
+  "qr.updated": "Permissions updated.",
   "qr.donePending":
     "The bot was created and is waiting for an admin to approve it. Mingle connects on its own once approved.",
   "qr.failed.denied": "The authorization was declined. Refresh to try again.",
@@ -409,6 +415,9 @@ const en = {
   "connect.many":
     "Add it to more than one. Like a person, it is the same agent everywhere: it remembers what was said in each app and can pass things between them.",
   "connect.flowTitle": "Connect to {platform}",
+  "connect.reauthTitle": "Update {platform} permissions",
+  "connect.reauthHint":
+    "Scan to add permissions to the connected app. The confirm page lists exactly what is being added.",
   "connect.paste": "Paste it here",
   "connect.failed": "Could not connect",
   "connect.retry": "Try again",
@@ -796,6 +805,9 @@ const zh: Record<MessageKey, string> = {
   "connection.detail.unknown": "连接断开了，Mingle 会自动重试。",
   "connection.detail.credentials_missing": "这台电脑上找不到这个机器人的凭据。移除后重新连接。",
   "connection.reconnect": "重新连接",
+  "connection.permissions": "权限",
+  "connection.permissionsHint": "机器人创建时会申请它需要的权限。缺了某个权限时，再扫一次码即可补到同一个应用上。",
+  "connection.permissionsUpdate": "更新权限…",
   "connection.none": "还没有接入聊天软件。接入后大家就能和它聊天。",
   "chat.dm": "私聊",
   "chat.group": "群聊",
@@ -895,6 +907,7 @@ const zh: Record<MessageKey, string> = {
   "slack.appToken": "App-level token（xapp-…）",
   "feishu.qr1": "用手机飞书扫码。",
   "feishu.qr2": "确认创建。名称 {name} 和权限都已填好。",
+  "feishu.qr2Update": "确认更新。页面会列出要新增的权限。",
   "feishu.qr3": "把机器人拉进群，或直接私聊它。",
   "feishu.manualSteps":
     "在飞书开放平台打开你的应用。还没有的话，创建一个企业自建应用，名字填 `{name}`。\n在「添加应用能力」里添加机器人；在「权限管理」里开通接收和发送消息的权限。\n在「事件与回调」里选择使用长连接接收事件，添加事件 `im.message.receive_v1`，然后发布一个版本。\n在「凭证与基础信息」里复制 App ID 和 App Secret。",
@@ -949,6 +962,7 @@ const zh: Record<MessageKey, string> = {
   "wechat.qr3": "直接私聊机器人。微信机器人只支持私聊。",
   "wechat.another": "用另一个微信号扫码，可以再接入一个。已接入的 {count} 个不会断开，各自单独聊天。",
   "qr.done": "已连接{platform}。",
+  "qr.updated": "权限已更新。",
   "qr.donePending": "机器人已创建，正在等待管理员审核。审核通过后 Mingle 会自动连上。",
   "qr.failed.denied": "授权被拒绝。刷新后重试。",
   "qr.failed.cancelled": "已取消。",
@@ -1046,6 +1060,8 @@ const zh: Record<MessageKey, string> = {
   "connect.many":
     "可以多加几个。像一个真人一样，它在每个聊天软件里都是同一个 Agent：记得在哪里聊过什么，也能在它们之间传话。",
   "connect.flowTitle": "连接到{platform}",
+  "connect.reauthTitle": "更新{platform}权限",
+  "connect.reauthHint": "扫码为已连接的应用补充权限，确认页会列出要新增的权限。",
   "connect.paste": "粘贴到这里",
   "connect.failed": "没有连上",
   "connect.retry": "重试",
