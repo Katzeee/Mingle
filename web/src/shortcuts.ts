@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 /**
  * Keyboard shortcuts of the console, the same on every platform with the platform's modifier:
@@ -25,15 +25,34 @@ export function withMod(event: KeyboardEvent | React.KeyboardEvent): boolean {
   return isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
-/** How a shortcut reads, for tooltips: "⌘N" on macOS, "Ctrl+N" elsewhere. */
-export function shortcutLabel(key: string): string {
-  return isMac ? `⌘${key}` : `Ctrl+${key}`;
+/** A shortcut as the console shows it: the platform's modifier, maybe Shift, and a key. */
+export interface Keys {
+  key: string;
+  shift?: boolean;
+}
+
+/** How a shortcut reads: "⌘N" and "⇧⌘]" on macOS, "Ctrl+N" and "Ctrl+PgDn" elsewhere. */
+export function keysLabel({ key, shift }: Keys): string {
+  return isMac ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`;
 }
 
 /** The same for `aria-keyshortcuts`. */
-export function ariaShortcut(key: string): string {
-  return `${isMac ? "Meta" : "Control"}+${key}`;
+export function keysAria({ key, shift }: Keys): string {
+  const name = { PgUp: "PageUp", PgDn: "PageDown" }[key] ?? key;
+  return `${isMac ? "Meta" : "Control"}+${shift ? "Shift+" : ""}${name}`;
 }
+
+/** The console's shortcuts that have a button, for its tooltip and the held-modifier hints. */
+export const KEYS = {
+  newAgent: { key: "N" },
+  settings: { key: "," },
+  agent: (index: number): Keys | undefined => (index < 9 ? { key: String(index + 1) } : undefined),
+  // An agent page's two tabs: macOS's Show Previous / Next Tab; Ctrl+Page Up / Down elsewhere.
+  tab: (index: number): Keys =>
+    isMac ? { key: index === 0 ? "[" : "]", shift: true } : { key: index === 0 ? "PgUp" : "PgDn" },
+  // Command-period cancels on macOS; the same key elsewhere.
+  stop: { key: "." },
+} satisfies Record<string, Keys | ((index: number) => Keys | undefined)>;
 
 export interface ShellShortcuts {
   newAgent: () => void;
@@ -105,4 +124,99 @@ export function onEscape(run: () => void) {
     event.preventDefault();
     run();
   };
+}
+
+/**
+ * An agent page's own keys: its tab, or stopping what it does. Ctrl+Tab and Ctrl+Shift+Tab
+ * switch tabs on every platform too; with two tabs, previous is the first and next the second.
+ */
+export function pageAction(event: KeyboardEvent): { tab: 0 | 1 } | "stop" | null {
+  if (event.altKey) return null;
+  if (event.ctrlKey && !event.metaKey && event.key === "Tab") return { tab: event.shiftKey ? 0 : 1 };
+  if (!withMod(event)) return null;
+  if (isMac && event.shiftKey && event.code === "BracketLeft") return { tab: 0 };
+  if (isMac && event.shiftKey && event.code === "BracketRight") return { tab: 1 };
+  if (!isMac && !event.shiftKey && event.key === "PageUp") return { tab: 0 };
+  if (!isMac && !event.shiftKey && event.key === "PageDown") return { tab: 1 };
+  if (!event.shiftKey && event.key === ".") return "stop";
+  return null;
+}
+
+/** Listens for the page's keys while it is shown. */
+export function usePageShortcuts(handlers: { tab: (index: 0 | 1) => void; stop: () => void }): void {
+  const current = useRef(handlers);
+  current.current = handlers;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const action = pageAction(event);
+      if (action === null) return;
+      event.preventDefault();
+      if (action === "stop") current.current.stop();
+      else current.current.tab(action.tab);
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
+}
+
+/**
+ * Holding the modifier alone for a moment shows every button's shortcut beside it, and letting
+ * go hides them, as Windows shows its access keys while Alt is held. A quick ⌘C never shows them.
+ */
+export const HINT_DELAY = 500;
+
+let hinting = false;
+let timer: ReturnType<typeof setTimeout> | undefined;
+const listeners = new Set<() => void>();
+
+function setHinting(on: boolean) {
+  clearTimeout(timer);
+  if (hinting === on) return;
+  hinting = on;
+  for (const listener of listeners) listener();
+}
+
+/** The modifier itself, held alone: the start of a hint. */
+export function isModifierAlone(event: KeyboardEvent): boolean {
+  const modifier = isMac ? event.key === "Meta" : event.key === "Control";
+  return modifier && !event.shiftKey && !event.altKey && (isMac ? !event.ctrlKey : !event.metaKey);
+}
+
+const onDown = (event: KeyboardEvent) => {
+  if (!isModifierAlone(event)) return setHinting(false);
+  if (event.repeat || hinting) return;
+  clearTimeout(timer);
+  timer = setTimeout(() => setHinting(true), HINT_DELAY);
+};
+const hide = () => setHinting(false);
+
+function subscribe(listener: () => void) {
+  if (listeners.size === 0) {
+    addEventListener("keydown", onDown, true);
+    addEventListener("keyup", hide, true);
+    addEventListener("pointerdown", hide, true);
+    addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", hide);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size > 0) return;
+    removeEventListener("keydown", onDown, true);
+    removeEventListener("keyup", hide, true);
+    removeEventListener("pointerdown", hide, true);
+    removeEventListener("blur", hide);
+    document.removeEventListener("visibilitychange", hide);
+    setHinting(false);
+  };
+}
+
+/** Whether the shortcuts show beside their buttons now. */
+export function useShortcutHints(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => hinting,
+    () => false,
+  );
 }

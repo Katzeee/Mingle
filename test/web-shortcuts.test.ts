@@ -9,8 +9,20 @@ async function load(userAgent: string, desktop: boolean) {
   vi.stubGlobal("navigator", { userAgent });
   vi.stubGlobal("window", desktop ? { mygo: { call: async () => {} } } : {});
   const { shellAction } = await import("../web/src/shortcuts.ts");
-  return (key: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) =>
-    shellAction({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods } as KeyboardEvent);
+  return (key: string, mods: Mods = {}) => shellAction(press(key, mods));
+}
+
+type Mods = Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> & { code?: string };
+
+function press(key: string, mods: Mods = {}): KeyboardEvent {
+  return { key, code: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods } as KeyboardEvent;
+}
+
+async function module(userAgent: string) {
+  vi.resetModules();
+  vi.stubGlobal("navigator", { userAgent });
+  vi.stubGlobal("window", {});
+  return import("../web/src/shortcuts.ts");
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -61,5 +73,35 @@ describe("console shortcuts", () => {
     expect(app("ArrowLeft", { altKey: true })).toBe("back");
     expect(app("ArrowRight", { altKey: true })).toBe("forward");
     expect(app("[", { ctrlKey: true })).toBeNull();
+  });
+
+  it("switches an agent's tabs and stops it with each platform's keys", async () => {
+    const mac = await module(MAC);
+    expect(mac.pageAction(press("{", { metaKey: true, shiftKey: true, code: "BracketLeft" }))).toEqual({ tab: 0 });
+    expect(mac.pageAction(press("}", { metaKey: true, shiftKey: true, code: "BracketRight" }))).toEqual({ tab: 1 });
+    expect(mac.pageAction(press("Tab", { ctrlKey: true }))).toEqual({ tab: 1 });
+    expect(mac.pageAction(press("Tab", { ctrlKey: true, shiftKey: true }))).toEqual({ tab: 0 });
+    expect(mac.pageAction(press(".", { metaKey: true }))).toBe("stop");
+    // ⌘[ without Shift is Back, not a tab.
+    expect(mac.pageAction(press("[", { metaKey: true, code: "BracketLeft" }))).toBeNull();
+    expect(mac.keysLabel(mac.KEYS.tab(1))).toBe("⇧⌘]");
+
+    const windows = await module(WINDOWS);
+    expect(windows.pageAction(press("PageUp", { ctrlKey: true }))).toEqual({ tab: 0 });
+    expect(windows.pageAction(press("PageDown", { ctrlKey: true }))).toEqual({ tab: 1 });
+    expect(windows.pageAction(press(".", { ctrlKey: true }))).toBe("stop");
+    expect(windows.pageAction(press(".", { metaKey: true }))).toBeNull();
+    expect(windows.keysLabel(windows.KEYS.tab(0))).toBe("Ctrl+PgUp");
+    expect(windows.keysAria(windows.KEYS.tab(1))).toBe("Control+PageDown");
+  });
+
+  it("starts the held-modifier hints only for the modifier alone", async () => {
+    const mac = await module(MAC);
+    expect(mac.isModifierAlone(press("Meta", { metaKey: true }))).toBe(true);
+    expect(mac.isModifierAlone(press("Meta", { metaKey: true, shiftKey: true }))).toBe(false);
+    expect(mac.isModifierAlone(press("Control", { ctrlKey: true }))).toBe(false);
+    const windows = await module(WINDOWS);
+    expect(windows.isModifierAlone(press("Control", { ctrlKey: true }))).toBe(true);
+    expect(windows.isModifierAlone(press("Meta", { metaKey: true }))).toBe(false);
   });
 });
