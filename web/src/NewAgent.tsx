@@ -3,10 +3,11 @@ import type { Navigate } from "./App.tsx";
 import { type AgentView, api, type BrainStatus, type ModelList } from "./api.ts";
 import { BrainRow, SignInBrain, useSignIn } from "./Brains.tsx";
 import { useCached } from "./cache.ts";
-import { errorText, type MessageKey, useI18n } from "./i18n.ts";
+import { errorText, type Locale, type MessageKey, useI18n } from "./i18n.ts";
 import {
   ApiKeyHint,
   Button,
+  DiceIcon,
   Field,
   HarnessIcon,
   Input,
@@ -19,18 +20,112 @@ import {
   Textarea,
 } from "./ui.tsx";
 
-const ROLE_TEMPLATES = ["assistant", "group", "coder", "translator"] as const;
+const ROLE_TEMPLATES = ["assistant", "group", "coder", "translator", "tutor", "coach"] as const;
+
+/** Companion-like names the dice button suggests, picked for the console's language. */
+const NAME_POOLS: Record<Locale, readonly string[]> = {
+  en: [
+    "Alex",
+    "Sam",
+    "Maya",
+    "Nina",
+    "Theo",
+    "Luna",
+    "Milo",
+    "Zoe",
+    "Kai",
+    "Ivy",
+    "Remy",
+    "Nova",
+    "Juno",
+    "Otto",
+    "Wren",
+    "Sage",
+    "Finn",
+    "Isla",
+    "Hugo",
+    "Cleo",
+    "Ada",
+    "Ellis",
+    "Nico",
+    "Rae",
+    "Luca",
+    "Pia",
+    "Arlo",
+    "Freya",
+    "Jude",
+    "Mira",
+    "Owen",
+    "Skye",
+    "Tess",
+    "Uma",
+    "Vera",
+    "Wade",
+    "Yuki",
+    "Zane",
+    "Quinn",
+    "Robin",
+  ],
+  "zh-CN": [
+    "小满",
+    "阿禾",
+    "知微",
+    "一诺",
+    "安安",
+    "栗子",
+    "桃桃",
+    "米团",
+    "晚星",
+    "青柠",
+    "木木",
+    "朵朵",
+    "念念",
+    "拾光",
+    "阿泽",
+    "小舟",
+    "立夏",
+    "谷雨",
+    "麦麦",
+    "布丁",
+    "团子",
+    "芝麻",
+    "豆豆",
+    "阿黎",
+    "南风",
+    "北北",
+    "初一",
+    "十五",
+    "多多",
+    "年年",
+    "岁岁",
+    "小鱼",
+    "溪溪",
+    "苔苔",
+    "柿子",
+    "糯米",
+  ],
+};
+
+/** A pool name that is not the current value and not another agent's, when the pool can offer one. */
+function suggestName(pool: readonly string[], taken: ReadonlySet<string>, current: string): string {
+  const fresh = pool.filter((n) => n !== current && !taken.has(n.toLowerCase()));
+  const list = fresh.length > 0 ? fresh : pool.filter((n) => n !== current);
+  return list[Math.floor(Math.random() * list.length)] ?? "";
+}
 
 export function NewAgent({
   first,
+  taken,
   onNavigate,
   onCreated,
 }: {
   first: boolean;
+  /** Names other agents already have: the suggest button avoids them. */
+  taken: readonly string[];
   onNavigate: Navigate;
   onCreated: (agent: AgentView) => Promise<void>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [harness, setHarness] = useState("");
@@ -70,19 +165,32 @@ export function NewAgent({
 
   const named = name.trim().length > 0;
   const chosen = harnesses?.find((h) => h.id === harness);
+  const takenNames = new Set(taken.map((n) => n.toLowerCase()));
   const form = (
     <form onSubmit={submit} className="flex flex-col gap-8">
       <Steps>
         <Step n={1} state={named ? "done" : "now"} title={t("new.step1")} open>
-          <Input
-            autoFocus
-            required
-            aria-label={t("create.name")}
-            value={name}
-            maxLength={40}
-            placeholder={t("create.namePlaceholder")}
-            onChange={(e) => setName(e.target.value)}
-          />
+          <div className="relative">
+            <Input
+              autoFocus
+              required
+              aria-label={t("create.name")}
+              className="pr-10"
+              value={name}
+              maxLength={40}
+              placeholder={t("create.namePlaceholder")}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <button
+              type="button"
+              title={t("create.nameGenerate")}
+              aria-label={t("create.nameGenerate")}
+              onClick={() => setName((current) => suggestName(NAME_POOLS[locale], takenNames, current.trim()))}
+              className="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-small text-ink3 transition-colors duration-[120ms] hover:bg-bg3 hover:text-ink"
+            >
+              <DiceIcon />
+            </button>
+          </div>
         </Step>
         <Step n={2} state={named ? "now" : "todo"} open title={t("new.step2")} hint={t("new.step2Hint")}>
           <Textarea
