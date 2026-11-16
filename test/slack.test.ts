@@ -114,6 +114,16 @@ describe("slack messages", () => {
         threads,
       ),
     ).toMatchObject({ sender: { id: "B3", name: "deploy", isBot: true }, mentioned: true });
+    // Its own post under its bot ID alone is never read back as another bot's.
+    expect(
+      await toInbound(
+        { ...anonymous, ts: "5.5", subtype: "bot_message", bot_id: "B1", text: "<@UBOT> done" },
+        "UBOT",
+        names,
+        threads,
+        "B1",
+      ),
+    ).toBeUndefined();
     expect(
       await toInbound({ ...chatter, subtype: "message_changed", text: "<@UBOT>" }, "UBOT", names, threads),
     ).toBeUndefined();

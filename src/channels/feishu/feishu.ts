@@ -264,6 +264,8 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           });
           const botIdentity = instance.botIdentity ?? { openId: bot.id, name: bot.name };
           for (const item of [...(response.data?.items ?? [])].reverse()) {
+            // The list names an app sender by its app ID, not the open_id live events use: skip our own.
+            if (item.sender?.sender_type === "app" && item.sender.id === credentials.appId) continue;
             const raw = rawEvent(item, chatId);
             if (!raw) continue;
             const normalized = await lark.normalize(raw, { botIdentity, stripBotMentions: true });

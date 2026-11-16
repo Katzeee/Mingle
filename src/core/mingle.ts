@@ -97,10 +97,10 @@ export interface MingleOptions {
   readonly log?: (line: string) => void;
 }
 
-/** The whole local process: store, agent runtimes, live IM connections, reminders. The HTTP API sits on top. */
 /** Variables that give an agent a sign-in of its own, so it does not share the computer's usage limit. */
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
 
+/** The whole local process: store, agent runtimes, live IM connections, reminders. The HTTP API sits on top. */
 export class Mingle {
   readonly store: Store;
   readonly outbox: Outbox;

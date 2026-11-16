@@ -242,7 +242,7 @@ export function slackChannel(options: SlackOptions = {}): Channel {
       let attempt = 0;
 
       const handle = async (event: SlackEvent) => {
-        const inbound = await toInbound(event, auth.user_id, nameOf, threads);
+        const inbound = await toInbound(event, auth.user_id, nameOf, threads, auth.bot_id);
         if (!inbound) return;
         for (const f of event.files ?? []) files.set(f.id, f);
         events.onMessage(inbound);
@@ -515,13 +515,15 @@ export async function toInbound(
   botUserId: string,
   nameOf: (userId: string) => Promise<string>,
   threads: Set<string>,
+  /** This app's bot ID: its own posts can arrive under it, without its user ID. */
+  ownBotId?: string,
 ): Promise<InboundMessage | undefined> {
   if (event.type !== "message") return undefined;
   if (event.subtype && !KEPT_SUBTYPES.has(event.subtype)) return undefined;
   // Other bots (apps, legacy bots, webhooks) are kept and marked; the core decides what they may wake.
   const isBot = Boolean(event.bot_id) || event.subtype === "bot_message";
   const sender = event.user ?? (isBot ? event.bot_id : undefined);
-  if (!sender || sender === botUserId) return undefined;
+  if (!sender || sender === botUserId || (ownBotId && event.bot_id === ownBotId)) return undefined;
 
   const dm = event.channel_type === "im" || event.channel.startsWith("D");
   const raw = event.text ?? "";

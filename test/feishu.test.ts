@@ -398,6 +398,15 @@ describe("feishu group messages permission", () => {
     const lark = fakeLark();
     // Newest first, as Feishu lists them with ByCreateTimeDesc.
     lark.setHistory([
+      // The bot's own words from an earlier stay in the group: the list names it by its app ID.
+      {
+        message_id: "om_4",
+        msg_type: "text",
+        create_time: "1700000004000",
+        chat_id: "oc_9",
+        sender: { id: "cli_1", id_type: "app_id", sender_type: "app" },
+        body: { content: JSON.stringify({ text: "I was here before" }) },
+      },
       {
         message_id: "om_3",
         msg_type: "text",
