@@ -3,6 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.1.15
+
+- Settings → "Brains" now shows each harness's quota under its row: one line with the signed-in account's usage windows for Claude Code, Codex, Grok and Kimi Code, turning amber with the reset time once a limit is reached.
+
 ## 0.1.14
 
 - Agent settings puts identity first — name and picture, then role and brain — and gives each chat app its own page in place, like a Mac settings pane: the bot and its actions, the access rule for that app, and the people who wrote to it. Contacts and Access are no longer separate sections; decided people carry their decision in their contact row, and the "ask about new people" switch shows only on apps where it changes anything.
