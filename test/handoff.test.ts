@@ -108,6 +108,8 @@ describe("handoffs", () => {
 
     await admin("POST", `/v1/admin/agents/${agentId}/resume`);
     await until(() => mingle.store.handoff(handoff.id)?.state === "delivered");
+    // Delivered means the harness took the input; its turn may start a moment later.
+    await until(() => current?.turns.some((t) => t.input.includes(`[handoff=${handoff.id}`)) === true);
     expect(current.turns.filter((t) => t.input.includes(`[handoff=${handoff.id}`))).toHaveLength(1);
 
     await admin("POST", `/v1/admin/agents/${agentId}/reset`);
