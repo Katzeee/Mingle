@@ -11,6 +11,8 @@ import {
   type CursorSdk,
   createCursorRuntime,
   defaultRuntimes,
+  type ExecutableInstallation,
+  type InstallationSnapshot,
   type Runtime,
   RuntimeFailureError,
   runtimeBrandIcon,
@@ -407,8 +409,38 @@ function inlineEnvNote(env: Readonly<Record<string, string>>): string {
 }
 
 export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { vendorDir?: string } = {}): Harness {
+  /**
+   * Where each harness was last found. A probe can miss a harness that is there: its readiness
+   * check (`codebuddy --help`) or the npm lookup behind it runs out of time while every harness
+   * starts at once, which on Windows (a .cmd shim, Node, an antivirus scan) can take seconds. One
+   * miss would flip the harness between installed and not from one look to the next. So a probe
+   * that finds nothing, or does not answer, keeps the last copy while its executable is still on
+   * disk. A harness that ran and refused (`unsupported`), or whose file is gone, is believed.
+   */
+  const lastFound = new Map<string, ExecutableInstallation>();
+
+  async function probe(runtime: Runtime): Promise<InstallationSnapshot | undefined> {
+    let found: InstallationSnapshot | undefined;
+    let failure: unknown;
+    try {
+      found = await runtime.installation?.();
+    } catch (error) {
+      failure = error;
+    }
+    if (found?.kind === "available") {
+      if (found.via === "executable") lastFound.set(runtime.id, found);
+      else lastFound.delete(runtime.id);
+      return found;
+    }
+    const last = lastFound.get(runtime.id);
+    if (found?.kind !== "unsupported" && last && existsSync(last.command)) return last;
+    lastFound.delete(runtime.id);
+    if (failure !== undefined) throw failure;
+    return found;
+  }
+
   async function installation(runtime: Runtime): Promise<AvailableInstallation> {
-    const found = await runtime.installation?.();
+    const found = await probe(runtime);
     if (found?.kind !== "available") {
       throw new HarnessError("not_installed", `${runtime.id} is not installed on this computer`);
     }
@@ -453,30 +485,41 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
   /** The newest version each harness's updater last named: what an update offered goes to. */
   const latest = new Map<string, string>();
 
+  /** Every harness's state. Each probe starts the harness's executable; run them side by side. */
+  const look = (): Promise<HarnessStatus[]> =>
+    Promise.all(
+      ids().map(async (id): Promise<HarnessStatus> => {
+        const runtime = lookup(id);
+        const found = await probe(runtime).catch(() => undefined);
+        const available = found?.kind === "available" ? found : undefined;
+        const disabled = available ? incompatibility(runtime, available) : undefined;
+        return {
+          ...info(id, runtime, available),
+          ...(disabled ? { disabled } : {}),
+          installed: Boolean(available),
+          ...(found?.kind === "unsupported" ? { unsupported: found.reason } : {}),
+          canInstall: Boolean(runtime.install),
+          canSignIn: Boolean(runtime.login),
+          canUpdate: Boolean(runtime.checkUpdate && runtime.upgrade),
+        };
+      }),
+    );
+  let looking: Promise<HarnessStatus[]> | undefined;
+
   return {
     async available() {
       return (await this.catalog?.())?.filter((h) => h.installed) ?? [];
     },
 
-    async catalog() {
-      // Each probe starts the harness's executable for its version; run them side by side.
-      return Promise.all(
-        ids().map(async (id): Promise<HarnessStatus> => {
-          const runtime = lookup(id);
-          const found = await runtime.installation?.().catch(() => undefined);
-          const available = found?.kind === "available" ? found : undefined;
-          const disabled = available ? incompatibility(runtime, available) : undefined;
-          return {
-            ...info(id, runtime, available),
-            ...(disabled ? { disabled } : {}),
-            installed: Boolean(available),
-            ...(found?.kind === "unsupported" ? { unsupported: found.reason } : {}),
-            canInstall: Boolean(runtime.install),
-            canSignIn: Boolean(runtime.login),
-            canUpdate: Boolean(runtime.checkUpdate && runtime.upgrade),
-          };
-        }),
-      );
+    catalog() {
+      // `available` and `catalog` are often asked together; share one look instead of starting
+      // every harness twice at once, which is what makes a slow one miss its deadline.
+      if (looking) return looking;
+      const current: Promise<HarnessStatus[]> = look().finally(() => {
+        if (looking === current) looking = undefined;
+      });
+      looking = current;
+      return current;
     },
 
     async signInState(id) {
@@ -542,6 +585,8 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         timeoutMs: 10 * 60_000,
         ...(runtime.installLines?.length ? { line: runtime.installLines[0]?.line as string } : {}),
       });
+      // A look started before the install must not answer for after it.
+      looking = undefined;
       if (result.kind === "installed" || result.kind === "already_installed") return { ok: true };
       if (result.kind === "failed") return { ok: false, detail: result.output.trim().split("\n").slice(-6).join("\n") };
       return { ok: false, detail: result.detail ?? result.reason };
@@ -564,6 +609,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
       const runtime = lookup(id);
       if (!runtime.upgrade) return { ok: false, detail: "no updater" };
       const result = await runtime.upgrade(await installation(runtime), { timeoutMs: 10 * 60_000 });
+      looking = undefined;
       const tail = (output: string) => output.trim().split("\n").slice(-6).join("\n");
       if (result.kind === "upgraded" || result.kind === "current") return { ok: true };
       // Updaters can exit 0 without touching this copy; the version it reports decides. A copy
