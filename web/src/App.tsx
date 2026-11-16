@@ -231,7 +231,6 @@ function Sidebar({
     <div className="flex min-w-0 flex-1 flex-col px-2 pb-3">
       {/* The brand row: in the desktop app it sits right of the traffic lights and moves the window. */}
       <div className="drag flex h-[52px] shrink-0 items-center gap-2 pr-1.5 pl-[max(10px,calc(var(--mygo-titlebar-inset-left,0px)+2px))]">
-        <img src={iconUrl} alt="" className="size-5 rounded-[5px] dark:ring-1 dark:ring-white/20" />
         <span className="font-semibold">{t("app.title")}</span>
       </div>
       <Eyebrow>{t("sidebar.agents")}</Eyebrow>
