@@ -387,7 +387,7 @@ export async function reviewInteractions({
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     };
     const connButtonCenter = (more, wanted) => {
-      const trigger = connTriggers(more)[0];
+      const trigger = connTriggers(more)[0] ?? document.querySelector('[id^="connection-"]');
       const scope = trigger?.closest("section") ?? document;
       const el = [...scope.querySelectorAll("button")].find((b) => b.textContent.trim() === wanted);
       if (!el) return null;
@@ -396,7 +396,8 @@ export async function reviewInteractions({
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     };
     const connHasButton = (more, wanted) => {
-      const trigger = connTriggers(more)[0] ?? document.querySelector(`button[aria-label="${more}"]`);
+      // While it asks, the row has no menu: the bot's row on its page is the scope.
+      const trigger = connTriggers(more)[0] ?? document.querySelector('[id^="connection-"]');
       const scope = trigger?.closest("section") ?? document;
       return [...scope.querySelectorAll("button")].some((b) => b.textContent.trim() === wanted);
     };
@@ -436,6 +437,32 @@ export async function reviewInteractions({
       );
     };
     const pageFits = () => document.scrollingElement.scrollWidth <= innerWidth;
+    // Settings lists the bots as rows that open each bot's own page (chat-app-<id>).
+    const chatAppRows = () => document.querySelectorAll('[id^="chat-app-"]').length;
+    const chatAppRowCenter = (i) => {
+      const el = document.querySelectorAll('[id^="chat-app-"]')[i];
+      if (!el) return null;
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      return r.width && r.height ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    };
+    const backCenter = (label) => {
+      const el = [...document.querySelectorAll("nav button")].find((b) => b.textContent.trim() === label);
+      if (!el) return null;
+      el.scrollIntoView({ block: "nearest" });
+      const r = el.getBoundingClientRect();
+      return r.width && r.height ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    };
+    /** Open the i-th bot's page from the settings list; it shows that one bot. */
+    const openBot = async (i, labels) => {
+      await until("chat app rows", chatAppRows);
+      await clickEl(await until("chat app row", chatAppRowCenter, i));
+      await until("bot page", (more) => connTriggers(more).length === 1 || null, labels.more);
+    };
+    const backToList = async (labels) => {
+      await clickEl(await until("back button", backCenter, labels.settings));
+      await until("settings list", chatAppRows);
+    };
 
     // Fixture state for the install mock, kept in sessionStorage so reloads keep it.
     const resetFixture = () =>
@@ -544,7 +571,7 @@ export async function reviewInteractions({
         await until(
           "confirmation dismissed",
           (more, wanted) => {
-            const t = connTriggers(more)[0] ?? document.querySelector(`button[aria-label="${more}"]`);
+            const t = connTriggers(more)[0] ?? document.querySelector('[id^="connection-"]');
             const scope = t?.closest("section") ?? document;
             return ![...scope.querySelectorAll("button")].some((b) => b.textContent.trim() === wanted);
           },
@@ -568,7 +595,9 @@ export async function reviewInteractions({
       await openTriggerMenu(labels.more, 0);
       await clickEl(
         await call((more) => {
-          const h2 = connTriggers(more)[0]?.closest("section")?.querySelector("h2");
+          const h2 =
+            connTriggers(more)[0]?.closest("section")?.querySelector("h2") ??
+            [...document.querySelectorAll("section h2")].find((h) => !h.closest("aside"));
           const r = h2?.getBoundingClientRect();
           return r?.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
         }, labels.more),
@@ -788,8 +817,8 @@ export async function reviewInteractions({
             "side panel repeats the chat apps on settings",
           );
 
-          // Back on activity, a bot's row in the side panel opens that bot in settings,
-          // in view, focused and briefly tinted. Scroll settings away first so landing is real.
+          // Back on activity, a bot's row in the side panel opens that bot's own page in settings,
+          // at its top. Scroll settings away first so the landing is real.
           await call(() => {
             const region = document.querySelector("section[aria-label]");
             let scroller = region?.parentElement;
@@ -808,38 +837,63 @@ export async function reviewInteractions({
               if (!row) return null;
               row.scrollIntoView({ block: "nearest" });
               const r = row.getBoundingClientRect();
-              return r.width ? { x: r.left + r.width / 2, y: r.top + r.height / 2, count: rows.length } : null;
+              return r.width
+                ? {
+                    x: r.left + r.width / 2,
+                    y: r.top + r.height / 2,
+                    count: rows.length,
+                    name: row.querySelector(".truncate")?.textContent.trim() ?? "",
+                  }
+                : null;
             },
             labels.chatApps,
           );
           assert(rowCenter.count >= 2, `expected bot rows in the side panel, got ${rowCenter.count}`);
           await clickEl(rowCenter);
-          const landed = await until("bot row focused", () => {
-            const el = document.activeElement;
-            if (!el?.id?.startsWith("connection-")) return null;
-            const r = el.getBoundingClientRect();
-            let scroller = el.parentElement;
-            while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
-            const s = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
-            const rows = [...document.querySelectorAll('[id^="connection-"]')];
-            return r.top >= s.top - 1 && r.bottom <= s.bottom + 1
-              ? { tinted: el.className.includes("bg-accent-tint"), index: rows.indexOf(el), rows: rows.length }
-              : null;
-          });
-          assert(landed.tinted, "opened bot row is not highlighted");
-          assert(landed.index === landed.rows - 1, `landed on row ${landed.index} of ${landed.rows}`);
-          await shot(`${localeName}-${width}-opened-bot`);
-          const faded = await until(
-            "highlight fades",
-            () => !document.querySelector('[id^="connection-"].bg-accent-tint') || null,
+          const opened = await until(
+            "bot page",
+            (more) => {
+              const triggers = connTriggers(more);
+              if (triggers.length !== 1) return null;
+              const row = triggers[0].closest('[id^="connection-"]');
+              let scroller = row?.parentElement;
+              while (scroller && scroller.scrollHeight <= scroller.clientHeight) scroller = scroller.parentElement;
+              return {
+                name: row?.querySelector(".font-medium")?.textContent.trim() ?? "",
+                top: scroller?.scrollTop ?? 0,
+              };
+            },
+            labels.more,
           );
-          assert(faded, "bot highlight did not fade");
+          assert(rowCenter.name.startsWith(opened.name), `opened ${opened.name}, clicked ${rowCenter.name}`);
+          assert(opened.top === 0, `bot page opened scrolled to ${opened.top}`);
+          assert(await call(pageFits), "bot page overflows horizontally");
+          await shot(`${localeName}-${width}-opened-bot`);
+          // Back lands on that bot's row in the list.
+          await backToList(labels);
+          const focused = await until("bot row focused", () => {
+            const el = document.activeElement;
+            if (!el?.id?.startsWith("chat-app-")) return null;
+            const rows = [...document.querySelectorAll('[id^="chat-app-"]')];
+            return { index: rows.indexOf(el), rows: rows.length };
+          });
+          assert(focused.index === focused.rows - 1, `back landed on row ${focused.index} of ${focused.rows}`);
         } else {
           await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
         }
-        const count = await until("connection rows", (more) => connTriggers(more).length || null, labels.more);
-        assert(count === 4, `expected 4 connection rows, got ${count}`);
-        await menuScenario(localeName, labels, width, "agent", count);
+        const count = await until("chat app rows", chatAppRows);
+        assert(count === 4, `expected 4 chat app rows, got ${count}`);
+        await shot(`${localeName}-${width}-settings-list`);
+        // Each bot has its own page; the first and the last also run the menu checks.
+        for (let index = 0; index < count; index++) {
+          await openBot(index, labels);
+          assert(await call(pageFits), `bot page ${index} overflows horizontally`);
+          await shot(`${localeName}-${width}-bot-${index}`);
+          if (index === 0 || index === count - 1) {
+            await menuScenario(localeName, labels, width, `agent bot ${index}`, 1);
+          }
+          await backToList(labels);
+        }
 
         assert(
           await call(() => !document.querySelector('header button[aria-haspopup="menu"]')),
@@ -849,6 +903,7 @@ export async function reviewInteractions({
         // --- single-connection agent: the reported clipped-menu case ---
         await goto(`/a/${singleSlug}`, labels);
         await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
+        await openBot(0, labels);
         const single = await until("sole connection row", (more) => connTriggers(more).length || null, labels.more);
         assert(single === 1, `expected 1 connection row, got ${single}`);
         await openTriggerMenu(labels.more, 0);
@@ -867,7 +922,7 @@ export async function reviewInteractions({
         await until(
           "confirmation dismissed",
           (more, wanted) => {
-            const t = connTriggers(more)[0] ?? document.querySelector(`button[aria-label="${more}"]`);
+            const t = connTriggers(more)[0] ?? document.querySelector('[id^="connection-"]');
             const scope = t?.closest("section") ?? document;
             return ![...scope.querySelectorAll("button")].some((b) => b.textContent.trim() === wanted);
           },
@@ -1246,18 +1301,22 @@ export async function reviewInteractions({
       await metrics(width);
       await goto(`/a/${sharedSlug}`, labels);
       await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
-      const rows = await until("connection rows", (more) => connTriggers(more).length || null, labels.more);
-      assert(rows === 2, `${tag}: expected 2 connection rows, got ${rows}`);
+      const rows = await until("chat app rows", chatAppRows);
+      assert(rows === 2, `${tag}: expected 2 chat app rows, got ${rows}`);
       await until("unnamed owner", (u) => document.body.textContent.includes(u), labels.ownerUnnamed);
       assert(await call(pageFits), `${tag}: horizontal overflow`);
       await shot(`${localeName}-${width}-owner-unnamed`);
-      // Two owners on one app: Contacts asks whether they are one person, and lists everyone.
-      await until("contacts", envSection, labels.contactsTitle);
-      await call((title) => {
-        const h = [...document.querySelectorAll("section h2")].find((x) => x.textContent.trim() === title);
-        h?.scrollIntoView({ block: "start" });
-      }, labels.contactsTitle);
+      // Two owners on one app: the chat apps ask whether they are one person.
       await until("all-me card", (want) => document.body.textContent.includes(want), labels.allMe);
+      await call((want) => {
+        const el = [...document.querySelectorAll("span")].find((x) => x.textContent.trim() === want);
+        el?.scrollIntoView({ block: "center" });
+      }, labels.allMe);
+      assert(await call(pageFits), `${tag}: all-me card overflows horizontally`);
+      await shot(`${localeName}-${width}-all-me`);
+      // The second bot's page lists the people who wrote to it.
+      await openBot(1, labels);
+      await until("contacts", envSection, labels.contactsTitle);
       assert(await call(pageFits), `${tag}: contacts overflow horizontally`);
       await shot(`${localeName}-${width}-contacts`);
       const row = (title, text = "u3hr") => {

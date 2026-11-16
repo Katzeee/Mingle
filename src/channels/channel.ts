@@ -26,8 +26,10 @@ export type ChatKind = "dm" | "group" | "thread";
  * Who can reach a bot on this platform (docs/spec.md 4.7). `org`: only people inside the workspace
  * or organization the bot was created in (and who can add it to a group). `public`: anyone who
  * finds it can message it or add it to a group, so Mingle asks the owner before they reach the agent.
+ * `owner`: the bot is the owner's own account (personal WeChat, iMessage self-chat), so only the
+ * owner reaches it; anyone else who still does is asked about, as on a `public` platform.
  */
-export type Trust = "org" | "public";
+export type Trust = "org" | "public" | "owner";
 
 /** What this bot instance can actually do right now, given its granted permissions. */
 export interface Capabilities {

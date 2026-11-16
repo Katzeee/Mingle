@@ -6,7 +6,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import QRCode from "qrcode";
-import type { CredentialField, OnboardingMethod, Platform } from "../channels/channel.ts";
+import type { CredentialField, OnboardingMethod, Platform, Trust } from "../channels/channel.ts";
 import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
 import { readRole } from "../core/home.ts";
@@ -414,6 +414,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
         ownerContact: ownerContact(n.id, n.ownerId),
         ownerShared: shared.has(n.id),
         invite: inviteUrl(n.platform, n.botId, n.botName),
+        trust: trustOf(n.platform),
         claim: claimView(n),
       })),
       requests: accessRequests(agent.id),
@@ -508,6 +509,15 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!ownerId) return null;
     const contact = store.contactByPlatformId(connectionId, ownerId);
     return contact ? { id: contact.id, name: contactName(contact) } : null;
+  };
+
+  /** Who can reach a bot on this platform (docs/spec.md 4.7); undeclared reads as `public`, as the gate does. */
+  const trustOf = (platform: Platform): Trust => {
+    try {
+      return mingle.channel(platform).trust ?? "public";
+    } catch {
+      return "public";
+    }
   };
 
   const inviteUrl = (platform: Platform, botId: string | null, botName: string | null): string | null => {
@@ -720,8 +730,11 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const account = (k: (typeof all)[number]) => ({
       id: k.id,
       platform: k.platform,
+      connection: k.connectionId,
       name: k.alias ?? k.name,
       platformName: k.name,
+      // The owner always reaches the agent: there is nothing to decide for them.
+      access: k.owner ? null : k.access,
       owner: k.owner,
       ownerShared: k.owner && shared.has(k.connectionId),
       bot: k.isBot && !k.owner,
@@ -803,6 +816,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
         kind: "contact" as const,
         id: k.id,
         platform: k.platform,
+        connection: k.connectionId,
         name: contactName(k),
         access: k.access,
         updatedAt: k.updatedAt,
@@ -811,6 +825,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
         kind: "group" as const,
         id: g.id,
         platform: g.platform,
+        connection: g.connectionId,
         name: g.name,
         access: g.access,
         updatedAt: 0,

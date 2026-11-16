@@ -308,19 +308,19 @@ Raft 的做法更重。从它的源码和 agent 提示词看：忙碌时只给 a
 | 飞书、钉钉、企业微信、Slack | `org`：只有组织里的人能私聊它、拉它进群 | 默认直接放行 | 默认直接放行 |
 | GitHub | `org`：适配器只放行 `OWNER` / `MEMBER` / `COLLABORATOR`（6.7） | 不适用 | 同左 |
 | Telegram、Discord、QQ | `public`：谁搜到都能私聊、拉进群 | 新的人第一次私聊要 owner 同意 | 新群里第一次被 @ 要 owner 同意这个群 |
-| 个人微信、iMessage | 没声明，按 `public` | 本来只有 owner | 不适用 |
+| 个人微信、iMessage | `owner`：机器人就是 owner 自己的账号（微信 iLink 绑定扫码的那个号，iMessage 是自聊） | 本来只有 owner；万一有别人，按 `public` 先问 | 不适用 |
 
 没声明的平台按 `public` 处理：新接入的平台默认在安全的一边。
 
-- **判断**：`receive` 里对每条触发消息调用纯函数 `gate()`（`src/core/access.ts`），结果是放行、先问 owner、只存档。owner 永远放行；owner 拒绝过的人在私聊和群里都只存档；私聊看这个人（`contacts.access`），群和线程看所属的群（`chats.access`）；都还没决定时，`public` 先问，`org` 放行。不触发的背景消息照旧存下（4.2），不经过这一步。
+- **判断**：`receive` 里对每条触发消息调用纯函数 `gate()`（`src/core/access.ts`），结果是放行、先问 owner、只存档。owner 永远放行；owner 拒绝过的人在私聊和群里都只存档；私聊看这个人（`contacts.access`），群和线程看所属的群（`chats.access`）；都还没决定时，`public` 和 `owner` 先问，`org` 放行。不触发的背景消息照旧存下（4.2），不经过这一步。
 - **记住决定**：放行过的人和群记为 `allowed`，所以之后打开"所有新的人都先问我"不会把已经在用的人挡在外面。owner 在群里 @ 它，等于同意这个群，群里等着的消息一起放行。
 - **先问 owner 时**：消息状态为 `held`（4.10），不交给 Agent，不计入 `unseen`。这个人（或这个群）第一次被拦下时，Mingle 在原聊天里以机器人的身份回一句"我先问一下我的主人，同意后我会回复你。"（按聊天的语言），并在 owner 和这个机器人的私聊里发一条通知：谁、第一条消息的预览、去电脑上的 Mingle 处理。之后再来的消息不再回复、不再通知。这些是 Mingle 自己的话，不记为 Agent 发的消息，不结束任何消息，也不算 Agent 的第一次回复（4.8）。通知里不放控制台链接：控制台要本机的令牌，手机上打不开。
 - **控制台**："需要你处理"里每个人或每个群一条：标题（"张三 想和 Alex 私聊" / "Alex 被拉进了群「xxx」"），平台和积压条数，第一条消息，一句"允许后，对方可以让 Alex 在这台电脑上做事"，"允许"和"拒绝"。这一版不做 IM 里的批准命令：批准命令本身也要鉴权，而控制台天然只有本机用户能打开。
 - **`held` 不进 Agent 的输入**：不投递，也不进冷启动的"最近消息"（4.1）。但它存在消息记录里，Agent 用 `message read` / `message search` 主动去读时能看到：owner 可以问它"那个陌生人想干什么"。这是有意的，门管的是"谁能让它干活"，不是"它能不能看到记录"。
 - **允许**：这个人（群）积压的消息按原顺序回到 `received`，像刚收到一样交给 Agent；暂停中的 Agent 则直接变为 `ignored`（4.11）。**拒绝**：积压的变为 `ignored`；之后的消息只存档不触发，也不再回复。
 - **一个人的多个账号**（4.2 人物层）：owner 在控制台关联到同一个人的账号，允许或拒绝其中一个，就是对这个人的所有这类账号作答；还没决定的账号沿用这个人其他账号的决定（拒绝优先）。Agent 做的关联不传递任何权限，否则陌生人可以说动 Agent 把自己连到已允许的人身上。
-- **改主意**：Agent 设置的"访问权限"一节列出已决定的人和群（不含 owner），可以撤销允许（之后只存档），也可以重新允许被拒绝的人（之前的消息不补处理）。
-- **一个设置**：同一节里的"所有新的人都先问我"（`agents.ask_all`），打开后 `org` 平台上的新的人和新群也要先问。只有这一个开关：`public` 平台不能改成直接放行，功能少一点，出错的机会也少一点。
+- **改主意**：在 Agent 设置里点开一个机器人，它的"访问权限"一节列出这个机器人上已决定的群，"联系人"一节里的人带着各自的决定（不含 owner）：可以撤销允许（之后只存档），也可以重新允许被拒绝的人（之前的消息不补处理）。控制台按连接的 `trust`（Agent 详情里每个连接带 `trust`）只说这个机器人适用的那条规则，联系人和已决定的条目都带 `connection`，按机器人筛选。
+- **一个设置**："新的人也先问我"（`agents.ask_all`），打开后 `org` 平台上的新的人和新群也要先问。它只对 `org` 机器人有意义，所以只出现在 `org` 机器人的页面上，注明对这个 Agent 所有组织内的聊天软件生效；`public` 和 `owner` 机器人不显示。只有这一个开关：`public` 平台不能改成直接放行，功能少一点，出错的机会也少一点。
 - **认领 owner**：平台没告诉我们 owner 时，接入后控制台显示一个 6 位验证码："用你自己的账号把这个验证码私聊发给它，你就成为它的 owner。"10 分钟有效，过期或作废后可以重新获取（`POST /v1/admin/connections/:id/claim`）。Telegram 另给一个"在 Telegram 中发送"链接（`t.me/<bot>?start=<码>`），点开后发出的是 `/start <码>`。私聊里单独的 6 位数字或 `/start <码>` 都算；只有带对这个码的私聊才能成为 owner，Mingle 回一句"好了，你现在是 Alex 的主人……"，这条认领消息不交给 Agent，这个人之前被拦下的消息随即放行。认领之前发私聊的人按陌生人处理，不会因为"第一个发消息"成为 owner。错码累计 5 次后验证码作废，防止猜码。GitHub 没有私聊，不认领。
 - **数据**（迁移 017）：`contacts.access`、`chats.access`（`allowed` / `blocked` / NULL），`agents.ask_all`，`connections.claim_code`、`claim_expires_at`。升级时已经发过消息的联系人和已有的群回填为 `allowed`，现有用户不受影响。
 - **API**：`POST /v1/admin/agents/:id/contacts/:contactId/access`、`POST /v1/admin/agents/:id/chats/:chatId/access`，参数 `{ access: "allowed" | "blocked" }`，返回 `{ settled }`（积压消息里处理掉的条数）；owner 返回 `contact_is_owner`。`GET /v1/admin/agents/:id/access` 列出已决定的人和群。`PUT /v1/admin/agents/:id/ask-all`，参数 `{ on }`。Agent 详情带 `requests`（等待同意的人和群）和每个连接的 `claim`。

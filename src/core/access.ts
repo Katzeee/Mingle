@@ -32,7 +32,7 @@ export function gate(input: GateInput): Verdict {
   const decided = input.chatKind === "dm" ? input.contact : input.group;
   if (decided === "allowed") return "deliver";
   if (decided === "blocked") return "drop";
-  return input.trust === "public" || input.askAll ? "ask" : "deliver";
+  return input.trust !== "org" || input.askAll ? "ask" : "deliver";
 }
 
 /** How long a claim code works: long enough to switch to the phone, short enough not to linger. */

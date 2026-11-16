@@ -55,6 +55,8 @@ const en = {
   "contacts.help":
     "Everyone who has written to {name}, one entry per chat app account. Link one person's accounts on different apps so they share a name and a note, and {name} can find them on any of them. Linking only tells people apart; it gives nobody more access.",
   "contacts.showAll": "Show all {count}",
+  "contacts.none": "Nobody has written to {name} here yet.",
+  "contacts.waiting": "Waiting for you",
   "contacts.edit": "Edit",
   "contacts.owner": "Owner",
   "contacts.bot": "Bot",
@@ -406,7 +408,7 @@ const en = {
   "connect.addAnother": "Add another bot",
   "connect.many":
     "Add it to more than one. Like a person, it is the same agent everywhere: it remembers what was said in each app and can pass things between them.",
-  "connect.flowTitle": "Connect to{platform}",
+  "connect.flowTitle": "Connect to {platform}",
   "connect.paste": "Paste it here",
   "connect.failed": "Could not connect",
   "connect.retry": "Try again",
@@ -448,11 +450,16 @@ const en = {
   "connection.claimExpired": "Get a code, then send it to the bot from your own account to become its owner.",
   "connection.claimNew": "Get a code",
   "access.title": "Access",
-  "access.body": "On chat apps anyone can find, {name} asks you before someone new or a new group can talk to it.",
-  "access.askAll": "Ask about everyone new",
-  "access.askAllHint": "Also on chat apps limited to your organization, such as Feishu or Slack.",
+  "access.rule.public":
+    "Anyone can find this bot on {platform}. When someone new messages it or adds it to a group, you're asked under Needs you first. {name} replies once you allow them.",
+  "access.rule.org":
+    "Only people in your organization can find it on {platform}. Their messages go straight to {name}.",
+  "access.rule.owner": "Only its owner can talk to {name} here. There is nothing to set.",
+  "access.askAll": "Ask me about new people too",
+  "access.askAllHint": "Applies to every organization chat app {name} is on.",
   "access.unnamed": "Unnamed",
   "access.declined": "Declined",
+  "access.allowed": "Allowed",
   "access.revoke": "Stop allowing",
   "access.allow": "Allow",
   "access.showAll": "Show all ({count})",
@@ -698,6 +705,8 @@ const zh: Record<MessageKey, string> = {
   "contacts.help":
     "给 {name} 发过消息的人，每个聊天软件账号一条。把同一个人在不同聊天软件上的账号连起来，就共用名字和备注，{name} 在哪个聊天软件上都找得到他。连起来只是认人，不会给任何人更多权限。",
   "contacts.showAll": "显示全部 {count} 个",
+  "contacts.none": "还没有人在这里给 {name} 发过消息。",
+  "contacts.waiting": "等你同意",
   "contacts.edit": "编辑",
   "contacts.owner": "owner",
   "contacts.bot": "机器人",
@@ -1070,11 +1079,15 @@ const zh: Record<MessageKey, string> = {
   "connection.claimExpired": "获取验证码，再用你自己的账号私聊发给它，你就成为它的 owner。",
   "connection.claimNew": "获取验证码",
   "access.title": "访问权限",
-  "access.body": "在任何人都能找到它的聊天软件上，新的人或新的群要先经你同意，才能和 {name} 说话。",
-  "access.askAll": "所有新的人都先问我",
-  "access.askAllHint": "包括飞书、Slack 这类只有组织内的人能用的聊天软件。",
+  "access.rule.public":
+    "在{platform}上谁都能找到这个机器人。新的人私聊它或把它拉进群，会先在“需要你处理”里问你，你允许后 {name} 才会回复。",
+  "access.rule.org": "在{platform}上只有你组织里的人能找到它，他们的消息直接交给 {name}。",
+  "access.rule.owner": "这里只有它的 owner 能和 {name} 说话，不需要设置。",
+  "access.askAll": "新的人也先问我",
+  "access.askAllHint": "对 {name} 接入的所有组织内聊天软件生效。",
   "access.unnamed": "未命名",
   "access.declined": "已拒绝",
+  "access.allowed": "已允许",
   "access.revoke": "撤销允许",
   "access.allow": "允许",
   "access.showAll": "显示全部（{count}）",
@@ -1351,8 +1364,22 @@ export function translator(locale: Locale): Translate {
   return (key, vars) => {
     // A key built at runtime (`connection.detail.${code}`) may not exist: answer with the key,
     // so callers can tell and fall back, rather than rendering nothing.
-    let text = catalog[key] ?? en[key] ?? key;
-    for (const [k, v] of Object.entries(vars ?? {})) text = text.replaceAll(`{${k}}`, () => v);
-    return text;
+    const text = catalog[key] ?? en[key] ?? key;
+    if (!vars) return text;
+    return text.replace(/( ?)\{(\w+)\}( ?)/g, (whole, left: string, name: string, right: string, at: number) => {
+      const value = vars[name];
+      if (value === undefined) return whole;
+      if (locale !== "zh-CN" || !value) return `${left}${value}${right}`;
+      // Chinese puts a space between Chinese and Latin text, never between Chinese and Chinese
+      // (DESIGN.md 文案): "连接到 Slack", "连接到飞书", whichever the value turns out to be.
+      const before = text[at - 1] ?? "";
+      const after = text[at + whole.length] ?? "";
+      const lead = han(before) ? (latin(value[0] ?? "") ? " " : "") : left;
+      const trail = han(after) ? (latin(value.at(-1) ?? "") ? " " : "") : right;
+      return `${lead}${value}${trail}`;
+    });
   };
 }
+
+const han = (c: string) => /\p{Script=Han}/u.test(c);
+const latin = (c: string) => /[A-Za-z0-9@]/.test(c);

@@ -76,6 +76,11 @@ export interface ConnectionView {
   /** Where to add the bot to a server, for platforms where that is a separate step. */
   invite: string | null;
   /**
+   * Who can reach the bot (docs/spec.md 4.7): `org` only people in the organization, `public`
+   * anyone who finds it, `owner` only the owner (it is their own account).
+   */
+  trust: "org" | "public" | "owner";
+  /**
    * How to become the owner of a bot the platform named none for: the code to send it (null once
    * it expired or was guessed at), and a link that sends it in one tap. Null when it has its owner.
    */
@@ -101,6 +106,8 @@ export interface AccessEntry {
   kind: "contact" | "group";
   id: string;
   platform: Platform;
+  /** The bot they wrote to. */
+  connection: string;
   name: string | null;
   access: "allowed" | "blocked";
 }
@@ -133,10 +140,14 @@ export interface AgentView {
 export interface ContactAccount {
   id: string;
   platform: Platform;
+  /** The bot this account wrote to. */
+  connection: string;
   /** The name given to this account, else the app's. */
   name: string | null;
   platformName: string | null;
   owner: boolean;
+  /** What the owner decided about them (docs/spec.md 4.7); null when undecided, and for the owner. */
+  access: "allowed" | "blocked" | null;
   /** Another account on this platform has a different owner: "you" would be ambiguous. */
   ownerShared: boolean;
   bot: boolean;
