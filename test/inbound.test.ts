@@ -152,7 +152,7 @@ describe("inbound state in a running Mingle", () => {
 
   it("does not deliver a retried message again once it was answered", async () => {
     // The agent never answers on its own, so the message ends up unanswered.
-    current = await rig(async () => {}, { coalesceMs: 300 });
+    current = await rig(async (t) => t.think("let me see"), { coalesceMs: 300 });
     const { mingle, agentId, channel, admin } = current;
     const inbound = channel.receive({ text: "are we still on for Saturday?" });
     const chat = await until(() => mingle.store.agentChats(agentId)[0]?.id);

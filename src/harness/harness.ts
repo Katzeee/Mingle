@@ -22,6 +22,27 @@ import {
 } from "@botiverse/oar";
 import { MingleError } from "../core/errors.ts";
 
+/**
+ * A completed turn that closed within this long and never emitted work is the harness
+ * acknowledging the input, not answering it: Kimi Code's ACP server replies `session/prompt`
+ * at once while a turn it started itself is still running (earayu/Mingle#125), and the prompt
+ * sits in a native queue OAR cannot see. Two seconds is far under any real model call.
+ */
+const SILENT_TURN_MS = 2_000;
+
+/** Events that prove the turn did work: streamed output, tool calls, reported usage. */
+const TURN_WORK_KINDS = new Set([
+  "text_delta",
+  "reasoning",
+  "tool_call_started",
+  "tool_call_input",
+  "tool_call_input_delta",
+  "tool_call_ended",
+  "tool_call_progress",
+  "task_started",
+  "usage",
+]);
+
 export interface HarnessInfo {
   readonly id: string;
   readonly name: string;
@@ -104,6 +125,13 @@ export interface TurnEnd {
   readonly failure?: Failure;
   /** For `quota`: when the limit resets (epoch ms), where the harness reports it. */
   readonly resetsAt?: number;
+  /**
+   * The turn was accepted and closed almost at once with nothing in it: no text, no tool
+   * calls, no reasoning. The harness acknowledged the input without running it — Kimi Code
+   * does this when a prompt arrives while a turn it started itself is still running
+   * (earayu/Mingle#125): the prompt waits in its native queue and runs when that turn ends.
+   */
+  readonly silent?: boolean;
 }
 
 export interface HarnessEvents {
@@ -740,6 +768,9 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
 
       /** A turn is running: one Mingle prompted, or one the harness began itself. */
       let turn: "prompted" | "self" | undefined;
+      /** When the open turn began, and whether it has produced any visible work so far. */
+      let turnBeganAt = 0;
+      let turnWork = false;
       /** Tasks running beside the turns, which an abort of the turn leaves running. */
       const tasks = new Set<string>();
       /** The root agent's tool calls in flight, with the latest input reported for each. */
@@ -770,6 +801,8 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         });
       };
       session.events((event) => {
+        // Anything the agent emitted — output, tool calls, usage — makes the turn real work.
+        if (turn !== undefined && TURN_WORK_KINDS.has(event.kind)) turnWork = true;
         switch (event.kind) {
           case "task_started":
             if (!event.ambient) tasks.add(event.taskId);
@@ -806,16 +839,23 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
           (event.kind === "tool_call_started" || event.kind === "reasoning" || event.kind === "text_delta")
         ) {
           turn = "self";
+          turnBeganAt = Date.now();
+          turnWork = true; // A turn the harness began itself opens on the work that woke it.
           turnBase = totals();
           events.onTurnStarted(true);
         }
         switch (event.kind) {
           case "turn_started":
             turn = "prompted";
+            turnBeganAt = Date.now();
+            turnWork = false;
             turnBase = totals();
             events.onTurnStarted();
             break;
           case "turn_ended": {
+            // An instant, empty completion is an acknowledgement, not an answer: the harness
+            // queued the input behind a turn of its own that never reaches this stream.
+            const silent = event.outcome.kind === "completed" && !turnWork && Date.now() - turnBeganAt < SILENT_TURN_MS;
             turn = undefined;
             // Report before onTurnEnded can deliver another input or reopen the session.
             reportTurnUsage();
@@ -826,6 +866,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
               ...(outcome.reason ? { reason: outcome.reason } : {}),
               ...(outcome.kind === "failed" ? { failure: outcome.failure ?? "unknown" } : {}),
               ...(resetsAt > Date.now() ? { resetsAt } : {}),
+              ...(silent ? { silent: true } : {}),
             });
             break;
           }

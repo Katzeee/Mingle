@@ -125,7 +125,7 @@ describe("live replies", () => {
   });
 
   it("closes the live reply with a note when the message goes unanswered", async () => {
-    current = await rig(async () => {}, { live: true });
+    current = await rig(async (t) => t.think("let me see"), { live: true });
     const { channel } = current;
     const inbound = channel.receive({ text: "hello?" });
     await until(() => channel.lives[0]?.final);
@@ -276,7 +276,10 @@ describe("retrying messages", () => {
   it("retries an unanswered message, and does nothing for messages that were answered", async () => {
     const state = { ignore: true };
     current = await rig(async (t) => {
-      if (state.ignore) return;
+      if (state.ignore) {
+        t.think("let me see");
+        return;
+      }
       await answering({ broken: false })(t);
     });
     const { channel, mingle, agentId, turns, admin } = current;
@@ -320,8 +323,9 @@ describe("ignoring messages", () => {
     "marks a %s message ignored without waking the agent or sending anything",
     async (state) => {
       current = await rig(
-        async () => {
+        async (t) => {
           if (state === "failed") throw new Error("test failure");
+          t.think("let me see");
         },
         { live: true },
       );

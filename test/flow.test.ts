@@ -82,6 +82,7 @@ describe("message flow", () => {
 
   it("nudges once about unanswered messages, then marks them unanswered", async () => {
     current = await rig(async (t) => {
+      t.think("let me see");
       // Ignore real messages; only answer when nudged.
       if (t.input.startsWith("[mingle] Not answered yet")) {
         const ids = (/Not answered yet: ([^.]+)\./.exec(t.input)?.[1] ?? "").split(", ");
@@ -106,6 +107,8 @@ describe("message flow", () => {
     current = await rig(
       async (t) => {
         env = t.options.env as Record<string, string>;
+        // A visible turn, or its end queues nothing for the wake to pre-empt.
+        t.think("downloading");
       },
       {
         wrap: (harness) => ({
@@ -139,8 +142,51 @@ describe("message flow", () => {
     expect(current.turns).toHaveLength(1); // No "Not answered yet" turn.
   });
 
+  it("keeps waiting on a turn the harness acknowledged without running it", async () => {
+    // earayu/Mingle#125: Kimi Code queues the prompt behind a native turn OAR cannot see and
+    // answers it at once with an empty completion — before the model ever sees the message.
+    // Such a turn must not spend the nudge or give the message up; the queued input reaches
+    // the model when the native turn ends and its late reply settles the message.
+    let env: Record<string, string> = {};
+    current = await rig(async (t) => {
+      env = t.options.env as Record<string, string>;
+      // No streamed events and nothing sent: the turn reads as an instant, silent ack.
+    });
+    const { channel, mingle } = current;
+    const inbound = channel.receive({ text: "are you there?" });
+    const chat = await until(() => mingle.store.agentChats(current?.agentId as string)[0]?.id);
+    const id = mingle.store.messageByPlatformId(chat, inbound.platformId)?.id as string;
+    await until(() => mingle.store.message(id)?.state === "delivered");
+    await sleep(600); // past the coalesce window: a nudge turn would have run by now
+    expect(current?.turns).toHaveLength(1); // no "Not answered yet" turn
+    expect(mingle.store.message(id)?.state).toBe("delivered");
+    // The queued prompt finally runs inside the harness's own turn; the answer settles it.
+    await runCli(env, ["message", "reply", id], "sorry for the wait");
+    await until(() => mingle.store.message(id)?.state === "replied");
+  });
+
+  it("nudges on the first real turn after silent ones, then gives up", async () => {
+    // Silent turns carry no verdict, so the nudge waits for a turn that actually ran.
+    current = await rig(async (t) => {
+      if (!t.input.includes("silent")) t.think("let me see");
+    });
+    const { channel, mingle } = current;
+    const first = channel.receive({ text: "silent please" }); // turn 1: silent
+    const chat = await until(() => mingle.store.agentChats(current?.agentId as string)[0]?.id);
+    await until(() => current?.turns.length === 1);
+    await sleep(600);
+    expect(current?.turns).toHaveLength(1); // still no nudge
+    const second = channel.receive({ text: "really think" }); // turn 2: ran, answered nothing → nudge
+    await until(() => current?.turns.length === 3); // turn 3: the nudge itself (ran)
+    await until(
+      () =>
+        mingle.store.messageByPlatformId(chat, first.platformId)?.state === "unanswered" &&
+        mingle.store.messageByPlatformId(chat, second.platformId)?.state === "unanswered",
+    );
+  });
+
   it("marks a message unanswered when the agent ignores the nudge too", async () => {
-    current = await rig(async () => {});
+    current = await rig(async (t) => t.think("let me see"));
     const { channel, mingle } = current;
     channel.receive({ text: "one" });
     await until(() => current?.turns.length === 2);
@@ -1040,7 +1086,7 @@ describe("waking from sleep", () => {
   });
 
   it("names the offline bot when a retry cannot run", async () => {
-    current = await rig(async () => {});
+    current = await rig(async (t) => t.think("let me see"));
     const { channel, mingle, agentId, admin } = current;
     const id = mingle.store.connections()[0]?.id as string;
     const inbound = channel.receive({ text: "anyone?" });

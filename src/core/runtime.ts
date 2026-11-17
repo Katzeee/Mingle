@@ -160,6 +160,8 @@ export class AgentRuntime {
   private blocked: { until: number; why: FailureInfo } | undefined;
   /** The ledger revision the running turn began with, so it clears only the wait it knew. */
   private turnRevision: number | undefined;
+  /** When the open turn began: anything the agent sent since then is work it did. */
+  private turnBeganAt = 0;
   private unblockTimer: NodeJS.Timeout | undefined;
   /** When the agent last finished work, or Mingle last saw it busy: how long the session sat. */
   private idleSince: number;
@@ -708,6 +710,7 @@ export class AgentRuntime {
             void this.session?.abort().catch(() => {});
           }
           this.running = true;
+          this.turnBeganAt = this.now();
           this.turnRevision = this.deps.limitRevision(key);
           this.setStatus("thinking");
           this.deps.onActivity?.("thinking");
@@ -725,10 +728,15 @@ export class AgentRuntime {
           } else {
             this.setStatus("idle");
           }
+          // An answer sent during the turn — one the adapter saw no streamed events for —
+          // means it was real work after all, however quietly it ran.
+          const spoke = (this.deps.store.lastMessageTimes(this.agentId).outAt ?? 0) >= this.turnBeganAt;
+          const silent = outcome.silent === true && !spoke;
           // The sign-in answered: any usage-limit wait on it is over, for every agent sharing it.
-          if (outcome.kind === "completed") this.deps.onTurnCompleted?.(key, this.turnRevision);
+          // A silent turn ran no model call, so it proves nothing about the limit being lifted.
+          if (outcome.kind === "completed" && !silent) this.deps.onTurnCompleted?.(key, this.turnRevision);
           this.turnRevision = undefined;
-          this.afterTurn(outcome.kind === "completed");
+          this.afterTurn(outcome.kind === "completed", silent);
         },
         onActivity: (kind, detail) => {
           if (this.disposed || gen !== this.generation) return;
@@ -771,10 +779,19 @@ export class AgentRuntime {
   }
 
   /** After each turn: remind the agent once about messages it has not answered (docs/spec.md 4.3). */
-  private afterTurn(completed = false): void {
+  private afterTurn(completed = false, silent = false): void {
     if (this.disposed) return;
     const { store } = this.deps;
     const awaiting = store.awaitingReply(this.agentId);
+    // A silent turn is the harness acknowledging the input without running it (it queued the
+    // prompt behind a turn of its own). The messages it carried were never seen, so the turn
+    // neither spends their nudge nor gives up on them: they wait for the turn that runs them.
+    const skipped = silent && !this.stopped;
+    if (skipped && awaiting.length > 0) {
+      this.deps.log?.(
+        `${this.agentId}: the harness closed the turn instantly without doing anything; ${awaiting.length} message(s) keep waiting`,
+      );
+    }
     // After the owner's stop, a nudge would restart the work they stopped: what is
     // unanswered is marked so at once, for the owner to retry or ignore.
     const fresh = this.stopped ? [] : awaiting.filter((m) => !store.wasNudged(m.id));
@@ -788,20 +805,22 @@ export class AgentRuntime {
       "send",
     );
     if (answered.length > 0) this.deps.onSettled?.(answered, "answered");
-    const givenUp = store.moveInbound(
-      stale.filter((m) => !covered.includes(m)).map((m) => m.id),
-      "give_up",
-    );
-    if (givenUp.length > 0) {
-      this.deps.log?.(`${this.agentId}: gave up on ${givenUp.length} unanswered message(s)`);
-      this.deps.onSettled?.(givenUp, "unanswered");
-    }
-    if (fresh.length > 0) {
-      store.markNudged(fresh.map((m) => m.id));
-      this.pending.push({ kind: "nudge", ids: fresh.map((m) => m.id) });
+    if (!skipped) {
+      const givenUp = store.moveInbound(
+        stale.filter((m) => !covered.includes(m)).map((m) => m.id),
+        "give_up",
+      );
+      if (givenUp.length > 0) {
+        this.deps.log?.(`${this.agentId}: gave up on ${givenUp.length} unanswered message(s)`);
+        this.deps.onSettled?.(givenUp, "unanswered");
+      }
+      if (fresh.length > 0) {
+        store.markNudged(fresh.map((m) => m.id));
+        this.pending.push({ kind: "nudge", ids: fresh.map((m) => m.id) });
+      }
     }
     // Only after work that finished, with nothing else waiting: the hint never interrupts or joins other work.
-    if (completed && !this.stopped && this.pending.length === 0) this.checkMemory();
+    if (completed && !skipped && !this.stopped && this.pending.length === 0) this.checkMemory();
     if (this.stale) {
       // restart() delivers what is pending once the new process is up.
       void this.restart();
