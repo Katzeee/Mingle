@@ -19,6 +19,7 @@ import type { HarnessInfo } from "../harness/harness.ts";
 import { readSshConfig } from "../platform/ssh-config.ts";
 import {
   type Agent,
+  type Chat,
   type Connection,
   type Contact,
   contactName,
@@ -708,41 +709,73 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json(await setup.check());
   });
 
-  app.get("/v1/admin/agents/:id/activity", (c) => {
-    const agent = mingle.agent(c.req.param("id"));
-    const limit = clamp(Number(c.req.query("limit") ?? 30), 1, 200);
+  /** One message as the console shows it in the activity: who said it, where, and what became of it. */
+  const activityView = (agent: Agent) => {
     const connections = store.connections(agent.id);
     const owners = new Set(connections.map((n) => `${n.id}:${n.ownerId}`));
     const shared = sharedOwners(connections);
+    return (m: Message & { chat: Chat; platform: Platform }) => {
+      const contact =
+        m.direction === "in" && m.senderId ? store.contactByPlatformId(m.chat.connectionId, m.senderId) : undefined;
+      const senderIsOwner = m.direction === "in" && owners.has(`${m.chat.connectionId}:${m.senderId}`);
+      return {
+        id: m.id,
+        direction: m.direction,
+        triggers: m.triggers,
+        platform: m.platform,
+        chat: { id: m.chat.id, kind: m.chat.kind, name: m.chat.name },
+        // A platform ID is not a name: send null and let the console label the person.
+        sender:
+          m.direction === "out"
+            ? agent.name
+            : (contactName(contact) ?? (m.senderName && m.senderName !== m.senderId ? m.senderName : null)),
+        senderIsOwner,
+        /** The console may call an unnamed owner "you" only when that cannot mean two people. */
+        senderIsOnlyOwner: senderIsOwner && !shared.has(m.chat.connectionId),
+        senderIsBot: !senderIsOwner && Boolean(contact?.isBot),
+        contactId: contact?.id ?? null,
+        body: m.body,
+        state: m.state,
+        /** While waiting for a passing failure: when Mingle tries it again. */
+        retryAt: m.state === "waiting" ? (m.retryAt ?? null) : null,
+        files: m.attachments.map((a) => a.name),
+        createdAt: m.createdAt,
+      };
+    };
+  };
+
+  app.get("/v1/admin/agents/:id/activity", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const limit = clamp(Number(c.req.query("limit") ?? 30), 1, 200);
+    return c.json(store.agentActivity(agent.id, limit).map(activityView(agent)));
+  });
+
+  /**
+   * The activity by conversation (DESIGN.md "Agent · 动态"): the chats that spoke last, each with its
+   * latest messages and whatever still needs the owner. `chat` and `before` page one chat further back.
+   */
+  app.get("/v1/admin/agents/:id/conversations", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const chatId = c.req.query("chat");
+    if (chatId && !store.agentChat(agent.id, chatId)) throw notFound("chat", chatId);
+    const before = c.req.query("before");
+    const view = activityView(agent);
+    const conversations = store.agentConversations(agent.id, {
+      chats: clamp(Number(c.req.query("limit") ?? 20), 1, 100),
+      messages: clamp(Number(c.req.query("messages") ?? 6), 1, 50),
+      ...(chatId ? { chatId } : {}),
+      ...(before ? { before: Number(before) } : {}),
+    });
     return c.json(
-      store.agentActivity(agent.id, limit).map((m) => {
-        const contact =
-          m.direction === "in" && m.senderId ? store.contactByPlatformId(m.chat.connectionId, m.senderId) : undefined;
-        const senderIsOwner = m.direction === "in" && owners.has(`${m.chat.connectionId}:${m.senderId}`);
-        return {
-          id: m.id,
-          direction: m.direction,
-          triggers: m.triggers,
-          platform: m.platform,
-          chat: { id: m.chat.id, kind: m.chat.kind, name: m.chat.name },
-          // A platform ID is not a name: send null and let the console label the person.
-          sender:
-            m.direction === "out"
-              ? agent.name
-              : (contactName(contact) ?? (m.senderName && m.senderName !== m.senderId ? m.senderName : null)),
-          senderIsOwner,
-          /** The console may call an unnamed owner "you" only when that cannot mean two people. */
-          senderIsOnlyOwner: senderIsOwner && !shared.has(m.chat.connectionId),
-          senderIsBot: !senderIsOwner && Boolean(contact?.isBot),
-          contactId: contact?.id ?? null,
-          body: m.body,
-          state: m.state,
-          /** While waiting for a passing failure: when Mingle tries it again. */
-          retryAt: m.state === "waiting" ? (m.retryAt ?? null) : null,
-          files: m.attachments.map((a) => a.name),
-          createdAt: m.createdAt,
-        };
-      }),
+      conversations.map((v) => ({
+        chat: { id: v.chat.id, kind: v.chat.kind, name: v.chat.name },
+        parent: v.parent ? { id: v.parent.id, kind: v.parent.kind, name: v.parent.name } : null,
+        platform: v.platform,
+        latestAt: v.latestAt,
+        earlier: v.earlier,
+        cursor: v.cursor,
+        messages: v.messages.map((m) => view({ ...m, chat: v.chat, platform: v.platform })),
+      })),
     );
   });
 

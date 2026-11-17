@@ -188,6 +188,16 @@ try {
     120_000,
     JSON.stringify([{ id: "f1", ref: "x", name: "route-map-xiangshan-north-loop-final-v3.gpx" }]),
   );
+  // A thread under the group: the activity nests it under its channel.
+  insert(
+    "INSERT INTO chats (id, connection_id, platform_id, kind, name, parent_id, created_at, updated_at) VALUES ('c12','n1','-1:5','thread','香山北线装备清单与补给点（第二版，含末班车时间）','c1',?,?)",
+    now,
+    now,
+  );
+  msg("m0t1", "c12", "in", "李四", "@Alex 北线中途有补水的地方吗？", "replied", 2_400_000);
+  msg("m0t2", "c12", "out", null, "半山亭有小卖部，冬季 16:00 关门。", "sent", 2_350_000);
+  msg("m0t3", "c12", "in", "李四", "@Alex 那末班车几点？", "replied", 600_000);
+  msg("m0t4", "c12", "out", null, "冬季末班车 17:30，从香山公园北门发车。", "sent", 590_000);
   insert(
     "INSERT INTO tasks (id, agent_id, title, status, created_at, updated_at) VALUES ('t1', ?, '比较三条备选路线的爬升、距离和交通，周五前给出推荐', 'in_progress', ?, ?)",
     alex.id,

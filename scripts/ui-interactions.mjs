@@ -1663,14 +1663,18 @@ export async function reviewInteractions({
       const reply = (path, mode) =>
         new Response(
           JSON.stringify(
-            mode === "fail" ? { error: "http_error" } : path.includes("/activity") ? [] : { tasks: [], reminders: [] },
+            mode === "fail"
+              ? { error: "http_error" }
+              : path.includes("/conversations")
+                ? []
+                : { tasks: [], reminders: [] },
           ),
           { status: mode === "fail" ? 500 : 200, headers: { "content-type": "application/json" } },
         );
       window.fetch = (input, init) => {
         const path = typeof input === "string" ? input : input.url;
         const method = init?.method || "GET";
-        if (method === "GET" && /\/v1\/admin\/agents\/[^/]+\/(activity|work)(\?|$)/.test(path)) {
+        if (method === "GET" && /\/v1\/admin\/agents\/[^/]+\/(conversations|work)(\?|$)/.test(path)) {
           state.calls.push(path);
           if (state.mode === "hold") return new Promise((resolve) => state.pending.push({ path, resolve }));
           return Promise.resolve(reply(path, state.mode));
@@ -1877,7 +1881,7 @@ export async function reviewInteractions({
       // The activity row holding this exact message body; runs inside the page.
       const buttonInRow = (text, wanted) => {
         const body = [...document.querySelectorAll("p")].find((p) => p.textContent.trim() === text);
-        const row = body?.closest("div.px-4");
+        const row = body?.closest("[data-message]");
         const el = [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === wanted);
         if (!el) return null;
         el.scrollIntoView({ block: "center" });
@@ -1902,7 +1906,7 @@ export async function reviewInteractions({
         "row shows ignored",
         (text, ignored, retryMsg, ignore) => {
           const body = [...document.querySelectorAll("p")].find((p) => p.textContent.trim() === text);
-          const row = body?.closest("div.px-4");
+          const row = body?.closest("[data-message]");
           if (!row?.textContent.includes(ignored)) return false;
           const buttons = [...row.querySelectorAll("button")].map((b) => b.textContent.trim());
           return !buttons.includes(retryMsg) && !buttons.includes(ignore);
@@ -1921,7 +1925,7 @@ export async function reviewInteractions({
         "ignored survives reload",
         (text, ignored) => {
           const body = [...document.querySelectorAll("p")].find((p) => p.textContent.trim() === text);
-          return body?.closest("div.px-4")?.textContent.includes(ignored) ?? false;
+          return body?.closest("[data-message]")?.textContent.includes(ignored) ?? false;
         },
         bodyText,
         labels.ignored,

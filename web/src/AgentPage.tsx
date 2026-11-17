@@ -8,6 +8,7 @@ import {
   ApiError,
   api,
   type ConnectionView,
+  type Conversation,
   type HandoffView,
   type Harness,
   type Reminder,
@@ -24,7 +25,7 @@ import {
 } from "./ChatApps.tsx";
 import { fetchCached, peek, remember, useCached } from "./cache.ts";
 import { HandoffItem, HandoffSection } from "./Handoff.tsx";
-import { errorText, type MessageKey, statusDetailText, useI18n } from "./i18n.ts";
+import { errorText, type MessageKey, statusDetailText, type Translate, useI18n } from "./i18n.ts";
 import { ModelPicker } from "./NewAgent.tsx";
 import { online, useOnline } from "./online.ts";
 import { Profile } from "./Profile.tsx";
@@ -39,6 +40,7 @@ import {
   Avatar,
   Button,
   copyText,
+  ChevronIcon as DisclosureIcon,
   Group,
   GroupRow,
   HarnessIcon,
@@ -56,6 +58,7 @@ import {
   Steps,
   shortDateTime,
   Textarea,
+  ThreadIcon,
   Waiting,
 } from "./ui.tsx";
 
@@ -72,7 +75,11 @@ export function AgentPage({
 }) {
   const { t } = useI18n();
   // The last activity and work seen for an agent show at once when its page opens again.
-  const [activity, setActivity] = useState<Activity[] | null>(() => peek<Activity[]>(`activity:${agent.id}`) ?? null);
+  const [conversations, setConversations] = useState<Conversation[] | null>(
+    () => peek<Conversation[]>(`conversations:${agent.id}`) ?? null,
+  );
+  // Every message the activity holds, for what needs the owner and the getting-started card.
+  const activity = conversations?.flatMap((c) => c.messages) ?? null;
   const [work, setWork] = useState<WorkData | null>(() => peek<WorkData>(`work:${agent.id}`) ?? null);
   const [handoffs, setHandoffs] = useState<HandoffView[] | null>(
     () => peek<HandoffView[]>(`handoffs:${agent.id}`) ?? null,
@@ -131,10 +138,10 @@ export function AgentPage({
     activityPending.current = true;
     try {
       const [items, handed] = await Promise.all([
-        fetchCached(`activity:${agent.id}`, () => api.activity(agent.id), true),
+        fetchCached(`conversations:${agent.id}`, () => api.conversations(agent.id), true),
         fetchCached(`handoffs:${agent.id}`, () => api.handoffs(agent.id), true),
       ]);
-      setActivity(items);
+      setConversations(items);
       setHandoffs(handed);
       setActivityError(false);
     } catch {
@@ -177,7 +184,7 @@ export function AgentPage({
 
   // Switching to another agent starts from what was last seen for it.
   useEffect(() => {
-    setActivity(peek<Activity[]>(`activity:${agent.id}`) ?? null);
+    setConversations(peek<Conversation[]>(`conversations:${agent.id}`) ?? null);
     setWork(peek<WorkData>(`work:${agent.id}`) ?? null);
     setHandoffs(peek<HandoffView[]>(`handoffs:${agent.id}`) ?? null);
     setActivityError(false);
@@ -259,7 +266,13 @@ export function AgentPage({
     try {
       const { ignored } = await api.ignore(agent.id, ids);
       const changed = new Set(ignored);
-      setActivity((items) => items?.map((m) => (changed.has(m.id) ? { ...m, state: "ignored" } : m)) ?? null);
+      setConversations(
+        (items) =>
+          items?.map((c) => ({
+            ...c,
+            messages: c.messages.map((m) => (changed.has(m.id) ? { ...m, state: "ignored" } : m)),
+          })) ?? null,
+      );
       setNotice(
         ignored.length ? t("agent.ignoredNotice", { count: String(ignored.length) }) : t("agent.ignoreUnchanged"),
       );
@@ -468,8 +481,9 @@ export function AgentPage({
                     )
                   ) : activity.length > 0 || (handoffs ?? []).length > 0 ? (
                     <ActivityList
+                      key={agent.id}
                       agent={agent}
-                      items={activity}
+                      conversations={conversations ?? []}
                       handoffs={handoffs ?? []}
                       onRetry={retry}
                       onIgnore={ignore}
@@ -1550,95 +1564,446 @@ function MessageActions({
   );
 }
 
+/** A conversation row in the activity: a chat, or a channel with the threads under it. */
+interface ConversationNode {
+  key: string;
+  platform: Activity["platform"];
+  /** The chat itself; absent for a channel only its threads spoke in. */
+  own?: Conversation;
+  head: Conversation["chat"];
+  threads: Conversation[];
+  latestAt: number;
+}
+
+/** Threads go under their channel; the rows are newest first (DESIGN.md "Agent · 动态"). */
+function conversationTree(conversations: Conversation[]): ConversationNode[] {
+  const nodes = new Map<string, ConversationNode>();
+  for (const c of conversations.filter((c) => !c.parent)) {
+    nodes.set(c.chat.id, {
+      key: c.chat.id,
+      platform: c.platform,
+      own: c,
+      head: c.chat,
+      threads: [],
+      latestAt: c.latestAt,
+    });
+  }
+  for (const c of conversations.filter((c) => c.parent)) {
+    const parent = c.parent as NonNullable<Conversation["parent"]>;
+    const node = nodes.get(parent.id) ?? {
+      key: parent.id,
+      platform: c.platform,
+      head: parent,
+      threads: [],
+      latestAt: 0,
+    };
+    node.threads.push(c);
+    node.latestAt = Math.max(node.latestAt, c.latestAt);
+    nodes.set(parent.id, node);
+  }
+  for (const node of nodes.values()) node.threads.sort((a, b) => b.latestAt - a.latestAt);
+  return [...nodes.values()].sort((a, b) => b.latestAt - a.latestAt);
+}
+
+/** How many of these messages still need the owner, by what they need. */
+function needs(messages: Activity[]): { failed: number; unanswered: number; held: number } {
+  const inbound = messages.filter((m) => m.direction === "in");
+  return {
+    failed: inbound.filter((m) => m.state === "failed").length,
+    unanswered: inbound.filter((m) => m.state === "unanswered").length,
+    held: inbound.filter((m) => m.state === "held").length,
+  };
+}
+
 function ActivityList({
   agent,
-  items,
+  conversations,
   handoffs,
   onRetry,
   onIgnore,
 }: {
   agent: AgentView;
-  items: Activity[];
+  conversations: Conversation[];
   handoffs: HandoffView[];
   onRetry: (ids: string[]) => Promise<void>;
   onIgnore: (ids: string[]) => Promise<void>;
 }) {
-  const { t, locale } = useI18n();
-  // Handoffs go in among the messages by time, no further back than the messages shown reach.
-  const oldest = items.length >= 30 ? Math.min(...items.map((m) => m.createdAt)) : 0;
-  const rows: ({ kind: "message"; at: number; m: Activity } | { kind: "handoff"; at: number; h: HandoffView })[] = [
-    ...items.map((m) => ({ kind: "message" as const, at: m.createdAt, m })),
+  const nodes = conversationTree(conversations);
+  // The newest conversation opens by itself: what just happened reads at once, as the timeline did.
+  const [open, setOpen] = useState<Set<string>>(() => new Set(nodes[0] ? [nodes[0].key] : []));
+  const seeded = useRef(nodes.length > 0);
+  useEffect(() => {
+    if (seeded.current || !nodes[0]) return;
+    seeded.current = true;
+    setOpen(new Set([nodes[0].key]));
+  }, [nodes]);
+  const toggle = (key: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  // Handoffs go in among the conversations by time, no further back than the conversations shown reach.
+  const oldest = conversations.length >= 20 ? Math.min(...conversations.map((c) => c.latestAt)) : 0;
+  const rows: (
+    | { kind: "chat"; at: number; node: ConversationNode }
+    | { kind: "handoff"; at: number; h: HandoffView }
+  )[] = [
+    ...nodes.map((node) => ({ kind: "chat" as const, at: node.latestAt, node })),
     ...handoffs.filter((h) => h.createdAt >= oldest).map((h) => ({ kind: "handoff" as const, at: h.createdAt, h })),
   ].sort((a, b) => b.at - a.at);
+  // Like a Mac list: ↑↓ move between rows, → opens, ← closes.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const row = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-conversation]");
+    if (!row || event.nativeEvent.isComposing) return;
+    const all = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-conversation]")];
+    const i = all.indexOf(row);
+    const key = row.dataset.conversation as string;
+    if (event.key === "ArrowDown") all[i + 1]?.focus();
+    else if (event.key === "ArrowUp") all[i - 1]?.focus();
+    else if (event.key === "ArrowRight" && !open.has(key)) toggle(key);
+    else if (event.key === "ArrowLeft" && open.has(key)) toggle(key);
+    else return;
+    event.preventDefault();
+  };
   return (
-    <Group>
-      {rows.map((row) => {
-        if (row.kind === "handoff") return <HandoffItem key={row.h.id} handoff={row.h} agent={agent} />;
-        const m = row.m;
-        // "You" only when it cannot be two people: two WeChat accounts are each an owner.
-        const who =
-          m.sender ??
-          (m.senderIsOnlyOwner
-            ? t("activity.you")
-            : m.contactId
-              ? t("activity.unnamed", { id: m.contactId })
-              : t("activity.someone"));
-        const where = m.chat.kind === "dm" ? t("chat.dm") : (m.chat.name ?? t("chat.group"));
-        return (
-          <div key={m.id} className={`flex gap-3 px-4 py-3 ${m.direction === "out" ? "bg-bg2" : ""}`}>
-            <PlatformIcon platform={m.platform} size={20} />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div className="flex items-baseline gap-2 text-small">
-                <span className="max-w-[45%] shrink-0 truncate font-semibold" title={who}>
-                  {who}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-ink3" title={where}>
-                  {where}
-                </span>
-                <span className="shrink-0 whitespace-nowrap text-caption text-ink3">
-                  {relativeTime(m.createdAt, locale)}
-                </span>
-              </div>
-              <p className="selectable line-clamp-4 whitespace-pre-wrap wrap-anywhere">{m.body}</p>
-              {m.files.length ? (
-                <p className="truncate font-mono text-caption text-ink2" title={m.files.join(", ")}>
-                  {m.files.join(", ")}
-                </p>
-              ) : null}
-              {m.direction === "in" && m.state === "unanswered" ? (
-                <p className="flex flex-wrap items-center gap-1.5 text-caption text-amber">
-                  <StatusDot state="awaiting_approval" />
-                  {t("agent.unanswered")}
-                  <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
-                </p>
-              ) : null}
-              {m.direction === "in" && m.state === "waiting" ? (
-                <p className="flex flex-wrap items-center gap-1.5 text-caption text-ink2">
-                  <StatusDot state="reconnecting" />
-                  {m.retryAt ? t("agent.waitingUntil", { time: shortDateTime(m.retryAt, locale) }) : t("agent.waiting")}
-                  <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
-                </p>
-              ) : null}
-              {m.direction === "in" && m.state === "failed" ? (
-                <p className="flex flex-wrap items-center gap-1.5 text-caption text-red">
-                  <StatusDot state="error" />
-                  {t("agent.failed")}
-                  <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
-                </p>
-              ) : null}
-              {m.direction === "in" && m.state === "held" ? (
-                <p className="flex items-center gap-1.5 text-caption text-amber">
-                  <StatusDot state="awaiting_approval" />
-                  {t("agent.held")}
-                </p>
-              ) : null}
-              {m.direction === "in" && m.triggers && m.state === "ignored" ? (
-                <p className="text-caption text-ink3">{t("agent.ignored")}</p>
+    // biome-ignore lint/a11y/noStaticElementInteractions: arrow keys move between the row buttons inside
+    <div onKeyDown={onKeyDown}>
+      <Group>
+        {rows.map((row) =>
+          row.kind === "handoff" ? (
+            <HandoffItem key={row.h.id} handoff={row.h} agent={agent} />
+          ) : (
+            <ConversationRow
+              key={row.node.key}
+              agent={agent}
+              node={row.node}
+              open={open}
+              onToggle={toggle}
+              onRetry={onRetry}
+              onIgnore={onIgnore}
+            />
+          ),
+        )}
+      </Group>
+    </div>
+  );
+}
+
+function ConversationRow({
+  agent,
+  node,
+  open,
+  onToggle,
+  onRetry,
+  onIgnore,
+}: {
+  agent: AgentView;
+  node: ConversationNode;
+  open: Set<string>;
+  onToggle: (key: string) => void;
+  onRetry: (ids: string[]) => Promise<void>;
+  onIgnore: (ids: string[]) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const expanded = open.has(node.key);
+  const all = [...(node.own?.messages ?? []), ...node.threads.flatMap((c) => c.messages)];
+  const kind = node.head.kind;
+  const title =
+    kind === "dm"
+      ? (node.own &&
+          personLabel(
+            t,
+            node.own.messages.find((m) => m.direction === "in"),
+          )) ||
+        node.head.name ||
+        t("chat.dm")
+      : node.head.name || t(kind === "thread" ? "chat.thread" : "chat.group");
+  const where = [
+    t(kind === "dm" ? "chat.dm" : kind === "thread" ? "chat.thread" : "chat.group"),
+    ...(node.threads.length ? [t("activity.threads", { count: String(node.threads.length) })] : []),
+  ].join(" · ");
+  const preview = node.own?.messages.length ? node.own.messages : (node.threads[0]?.messages ?? []);
+  return (
+    <div>
+      <ConversationHead
+        id={node.key}
+        icon={<PlatformIcon platform={node.platform} size={20} />}
+        title={title}
+        where={where}
+        messages={all}
+        latestAt={node.latestAt}
+        expanded={expanded}
+        preview={preview}
+        dm={kind === "dm"}
+        onToggle={onToggle}
+      />
+      {expanded ? (
+        <div className="rise">
+          {node.own ? (
+            <ConversationMessages agent={agent} conversation={node.own} onRetry={onRetry} onIgnore={onIgnore} />
+          ) : null}
+          {node.threads.map((thread) => (
+            <div key={thread.chat.id} className="ml-12 border-t border-line">
+              <ConversationHead
+                id={thread.chat.id}
+                thread
+                icon={
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-small border border-line2 text-ink3">
+                    <ThreadIcon />
+                  </span>
+                }
+                title={thread.chat.name || t("chat.thread")}
+                where={t("chat.thread")}
+                messages={thread.messages}
+                latestAt={thread.latestAt}
+                expanded={open.has(thread.chat.id)}
+                preview={thread.messages}
+                onToggle={onToggle}
+              />
+              {open.has(thread.chat.id) ? (
+                <div className="rise">
+                  <ConversationMessages
+                    agent={agent}
+                    conversation={thread}
+                    thread
+                    onRetry={onRetry}
+                    onIgnore={onIgnore}
+                  />
+                </div>
               ) : null}
             </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A conversation's row: where, what still needs the owner, when, and, closed, the last exchange. */
+function ConversationHead({
+  id,
+  icon,
+  title,
+  where,
+  messages,
+  latestAt,
+  expanded,
+  preview,
+  thread = false,
+  dm = false,
+  onToggle,
+}: {
+  id: string;
+  icon: ReactNode;
+  title: string;
+  where: string;
+  messages: Activity[];
+  latestAt: number;
+  expanded: boolean;
+  preview: Activity[];
+  thread?: boolean;
+  dm?: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const { t, locale } = useI18n();
+  const need = needs(messages);
+  // The last thing said and, when the agent answered it, the answer under it.
+  const last = preview.at(-1);
+  const asked = [...preview].reverse().find((m) => m.direction === "in");
+  const exchange = last ? (last.direction === "out" && asked ? [asked, last] : [last]) : [];
+  return (
+    <button
+      type="button"
+      data-conversation={id}
+      aria-expanded={expanded}
+      onClick={() => onToggle(id)}
+      className={`flex w-full gap-3 py-3 pr-4 text-left hover:bg-bg3 ${thread ? "" : "pl-4"}`}
+    >
+      {icon}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-baseline gap-2 text-small">
+          <span className="min-w-0 max-w-[60%] shrink truncate font-semibold" title={title}>
+            {title}
+          </span>
+          {/* Narrow rows keep the name and what needs the owner; the kind of chat is the first to go. */}
+          <span className="hidden min-w-0 flex-1 truncate text-ink3 min-[640px]:block">{where}</span>
+          <span className="flex-1 min-[640px]:hidden" />
+          {need.failed ? (
+            <span className="shrink-0 whitespace-nowrap rounded-small border border-red-line bg-red-tint px-1.5 text-caption text-red">
+              {t("activity.failedCount", { count: String(need.failed) })}
+            </span>
+          ) : null}
+          {need.unanswered ? (
+            <span className="shrink-0 whitespace-nowrap rounded-small border border-amber-line bg-amber-tint px-1.5 text-caption text-amber">
+              {t("activity.unansweredCount", { count: String(need.unanswered) })}
+            </span>
+          ) : null}
+          {need.held ? (
+            <span className="shrink-0 whitespace-nowrap rounded-small border border-amber-line bg-amber-tint px-1.5 text-caption text-amber">
+              {t("agent.held")}
+            </span>
+          ) : null}
+          <span className="shrink-0 whitespace-nowrap text-caption text-ink3">{relativeTime(latestAt, locale)}</span>
+        </span>
+        {expanded
+          ? null
+          : exchange.map((m, i) => (
+              <span key={m.id} className="flex min-w-0 gap-1 text-small text-ink2">
+                {i ? (
+                  <svg
+                    aria-hidden
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    className="mt-0.5 shrink-0 text-ink3"
+                  >
+                    <path
+                      d="M3 1.5v4A2.5 2.5 0 0 0 5.5 8H10"
+                      stroke="currentColor"
+                      strokeWidth="1.3"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                ) : null}
+                {/* In a direct chat the row already names the person: only the agent's turn is labelled. */}
+                {dm && m.direction === "in" ? null : (
+                  <span className={`shrink-0 ${m.direction === "in" ? "text-ink" : ""}`}>
+                    {t("activity.said", { name: m.direction === "out" ? (m.sender ?? "") : personLabel(t, m) })}
+                  </span>
+                )}
+                <span className="min-w-0 truncate">{m.body.replace(/\s+/g, " ") || m.files.join(", ")}</span>
+              </span>
+            ))}
+      </span>
+      <DisclosureIcon
+        className={`mt-1 text-ink3 transition-transform duration-[180ms] ${expanded ? "" : "-rotate-90"}`}
+      />
+    </button>
+  );
+}
+
+/** Who said it: their name, "you" when it cannot mean two people, or a stable label. */
+function personLabel(t: Translate, m: Activity | undefined): string {
+  if (!m) return "";
+  return (
+    m.sender ??
+    (m.senderIsOnlyOwner
+      ? t("activity.you")
+      : m.contactId
+        ? t("activity.unnamed", { id: m.contactId })
+        : t("activity.someone"))
+  );
+}
+
+/** An open conversation, read top-down as it was said; earlier messages on request. */
+function ConversationMessages({
+  agent,
+  conversation,
+  thread = false,
+  onRetry,
+  onIgnore,
+}: {
+  agent: AgentView;
+  conversation: Conversation;
+  thread?: boolean;
+  onRetry: (ids: string[]) => Promise<void>;
+  onIgnore: (ids: string[]) => Promise<void>;
+}) {
+  const { t, locale } = useI18n();
+  const [older, setOlder] = useState<{ messages: Activity[]; earlier: number; cursor: number | null } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // What the last poll says wins: a message read earlier may have been retried or ignored since.
+  const fresh = new Map(conversation.messages.map((m) => [m.id, m]));
+  const messages = [...(older?.messages.filter((m) => !fresh.has(m.id)) ?? []), ...conversation.messages].sort(
+    (a, b) => a.createdAt - b.createdAt,
+  );
+  const earlier = older ? older.earlier : conversation.earlier;
+  const cursor = older ? older.cursor : conversation.cursor;
+  const loadEarlier = async () => {
+    if (cursor === null) return;
+    setLoading(true);
+    try {
+      const [page] = await api.conversations(agent.id, { chat: conversation.chat.id, before: cursor });
+      setOlder((current) => ({
+        messages: [...(page?.messages ?? []), ...(current?.messages ?? [])],
+        earlier: page?.earlier ?? 0,
+        cursor: page?.cursor ?? null,
+      }));
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div className={`flex flex-col pr-4 pb-3 ${thread ? "pl-8" : "pl-12"}`}>
+      {earlier > 0 && cursor !== null ? (
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => void loadEarlier()}
+          className={`mb-1 min-h-7 self-start text-caption font-medium hover:underline disabled:opacity-45 ${failed ? "text-red" : "text-accent"}`}
+        >
+          {failed ? t("activity.earlierFailed") : t("activity.earlier", { count: String(earlier) })}
+        </button>
+      ) : null}
+      {messages.map((m) => (
+        <div
+          key={m.id}
+          data-message={m.id}
+          className={`flex flex-col gap-0.5 ${m.direction === "out" ? "my-1 ml-4 border-l-2 border-line2 py-0.5 pl-3" : "py-1.5"}`}
+        >
+          <div className="flex min-w-0 items-baseline gap-2 text-small">
+            <span className="min-w-0 max-w-[60%] truncate font-semibold">
+              {m.direction === "out" ? m.sender : personLabel(t, m)}
+            </span>
+            <span className="shrink-0 whitespace-nowrap text-caption text-ink3">
+              {relativeTime(m.createdAt, locale)}
+            </span>
           </div>
-        );
-      })}
-    </Group>
+          <p className="selectable line-clamp-4 whitespace-pre-wrap wrap-anywhere">{m.body}</p>
+          {m.files.length ? (
+            <p className="truncate font-mono text-caption text-ink2" title={m.files.join(", ")}>
+              {m.files.join(", ")}
+            </p>
+          ) : null}
+          {m.direction === "in" && m.state === "unanswered" ? (
+            <p className="flex flex-wrap items-center gap-1.5 text-caption text-amber">
+              <StatusDot state="awaiting_approval" />
+              {t("agent.unanswered")}
+              <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
+            </p>
+          ) : null}
+          {m.direction === "in" && m.state === "waiting" ? (
+            <p className="flex flex-wrap items-center gap-1.5 text-caption text-ink2">
+              <StatusDot state="reconnecting" />
+              {m.retryAt ? t("agent.waitingUntil", { time: shortDateTime(m.retryAt, locale) }) : t("agent.waiting")}
+              <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
+            </p>
+          ) : null}
+          {m.direction === "in" && m.state === "failed" ? (
+            <p className="flex flex-wrap items-center gap-1.5 text-caption text-red">
+              <StatusDot state="error" />
+              {t("agent.failed")}
+              <MessageActions inline onRetry={() => onRetry([m.id])} onIgnore={() => onIgnore([m.id])} />
+            </p>
+          ) : null}
+          {m.direction === "in" && m.state === "held" ? (
+            <p className="flex items-center gap-1.5 text-caption text-amber">
+              <StatusDot state="awaiting_approval" />
+              {t("agent.held")}
+            </p>
+          ) : null}
+          {m.direction === "in" && m.triggers && m.state === "ignored" ? (
+            <p className="text-caption text-ink3">{t("agent.ignored")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
   );
 }

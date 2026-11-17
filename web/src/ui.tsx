@@ -843,6 +843,12 @@ export const ChevronIcon = (p: { className?: string }) => (
     <path d="m4.5 6.5 3.5 3.5 3.5-3.5" />
   </Icon>
 );
+/** A thread under its channel: a line that turns into the reply. */
+export const ThreadIcon = (p: { className?: string }) => (
+  <Icon {...p} size={12}>
+    <path d="M4 2.5v6a2.5 2.5 0 0 0 2.5 2.5H13M10.5 8.5 13 11l-2.5 2.5" />
+  </Icon>
+);
 export const MoreIcon = (p: { className?: string }) => (
   <Icon {...p}>
     <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth="2.2" />
