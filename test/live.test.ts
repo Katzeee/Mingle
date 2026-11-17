@@ -133,6 +133,29 @@ describe("live replies", () => {
     expect(channel.reactions.at(-1)).toBe(`${inbound.platformId}:none`);
   });
 
+  it("closes a follow-up as answered when the agent's one answer quoted the other message", async () => {
+    // "Download the files" then "authorized": the agent answers the request and stays quiet on
+    // the go-ahead, even when reminded. The go-ahead got its answer; it is not "unanswered".
+    current = await rig(
+      async (t) => {
+        if (t.input.startsWith("[mingle] Not answered yet")) return;
+        const [first] = messageIds(t.input);
+        await runCli(t.options.env as Record<string, string>, ["message", "reply", first as string], "Downloaded.");
+      },
+      { live: true },
+    );
+    const { channel, mingle, agentId, turns } = current;
+    channel.receive({ text: "download the files" });
+    const followUp = channel.receive({ text: "authorized" });
+    await until(() => channel.lives[1]?.final);
+    expect(channel.lives[0]?.final).toBe("Downloaded.");
+    expect(channel.lives[1]?.final).toBe("*Answered below.*");
+    expect(channel.reactions.at(-1)).toBe(`${followUp.platformId}:done`);
+    expect(turns).toHaveLength(2); // Reminded once, as before.
+    const chat = mingle.store.agentChats(agentId)[0]?.id as string;
+    expect(mingle.store.messageByPlatformId(chat, followUp.platformId)?.state).toBe("replied");
+  });
+
   it("marks the live reply answered when the agent sends to the chat instead of replying", async () => {
     current = await rig(
       async (t) => {

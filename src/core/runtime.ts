@@ -30,7 +30,7 @@ export interface RuntimeDeps {
   /** Messages that will not be answered: given up on after the nudge, or lost to a failed turn. */
   readonly onSettled?: (
     messageIds: readonly string[],
-    outcome: "unanswered" | "failed" | "waiting",
+    outcome: "answered" | "unanswered" | "failed" | "waiting",
     why?: FailureInfo,
   ) => void;
   /**
@@ -772,8 +772,17 @@ export class AgentRuntime {
     // unanswered is marked so at once, for the owner to retry or ignore.
     const fresh = this.stopped ? [] : awaiting.filter((m) => !store.wasNudged(m.id));
     const stale = this.stopped ? awaiting : awaiting.filter((m) => store.wasNudged(m.id));
+    // Reminded once and still not quoted, but the agent did speak in that chat afterwards (it
+    // answered by quoting another message there, or one answer covered several messages): the
+    // person has their answer, so the message ends as answered, not "did not get a reply".
+    const covered = this.stopped ? [] : stale.filter((m) => store.spokeSince(m.chatId, m.createdAt));
+    const answered = store.moveInbound(
+      covered.map((m) => m.id),
+      "send",
+    );
+    if (answered.length > 0) this.deps.onSettled?.(answered, "answered");
     const givenUp = store.moveInbound(
-      stale.map((m) => m.id),
+      stale.filter((m) => !covered.includes(m)).map((m) => m.id),
       "give_up",
     );
     if (givenUp.length > 0) {
@@ -785,7 +794,7 @@ export class AgentRuntime {
       const ids = fresh.map((m) => m.id).join(", ");
       this.pending.push({
         kind: "text",
-        text: `[mingle] Not answered yet: ${ids}. Reply to each with "$MINGLE_CLI" message reply <id>, or send a short note if no reply is needed.`,
+        text: `[mingle] Not answered yet: ${ids}. Reply to each with "$MINGLE_CLI" message reply <id>; a short acknowledgement is enough when your answer is already elsewhere in the chat. A message left without any reply is shown to its sender as not answered.`,
       });
     }
     // Only after work that finished, with nothing else waiting: the hint never interrupts or joins other work.
