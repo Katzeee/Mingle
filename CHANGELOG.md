@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.2.1
+
+- Two Feishu bots in one group both hear a message that @-mentions them now. The Feishu SDK skipped a message ID it had already delivered, and all bots in one process shared that check — so when a person @-ed two agents at once, only the first to see it got the message and the other stayed silent. Each connection now keeps its own duplicate check. Verified on a real Feishu group: eight messages @-ing one or both bots all reached the right agent.
+- Feishu agents can see what other bots say in their groups. Feishu never pushed another bot's messages before; the bot's app now asks for that when it is created, and a bot connected earlier can add it from the Permissions section on its page — one re-scan of the same code brings the grant onto the existing app. Other bots' messages arrive as background, marked as bots, so they never wake the agent unless they explicitly @ it, and the existing five-reply brake between bots still applies.
+- Agents remember the bots in their groups, not only the people. Feishu's member list leaves bots out, so the agent also reads the group's bot list — other agents and bots appear in `contact list` and `chat info` with a `bot` mark, ready to be @-ed. The owner's contacts page no longer fills up with a large group's member list: it shows people who wrote to the agent or were decided about, while the full roster stays in the agent's own address book.
+- A bot's page can show where someone sits in the organization. The Permissions section is now a row per permission — what it gives the agent, and either "On" or a button to turn it on in place. On Feishu, "Member profiles" asks for department and title only (never email or phone); once on, a person's line such as "Product · Product manager" shows in the agent's first greeting card, `contact list`, and the console.
+- An agent can message a person directly even before that person has ever written to it.
+
 ## 0.2.0
 
 - Agents can now run on your own SSH host, not only on this computer. Until now an agent stopped receiving and replying the moment this computer slept or Mingle quit, because everything — its harness, chat connections, credentials, data and reminders — lived here. A remote agent keeps all of that on your host: it stays online and keeps working while this computer is off, and the console manages it over SSH. This computer stays the default run location, and there is still no hosted service — both sides only listen on loopback.
