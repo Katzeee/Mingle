@@ -102,6 +102,8 @@ const EMPTY_TURN_WAIT_MS = 10 * 60_000;
  * in total silence is not work in progress.
  */
 export const STALL_MS = 20 * 60_000;
+/** How often a silent turn nobody waits on is checked again. */
+const STALL_RECHECK_MS = 60_000;
 /** After stopping a stuck turn, how long the harness has to end it before its process is replaced. */
 const STALL_GRACE_MS = 30_000;
 
@@ -857,9 +859,19 @@ export class AgentRuntime {
   }
 
   /**
+   * The agent called Mingle (a `mingle` command reached the local API): it is alive, whatever the
+   * harness reports. Raft counts such internal progress the same way.
+   */
+  noteProgress(): void {
+    if (this.running) this.lastProgress = this.now();
+  }
+
+  /**
    * Watch the turn that just began: if the harness reports nothing for `stallMs` the turn is stuck
    * (a command that never ends), and steered messages would wait in it forever. One timer per
-   * turn, re-armed for whatever is left since the last event.
+   * turn, re-armed for whatever is left since the last event. A silent turn nobody waits on is left
+   * alone (Raft's "stalled with work"): it may be a long job the agent took on, and stopping it
+   * helps no one; it is stopped once a message arrives and waits on it.
    */
   private watchStall(): void {
     this.lastProgress = this.now();
@@ -871,11 +883,18 @@ export class AgentRuntime {
         if (this.disposed || !this.running) return;
         const quiet = this.now() - this.lastProgress;
         if (quiet < limit) check(limit - quiet);
-        else void this.unstick(quiet);
+        else if (this.waitedOn()) void this.unstick(quiet);
+        // Checked again soon: a message steered in now should not wait a whole limit more.
+        else check(Math.min(limit, STALL_RECHECK_MS));
       }, wait);
       this.stallTimer.unref?.();
     };
     check(limit);
+  }
+
+  /** Messages wait on the running turn: delivered into it, or queued behind it, and unanswered. */
+  private waitedOn(): boolean {
+    return this.deps.store.awaitingReply(this.agentId).length > 0;
   }
 
   private clearStall(): void {
