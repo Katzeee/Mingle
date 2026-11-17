@@ -1,20 +1,92 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api, type SshHost, type SshInstallJob } from "./api.ts";
-import { errorText, useI18n } from "./i18n.ts";
+import { errorText, type MessageKey, useI18n } from "./i18n.ts";
 import { RemoteInstall } from "./RemoteInstall.tsx";
-import { Button, Field, Input, Select, Spinner } from "./ui.tsx";
+import { Button, Field, Input, MoreMenu, Select, Spinner } from "./ui.tsx";
 
-export function SshLocation({
+/** "" is this computer, "add" a host still being set up, anything else a prepared SSH host's id. */
+export type Location = string;
+
+/** The SSH hosts prepared so far. A failed read leaves the list empty: this computer still works. */
+export function useSshHosts() {
+  const [hosts, setHosts] = useState<SshHost[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void api
+      .sshHosts()
+      .then((items) => {
+        if (alive) setHosts(items);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const remember = (ready: SshHost) => setHosts((items) => [...items.filter((item) => item.id !== ready.id), ready]);
+  return { hosts, remember };
+}
+
+/**
+ * A sentence with the run location as a word in it: "The harness on [this computer ▾] that…".
+ * Running elsewhere is rare, so it stays a word in the hint until someone opens it.
+ */
+export function LocationSentence({
+  sentence,
   value,
+  hosts,
   onChange,
-  disabled,
 }: {
-  value: string;
-  onChange: (value: string) => void;
-  disabled: boolean;
+  /** A message with a {location} placeholder. */
+  sentence: MessageKey;
+  value: Location;
+  hosts: SshHost[];
+  onChange: (value: Location) => void;
 }) {
   const { t } = useI18n();
-  const [hosts, setHosts] = useState<SshHost[]>([]);
+  const label = (host: SshHost) =>
+    hosts.some((other) => other !== host && other.host === host.host) ? `${host.host} · ${host.home}` : host.host;
+  const selected = hosts.find((host) => host.id === value);
+  const word = value === "add" ? t("ssh.newHost") : selected ? label(selected) : t("ssh.localInline");
+  // The translator spaces the word against Chinese text; split around it to make it a control.
+  const text = t(sentence, { location: word });
+  const at = text.indexOf(word);
+  return (
+    <>
+      {text.slice(0, at)}
+      <MoreMenu
+        label={t("ssh.location")}
+        trigger={<span className="wrap-anywhere">{word}</span>}
+        items={[
+          { label: t("ssh.local"), checked: value === "", onSelect: () => onChange("") },
+          ...hosts.map((host) => ({
+            label: label(host),
+            checked: value === host.id,
+            onSelect: () => onChange(host.id),
+          })),
+          { label: t("ssh.add"), checked: value === "add", onSelect: () => onChange("add") },
+        ]}
+      />
+      {text.slice(at + word.length)}
+    </>
+  );
+}
+
+/**
+ * Prepares an SSH host in place: a new one (`host` absent), or a known one again after it restarted.
+ * Calls `onReady` with the host once remote Mingle answers.
+ */
+export function SshSetup({
+  host: known,
+  disabled,
+  onReady,
+  onCancel,
+}: {
+  host?: SshHost;
+  disabled: boolean;
+  onReady: (host: SshHost) => void;
+  onCancel?: () => void;
+}) {
+  const { t } = useI18n();
   const [target, setTarget] = useState("");
   const [home, setHome] = useState("~/.mingle-remote");
   const [submitting, setBusy] = useState(false);
@@ -29,8 +101,14 @@ export function SshLocation({
   const [configFailed, setConfigFailed] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const alive = useRef(true);
-  const change = useRef(onChange);
-  change.current = onChange;
+  const ready = useRef(onReady);
+  ready.current = onReady;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const jobId = job?.id;
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry restarts polling the retained job.
   useEffect(() => {
@@ -45,10 +123,8 @@ export function SshLocation({
         setJob(next);
         if (next.state === "running") timer = setTimeout(() => void poll(), 750);
         else if (next.state === "done" && next.result) {
-          const ready = next.result;
           setNodeMissing(false);
-          setHosts((items) => [...items.filter((item) => item.id !== ready.id), ready]);
-          change.current(ready.id);
+          ready.current(next.result);
         } else setError(errorText(t, new ApiError(next.error ?? "ssh_install_failed", "", 400)));
       } catch (e) {
         if (!current) return;
@@ -64,23 +140,9 @@ export function SshLocation({
       clearTimeout(timer);
     };
   }, [jobId, pollRetry, t]);
-  useEffect(() => {
-    alive.current = true;
-    void api
-      .sshHosts()
-      .then((items) => {
-        if (alive.current) setHosts(items);
-      })
-      .catch((e) => {
-        if (alive.current) setError(errorText(t, e));
-      });
-    return () => {
-      alive.current = false;
-    };
-  }, [t]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly invalidates the file snapshot.
   useEffect(() => {
-    if (value !== "add") return;
+    if (known) return;
     let current = true;
     setConfigLoading(true);
     setConfigFailed(false);
@@ -98,8 +160,7 @@ export function SshLocation({
     return () => {
       current = false;
     };
-  }, [value, refresh]);
-  const selected = hosts.find((host) => host.id === value);
+  }, [known, refresh]);
   function changeTarget(target: string) {
     setTarget(target);
     setError(null);
@@ -107,12 +168,14 @@ export function SshLocation({
     setJob(null);
     setPollFailed(false);
   }
+  const host = known?.host ?? target.trim();
+  const dir = known?.home ?? home.trim();
   async function install() {
     setBusy(true);
     setError(null);
     setPollFailed(false);
     try {
-      const next = await api.installSshHost(selected?.host ?? target.trim(), selected?.home ?? home.trim());
+      const next = await api.installSshHost(host, dir);
       if (alive.current) {
         setJob(next);
         // A repeated click may recover the same job after a dropped start response.
@@ -130,10 +193,8 @@ export function SshLocation({
     setNodeMissing(false);
     setJob(null);
     try {
-      const ready = await api.addSshHost(selected?.host ?? target.trim(), selected?.home ?? home.trim());
-      if (!alive.current) return;
-      setHosts((items) => [...items.filter((item) => item.id !== ready.id), ready]);
-      onChange(ready.id);
+      const result = await api.addSshHost(host, dir);
+      if (alive.current) ready.current(result);
     } catch (e) {
       if (alive.current) {
         setError(errorText(t, e));
@@ -143,136 +204,110 @@ export function SshLocation({
       if (alive.current) setBusy(false);
     }
   }
+  const incomplete = !host || !dir;
   return (
-    <div className="flex flex-col gap-3">
-      <Field label={t("ssh.location")}>
-        <Select
-          value={value}
-          disabled={disabled || busy}
-          onChange={(e) => {
-            setError(null);
-            setNodeMissing(false);
-            setJob(null);
-            setPollFailed(false);
-            onChange(e.target.value);
-          }}
-        >
-          <option value="">{t("ssh.local")}</option>
-          {hosts.map((host) => (
-            <option key={host.id} value={host.id}>
-              {host.host} · {host.home}
-            </option>
-          ))}
-          <option value="add">{t("ssh.add")}</option>
-        </Select>
-      </Field>
-      {value ? (
-        <div className="flex flex-col gap-3 rounded-control border border-line bg-bg2 p-4">
-          <p className="text-small text-ink2">{t("ssh.description")}</p>
-          {value === "add" ? (
-            <>
-              <div className="flex items-end gap-2">
-                <div className="min-w-0 flex-1">
-                  <Field label={t("ssh.config")}>
-                    <Select
-                      value={config?.hosts.includes(target) ? target : ""}
-                      disabled={disabled || busy || configLoading || !config?.hosts.length}
-                      onChange={(e) => changeTarget(e.target.value)}
-                    >
-                      <option value="">{t(configLoading ? "ssh.configLoading" : "ssh.configChoose")}</option>
-                      {config?.hosts.map((alias) => (
-                        <option key={alias} value={alias}>
-                          {alias}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                </div>
-                <Button disabled={disabled || busy || configLoading} onClick={() => setRefresh((n) => n + 1)}>
-                  {t("ssh.configRefresh")}
-                </Button>
-              </div>
-              {!configLoading && (configFailed || config?.incomplete) ? (
-                <p role="status" className="text-caption text-amber">
-                  {t(configFailed ? "ssh.configFailed" : "ssh.configIncomplete")}
-                </p>
-              ) : !configLoading && config?.hosts.length === 0 ? (
-                <p className="text-caption text-ink2">{t("ssh.configEmpty")}</p>
-              ) : null}
-              <Field label={t("ssh.target")} hint={t("ssh.targetHint")}>
-                <Input
-                  value={target}
-                  disabled={busy}
+    <div className="rise flex flex-col gap-3 rounded-control border border-line bg-bg2 p-4">
+      <p className="text-small text-ink2">{t("ssh.description")}</p>
+      {!known ? (
+        <>
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <Field label={t("ssh.config")}>
+                <Select
+                  value={config?.hosts.includes(target) ? target : ""}
+                  disabled={disabled || busy || configLoading || !config?.hosts.length}
                   onChange={(e) => changeTarget(e.target.value)}
-                  placeholder="user@host"
-                  autoComplete="off"
-                />
+                >
+                  <option value="">{t(configLoading ? "ssh.configLoading" : "ssh.configChoose")}</option>
+                  {config?.hosts.map((alias) => (
+                    <option key={alias} value={alias}>
+                      {alias}
+                    </option>
+                  ))}
+                </Select>
               </Field>
-              <Field label={t("ssh.home")}>
-                <Input value={home} disabled={busy} onChange={(e) => setHome(e.target.value)} autoComplete="off" />
-              </Field>
-              <p className="text-caption text-ink2">{t("ssh.requirements")}</p>
-            </>
-          ) : (
-            <p className="selectable break-all text-caption text-ink2">{selected?.home}</p>
-          )}
-          {error ? (
-            <p role="alert" className="text-small text-red">
-              {error}
-            </p>
-          ) : null}
-          <RemoteInstall
-            key={selected?.host ?? target}
-            required={nodeMissing || job?.state === "failed" || job?.state === "running"}
-            disabled={disabled || busy || (value === "add" && (!target.trim() || !home.trim()))}
-            onInstall={() => void install()}
-          />
-          {job?.state === "running" ? (
-            <div role="status" className="flex flex-col gap-2 text-small text-ink2">
-              {pollFailed ? (
-                <>
-                  <p>{t("ssh.installPollFailed")}</p>
-                  <Button small className="self-start" onClick={() => setPollRetry((n) => n + 1)}>
-                    {t("ssh.installPollRetry")}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <p className="flex items-center gap-2">
-                    <Spinner />
-                    {t(job.phase === "installing" ? "ssh.installing" : "ssh.preparing")}
-                  </p>
-                  <p className="text-caption">{t("ssh.installKeepOpen")}</p>
-                </>
-              )}
             </div>
-          ) : job?.state === "done" ? (
-            <p role="status" className="text-small text-green">
-              {t("ssh.installDone")}
-            </p>
-          ) : null}
-          {job?.state !== "running" ? (
-            <Button
-              disabled={disabled || busy || (value === "add" && (!target.trim() || !home.trim()))}
-              onClick={() => void prepare()}
-            >
-              {busy ? (
-                <>
-                  <Spinner />
-                  {t("ssh.preparing")}
-                </>
-              ) : (
-                t(selected ? "ssh.reconnect" : "ssh.prepare")
-              )}
+            <Button disabled={disabled || busy || configLoading} onClick={() => setRefresh((n) => n + 1)}>
+              {t("ssh.configRefresh")}
             </Button>
+          </div>
+          {!configLoading && (configFailed || config?.incomplete) ? (
+            <p role="status" className="text-caption text-amber">
+              {t(configFailed ? "ssh.configFailed" : "ssh.configIncomplete")}
+            </p>
+          ) : !configLoading && config?.hosts.length === 0 ? (
+            <p className="text-caption text-ink2">{t("ssh.configEmpty")}</p>
           ) : null}
-          {selected ? <p className="text-caption text-ink2">{t("ssh.reconnectHint")}</p> : null}
-        </div>
-      ) : null}
-      {!value && error ? (
+          <Field label={t("ssh.target")} hint={t("ssh.targetHint")}>
+            <Input
+              value={target}
+              disabled={busy}
+              onChange={(e) => changeTarget(e.target.value)}
+              placeholder="user@host"
+              autoComplete="off"
+            />
+          </Field>
+          <Field label={t("ssh.home")}>
+            <Input value={home} disabled={busy} onChange={(e) => setHome(e.target.value)} autoComplete="off" />
+          </Field>
+          <p className="text-caption text-ink2">{t("ssh.requirements")}</p>
+        </>
+      ) : (
+        <p className="text-caption text-ink2">{t("ssh.reconnectHint")}</p>
+      )}
+      {error ? (
         <p role="alert" className="text-small text-red">
           {error}
         </p>
+      ) : null}
+      <RemoteInstall
+        key={host}
+        required={nodeMissing || job?.state === "failed" || job?.state === "running"}
+        disabled={disabled || busy || incomplete}
+        onInstall={() => void install()}
+      />
+      {job?.state === "running" ? (
+        <div role="status" className="flex flex-col gap-2 text-small text-ink2">
+          {pollFailed ? (
+            <>
+              <p>{t("ssh.installPollFailed")}</p>
+              <Button small className="self-start" onClick={() => setPollRetry((n) => n + 1)}>
+                {t("ssh.installPollRetry")}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="flex items-center gap-2">
+                <Spinner />
+                {t(job.phase === "installing" ? "ssh.installing" : "ssh.preparing")}
+              </p>
+              <p className="text-caption">{t("ssh.installKeepOpen")}</p>
+            </>
+          )}
+        </div>
+      ) : job?.state === "done" ? (
+        <p role="status" className="text-small text-green">
+          {t("ssh.installDone")}
+        </p>
+      ) : null}
+      {job?.state !== "running" ? (
+        <div className="flex items-center gap-2">
+          <Button disabled={disabled || busy || incomplete} onClick={() => void prepare()}>
+            {busy ? (
+              <>
+                <Spinner />
+                {t("ssh.preparing")}
+              </>
+            ) : (
+              t(known ? "ssh.reconnect" : "ssh.prepare")
+            )}
+          </Button>
+          {onCancel ? (
+            <Button variant="ghost" disabled={busy} onClick={onCancel}>
+              {t("create.cancel")}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

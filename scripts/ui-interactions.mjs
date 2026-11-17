@@ -1929,12 +1929,33 @@ export async function reviewInteractions({
         assert(await call(pageFits), "remote status overflows");
         await shot(`${localeName}-${width}-ssh-online`);
         await spaNav("/new");
-        await until("location picker", () => !!document.querySelector('option[value="add"]'));
-        await call(() => {
-          const select = document.querySelector("select");
-          select.value = "add";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
-        });
+        // Running elsewhere is a word in the brain step's hint, not a field above the form.
+        await until(
+          "location word",
+          (label) => !!document.querySelector(`main button[aria-label="${label}"]`),
+          zh ? "运行位置" : "Run on",
+        );
+        assert(
+          await call(
+            () => !document.querySelector("main select") && !document.querySelector('input[placeholder="user@host"]'),
+          ),
+          "location takes room before it is opened",
+        );
+        await shot(`${localeName}-${width}-ssh-local`);
+        await clickEl(
+          await call(
+            (label) => {
+              const r = document.querySelector(`main button[aria-label="${label}"]`).getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            },
+            zh ? "运行位置" : "Run on",
+          ),
+        );
+        await until("location menu", () => document.querySelectorAll('[role="menuitemradio"]').length === 3);
+        await shot(`${localeName}-${width}-ssh-menu`);
+        await clickEl(
+          await call(centerOfText, "body", '[role="menuitemradio"]', zh ? "添加 SSH 主机…" : "Add SSH host…"),
+        );
         await until("host form", () => !!document.querySelector('input[placeholder="user@host"]'));
         await until("config aliases", () => !!document.querySelector('option[value="review-fixture"]'));
         assert(await call(pageFits), "SSH host form overflows");

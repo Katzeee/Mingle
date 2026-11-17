@@ -4,7 +4,7 @@ import { type AgentView, api, type BrainStatus, type ModelList } from "./api.ts"
 import { BrainRow, SignInBrain, useSignIn } from "./Brains.tsx";
 import { useCached } from "./cache.ts";
 import { errorText, type Locale, type MessageKey, useI18n } from "./i18n.ts";
-import { SshLocation } from "./SshLocation.tsx";
+import { LocationSentence, SshSetup, useSshHosts } from "./SshLocation.tsx";
 import {
   ApiKeyHint,
   Button,
@@ -129,6 +129,10 @@ export function NewAgent({
   const { t, locale } = useI18n();
   const [location, setLocation] = useState("");
   const remote = location && location !== "add" ? location : undefined;
+  const { hosts, remember } = useSshHosts();
+  const remoteHost = hosts.find((host) => host.id === remote);
+  /** A known host being prepared again, after a restart left it unreachable. */
+  const [reconnecting, setReconnecting] = useState(false);
   const selectedLocation = useRef(location);
   selectedLocation.current = location;
   const [brainError, setBrainError] = useState<string | null>(null);
@@ -183,22 +187,20 @@ export function NewAgent({
     }
   }
 
+  function moveTo(value: string) {
+    if (value === location) void reloadBrains();
+    setLocation(value);
+    setReconnecting(false);
+    setHarness("");
+    setModel("");
+    setBrainError(null);
+  }
+
   const named = name.trim().length > 0;
   const chosen = harnesses?.find((h) => h.id === harness);
   const takenNames = new Set(taken.map((n) => n.toLowerCase()));
   const form = (
     <form onSubmit={submit} className="flex flex-col gap-8">
-      <SshLocation
-        value={location}
-        disabled={busy}
-        onChange={(value) => {
-          if (value === location) void reloadBrains();
-          setLocation(value);
-          setHarness("");
-          setModel("");
-          setBrainError(null);
-        }}
-      />
       <Steps>
         <Step n={1} state={named ? "done" : "now"} title={t("new.step1")} open>
           <div className="relative">
@@ -249,16 +251,36 @@ export function NewAgent({
           state={named ? "now" : "todo"}
           open
           title={t("new.step3")}
-          hint={t(location ? "ssh.brainHint" : "new.step3Hint")}
+          hint={<LocationSentence sentence="new.step3Hint" value={location} hosts={hosts} onChange={moveTo} />}
         >
-          {brainError ? (
+          {location === "add" ? (
+            <SshSetup
+              disabled={busy}
+              onReady={(host) => {
+                remember(host);
+                moveTo(host.id);
+              }}
+            />
+          ) : remoteHost && reconnecting ? (
+            <SshSetup
+              key={remoteHost.id}
+              host={remoteHost}
+              disabled={busy}
+              onCancel={() => setReconnecting(false)}
+              onReady={(host) => {
+                remember(host);
+                moveTo(host.id);
+              }}
+            />
+          ) : brainError ? (
             <Problem title={brainError}>
-              <Button onClick={loadBrains}>{t("ssh.retry")}</Button>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={loadBrains}>{t("ssh.retry")}</Button>
+                {remoteHost ? <Button onClick={() => setReconnecting(true)}>{t("ssh.reconnect")}</Button> : null}
+              </div>
             </Problem>
           ) : null}
-          {location === "add" ? (
-            <p className="text-small text-ink2">{t("ssh.chooseFirst")}</p>
-          ) : (
+          {location === "add" || reconnecting ? null : (
             <BrainPicker
               onBrainsChanged={loadBrains}
               harnesses={harnesses}

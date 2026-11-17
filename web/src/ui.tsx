@@ -529,9 +529,12 @@ export function PageHeader({
 export function MoreMenu({
   label,
   items,
+  trigger,
 }: {
   label: string;
-  items: { label: string; onSelect: () => void; danger?: boolean }[];
+  items: { label: string; onSelect: () => void; danger?: boolean; checked?: boolean }[];
+  /** A word in a sentence that opens the menu instead of the "…" button; the panel opens under its start. */
+  trigger?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -551,18 +554,24 @@ export function MoreMenu({
       const top = below + height <= window.innerHeight - margin ? below : anchor.top - height - 4;
       setPosition({
         top: Math.max(margin, Math.min(top, window.innerHeight - height - margin)),
-        left: Math.max(margin, Math.min(anchor.right - width, window.innerWidth - width - margin)),
+        left: Math.max(
+          margin,
+          Math.min(trigger ? anchor.left : anchor.right - width, window.innerWidth - width - margin),
+        ),
       });
     };
     place();
-    menu.current?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+    (
+      menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
+      menu.current?.querySelector<HTMLButtonElement>("button")
+    )?.focus({ preventScroll: true });
     addEventListener("resize", place);
     addEventListener("scroll", place, true);
     return () => {
       removeEventListener("resize", place);
       removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [open, trigger]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent | KeyboardEvent) => {
@@ -582,19 +591,35 @@ export function MoreMenu({
     };
   }, [open]);
   const restore = () => box.current?.querySelector("button")?.focus({ preventScroll: true });
+  const Box = trigger ? "span" : "div";
   return (
-    <div ref={box} className="relative">
-      <Button
-        variant="ghost"
-        small
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-controls={open ? menuId : undefined}
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <MoreIcon />
-      </Button>
+    <Box ref={box} className={trigger ? "relative inline" : "relative"}>
+      {trigger ? (
+        <button
+          type="button"
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-controls={open ? menuId : undefined}
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex items-baseline gap-0.5 rounded-small text-ink2 underline decoration-line2 decoration-dashed underline-offset-[3px] transition-colors duration-[120ms] hover:text-ink hover:decoration-ink3 focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {trigger}
+          <ChevronIcon className="self-center text-ink3" />
+        </button>
+      ) : (
+        <Button
+          variant="ghost"
+          small
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-controls={open ? menuId : undefined}
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <MoreIcon />
+        </Button>
+      )}
       {open
         ? createPortal(
             <div
@@ -603,28 +628,31 @@ export function MoreMenu({
               role="menu"
               aria-label={label}
               style={position}
-              className="fixed z-50 flex w-44 max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] flex-col overflow-y-auto rounded-control border border-line bg-card p-1 shadow-card"
+              className={`fixed z-50 flex ${trigger ? "w-max min-w-44 max-w-[min(20rem,calc(100vw-16px))]" : "w-44 max-w-[calc(100vw-16px)]"} max-h-[calc(100vh-16px)] flex-col overflow-y-auto rounded-control border border-line bg-card p-1 shadow-card`}
             >
               {items.map((item) => (
                 <button
                   key={item.label}
                   type="button"
-                  role="menuitem"
+                  {...(item.checked === undefined
+                    ? { role: "menuitem" }
+                    : { role: "menuitemradio", "aria-checked": item.checked })}
                   onClick={() => {
                     setOpen(false);
                     restore();
                     item.onSelect();
                   }}
-                  className={`flex min-h-8 shrink-0 items-center rounded-small px-2.5 py-1 text-left text-body wrap-anywhere hover:bg-bg3 ${item.danger ? "text-red" : ""}`}
+                  className={`flex min-h-8 shrink-0 items-center gap-2 rounded-small px-2.5 py-1 text-left text-body wrap-anywhere hover:bg-bg3 focus-visible:bg-bg3 focus-visible:outline-none ${item.danger ? "text-red" : ""}`}
                 >
-                  {item.label}
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {item.checked ? <CheckIcon className="shrink-0 text-accent" /> : null}
                 </button>
               ))}
             </div>,
             document.body,
           )
         : null}
-    </div>
+    </Box>
   );
 }
 
@@ -667,14 +695,25 @@ export function HelpTip({ label, children }: { label: string; children: ReactNod
   );
 }
 
-export function AgentStatusText({ status, detail }: { status: AgentStatus; detail?: string | null }) {
+export function AgentStatusText({
+  status,
+  detail,
+  where,
+}: {
+  status: AgentStatus;
+  detail?: string | null;
+  /** The SSH host it runs on; the status reads "unknown" while that host is out of reach. */
+  where?: { host: string; reachable: boolean };
+}) {
   const { t } = useI18n();
+  const known = where?.reachable !== false;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <StatusDot state={status} />
+      {known ? <StatusDot state={status} /> : null}
       <span className="truncate">
-        {t(`status.${status}`)}
-        {detail && status === "working" ? ` · ${detail}` : ""}
+        {known ? t(`status.${status}`) : t("ssh.unknown")}
+        {known && detail && status === "working" ? ` · ${detail}` : ""}
+        {where ? ` · ${where.host}` : ""}
       </span>
     </span>
   );
@@ -793,6 +832,11 @@ export const AlertIcon = (p: { className?: string }) => (
   <Icon {...p}>
     <path d="M8 1.8 14.6 13.5H1.4Z" />
     <path d="M8 6.2v3.3M8 11.6v.1" />
+  </Icon>
+);
+export const ChevronIcon = (p: { className?: string }) => (
+  <Icon {...p} size={12}>
+    <path d="m4.5 6.5 3.5 3.5 3.5-3.5" />
   </Icon>
 );
 export const MoreIcon = (p: { className?: string }) => (
