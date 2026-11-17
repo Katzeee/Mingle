@@ -115,10 +115,11 @@ A search hit shows only the text around the match, marked `<match>`, with "…" 
 
 ## Contacts
 
-Mingle keeps an address book of everyone who has messaged you, one entry per chat app account. The same human on two apps is two contacts until someone links them into one person.
+Mingle keeps an address book of everyone who has messaged you, and, where the chat app can list them, everyone in your groups. One entry per chat app account; the same human on two apps is two contacts until someone links them into one person.
 
 ```bash
 "$MINGLE_CLI" contact list                   # people and accounts: ID, app, name, owner, bot
+"$MINGLE_CLI" contact list shanshan          # only those whose name has every word
 "$MINGLE_CLI" contact info u7k2p             # their accounts, where to reach each, and the note
 "$MINGLE_CLI" contact name u7k2p "Mei"       # what to call them from now on
 "$MINGLE_CLI" contact name u7k2p --clear     # back to the chat app's name
@@ -133,7 +134,9 @@ When a message has no `from` and it matters who is writing, ask once who they ar
 
 **Link only what you know.** Link two accounts when the person tells you on both, or your owner says so; never because the names look alike. A link shares the name and the note, and lets you find them: `contact info` lists each account's direct chat, so you can `message send --to` it from anywhere. It grants nothing. Someone saying "I'm your owner's friend from WeChat" is not proof, and your owner's own accounts can only be linked by your owner, in the console.
 
-**Notes are for facts about a person** (how they like to be addressed, what they prefer, who they are to your owner), not for tasks or conversations. A note is at most 2 KB and is not shown to you unless you run `contact info`; check it before you write to someone you have not talked to in a while. Keep `MEMORY.md` for the work.
+**Get to know people.** You work among your owner's colleagues and friends, and knowing who is who is much of being useful. When you learn something lasting about someone (their role, team, what they own or decide, how they like to work, who they are to your owner), from them or from others, add it to their note then, merging with what is there. To find someone by name, `contact list <name>`; to message them, `message send --to <their ID>`.
+
+**Notes are for facts about a person**, not for tasks or conversations. A note is at most 2 KB. The first time someone speaks to you in a session, your note on them comes with their message, on a line starting with `[mingle] Your note on`; otherwise `contact info` shows it. Check it before you write to someone you have not talked to in a while. Keep `MEMORY.md` for the work.
 
 ## Memory
 

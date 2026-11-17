@@ -53,6 +53,8 @@ export class FakeChannel implements Channel {
    * chat's ID up front (Slack, Discord), or by the person's ID with the chat named on the first send (Feishu).
    */
   opensDirect: "none" | "chat" | "user" = "none";
+  /** How many times a group's member list was read. */
+  memberReads = 0;
   /** People the platform will not let the bot write to. */
   unreachable = new Set<string>();
   /** Live replies refuse their final content, as QQ's stream does past its window. */
@@ -145,7 +147,10 @@ export class FakeChannel implements Channel {
         : {}),
       setTyping: async () => {},
       download: async () => {},
-      listMembers: async () => this.members,
+      listMembers: async () => {
+        this.memberReads++;
+        return this.members;
+      },
       close: async () => {
         this.closes++;
       },
@@ -155,6 +160,11 @@ export class FakeChannel implements Channel {
   /** Report a state of the live connection, as the platform adapter would. */
   report(state: Parameters<ChannelEvents["onState"]>[0]): void {
     this.events?.onState(state);
+  }
+
+  /** The bot was added to a group, as the platform reports it. */
+  joined(chat: ChatRef): void {
+    this.events?.onMembership({ chat, joined: true });
   }
 
   /** Deliver a message as if it arrived from the platform. */

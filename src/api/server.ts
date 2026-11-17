@@ -207,7 +207,18 @@ export function createApi(mingle: Mingle): Hono<Env> {
     linkedBy: k.linkedBy,
   });
 
-  app.get("/v1/agent/contacts", (c) => c.json(store.agentContacts(c.get("agent").id).map(contactView)));
+  app.get("/v1/agent/contacts", (c) => {
+    // `q`: words that must all appear in one of their names (given, platform or person), any case.
+    const words = (c.req.query("q") ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const all = store.agentContacts(c.get("agent").id);
+    const found = words.length
+      ? all.filter((k) => {
+          const names = [contactName(k), k.name, k.alias].filter(Boolean).join(" ").toLowerCase();
+          return words.every((w) => names.includes(w));
+        })
+      : all;
+    return c.json(found.map(contactView));
+  });
 
   app.get("/v1/agent/contacts/:id", (c) => c.json(people.info(store, c.get("agent").id, c.req.param("id"))));
 

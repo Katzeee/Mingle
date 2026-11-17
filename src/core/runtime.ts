@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type Failure, failureOf, type Harness, type HarnessSession } from "../harness/harness.ts";
-import type { Agent, AgentStatus, Store } from "../store/store.ts";
+import { type Agent, type AgentStatus, contactName, type Store } from "../store/store.ts";
 import {
   type Action,
   buildColdContext,
@@ -80,6 +80,9 @@ export const BUSY_RETRY_MS: readonly number[] = [60_000, 5 * 60_000, 15 * 60_000
 /** A usage limit is waited out at most this long at a time, then tried again (and waited again). */
 export const QUOTA_WAIT_MS = 3_600_000;
 /** A little past the reported reset, so the first try after it is not refused again. */
+/** Characters of a person's note shown with their first message in a session. */
+const NOTE_CARD_CHARS = 600;
+
 const QUOTA_MARGIN_MS = 15_000;
 /** A usage limit that keeps coming back this many times is no longer waited for. */
 const MAX_QUOTA_HOLDS = 200;
@@ -146,6 +149,8 @@ export class AgentRuntime {
   private stopped = false;
   /** Messages the owner asked to try again; their next delivery says so. */
   private readonly retried = new Set<string>();
+  /** People whose note this session has been shown, so it comes once, with their first message. */
+  private readonly introduced = new Set<string>();
   /**
    * The local delivery gate: new messages wait until then instead of failing again. Mingle's
    * account ledger decides when it ends; the owner can still bypass it with a manual retry.
@@ -612,11 +617,31 @@ export class AgentRuntime {
     if (!message || !chat) return "";
     // In a group, how much was said there without the agent, so it can read back when it matters.
     const unseen = chat.kind === "dm" ? 0 : store.unseen(chat.id, message.createdAt);
-    const text = renderMessage(store, message, { unseen });
-    if (!text) return "";
+    const rendered = renderMessage(store, message, { unseen });
+    if (!rendered) return "";
+    const text = `${this.introduce(message.senderId, chat.connectionId)}${rendered}`;
     if (!this.retried.delete(messageId)) return text;
     // An old message coming back: the agent should know it is late, not treat it as new.
     return `[mingle] Retry: ${message.id} was not answered when it arrived (see its time). Reply to it now, and say briefly that the answer is late.\n${text}`;
+  }
+
+  /**
+   * The agent's note on the sender, the first time they speak in this session (borrowed from
+   * Raft's peer card): what it wrote down about someone is in front of it when that person shows
+   * up, without a lookup. Empty when there is no note or it was already shown.
+   */
+  private introduce(senderId: string | null, connectionId: string): string {
+    const { store } = this.deps;
+    const contact = senderId ? store.contactByPlatformId(connectionId, senderId) : undefined;
+    const personId = contact?.personId;
+    if (!contact || !personId || this.introduced.has(personId)) return "";
+    const note = store.agentPerson(this.agentId, personId)?.note?.trim();
+    if (!note) return "";
+    this.introduced.add(personId);
+    const name = contactName(contact) ?? contact.id;
+    const short =
+      note.length > NOTE_CARD_CHARS ? `${note.slice(0, NOTE_CARD_CHARS)}… (rest: contact info ${contact.id})` : note;
+    return `[mingle] Your note on ${name} (${contact.id}):\n${short}\n`;
   }
 
   private async ensureSession(): Promise<HarnessSession> {
@@ -725,6 +750,8 @@ export class AgentRuntime {
     } else {
       this.deps.log?.(`${this.agentId}: session ${session.id} ${session.resumed ? "resumed" : "opened"}`);
     }
+    // A new conversation has seen nobody's note yet.
+    if (!session.resumed) this.introduced.clear();
     if (fresh) this.deps.store.replaceSession(this.agentId, session.id);
     else this.deps.store.setSessionId(this.agentId, session.id);
     this.session = session;
