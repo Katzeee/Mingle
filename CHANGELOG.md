@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.2.2
+
+- The activity on an agent's page is now grouped by conversation instead of one timeline. Each chat gets a row, newest first; a closed row shows the last question and the agent's answer, and opening it reads the latest six messages in place with a link for earlier ones — the newest conversation starts open, and ↑↓ / → / ← move, open and close rows like a Mac list. Threads a platform attaches to a channel (Slack today) nest under that channel. What still needs you — messages that failed, went unanswered or wait for your approval — is marked right on the row and comes back however old, so a busy group can no longer push an unanswered request out of view. Discord threads and Telegram topics still show as their own rows for now.
+- A bot's permission page can turn everything on with one scan. When more than one permission is off, a "Turn all on" action grants them all at once instead of scanning once per row. The two group-message permissions are also named by sender — what people send vs. what other bots send — so the pair no longer looks redundant.
+- Agents are now told plainly to talk only through Mingle: a chat app's own CLI, MCP server or skill must not be used to send, reply or react, even when it offers to. Two Feishu agents had written to colleagues through a CLI signed in as a different real account, so people heard that account rather than the agents.
+
 ## 0.2.1
 
 - Two Feishu bots in one group both hear a message that @-mentions them now. The Feishu SDK skipped a message ID it had already delivered, and all bots in one process shared that check — so when a person @-ed two agents at once, only the first to see it got the message and the other stayed silent. Each connection now keeps its own duplicate check. Verified on a real Feishu group: eight messages @-ing one or both bots all reached the right agent.
