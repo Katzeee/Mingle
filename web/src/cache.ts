@@ -49,18 +49,19 @@ export function useCached<T>(
   load: () => Promise<T>,
   fallback?: T,
   fresh?: () => Promise<T>,
-): { value: T | null; reload: () => Promise<void> } {
+): { value: T | null; error: unknown; reload: () => Promise<void> } {
   const [, setVersion] = useState(0);
-  const [failed, setFailed] = useState<string | null>(null);
+  /** The key whose latest read failed, and why. A read of another key never shows it. */
+  const [failed, setFailed] = useState<{ key: string; error: unknown } | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key names what load reads
   const read = useCallback(
     async (again: boolean, exact: (() => Promise<T>) | undefined) => {
       if (key === null) return;
       try {
         await fetchCached(key, exact ?? load, again);
-        setFailed((k) => (k === key ? null : k));
-      } catch {
-        setFailed(key);
+        setFailed((f) => (f?.key === key ? null : f));
+      } catch (error) {
+        setFailed({ key, error });
       }
       setVersion((v) => v + 1);
     },
@@ -72,7 +73,12 @@ export function useCached<T>(
   }, [read]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key names what fresh reads
   const reload = useCallback(() => read(true, fresh), [read]);
-  if (key === null) return { value: null, reload };
+  if (key === null) return { value: null, error: null, reload };
   const known = peek<T>(key);
-  return { value: known !== undefined ? known : failed === key && fallback !== undefined ? fallback : null, reload };
+  const here = failed?.key === key;
+  return {
+    value: known !== undefined ? known : here && fallback !== undefined ? fallback : null,
+    error: here ? failed.error : null,
+    reload,
+  };
 }

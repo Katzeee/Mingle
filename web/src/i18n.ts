@@ -21,7 +21,6 @@ const en = {
   "ssh.installManual": "Manual installation",
   "ssh.installing": "Installing remote environment…",
   "ssh.installKeepOpen": "This may take a few minutes. Keep Mingle running until setup finishes.",
-  "ssh.installDone": "Remote environment installed and connected. Choose its brain below.",
   "ssh.installPollFailed":
     "Could not read installation progress. The task may still be running; check its progress again.",
   "ssh.installPollRetry": "Check progress again",
@@ -48,7 +47,7 @@ const en = {
   "ssh.reconnectHint": "Use after the remote host restarts. This version does not set up remote boot startup.",
   "ssh.unknown": "Status unknown",
   "ssh.unreachable":
-    "SSH is unreachable. The information below is from the last connection; the Agent may still be running remotely. Check SSH access, then retry. After a remote reboot, choose this host in New Agent’s brain step and use Prepare or reconnect.",
+    "SSH is unreachable. The information below is from the last connection; the Agent may still be running remotely. Check SSH access, then retry. After a remote reboot, prepare the host again.",
   "ssh.independent": "Continues when this computer is offline",
   "ssh.notice":
     "This Agent runs with your permissions on the remote host. Information learned in one chat may be shared in another. Its run location cannot be changed after creation.",
@@ -790,7 +789,6 @@ const zh: Record<MessageKey, string> = {
   "ssh.installManual": "手动安装",
   "ssh.installing": "正在安装远端环境…",
   "ssh.installKeepOpen": "可能需要几分钟，请保持 Mingle 运行直到准备完成。",
-  "ssh.installDone": "远端环境已安装并连接，请在下方选择大脑。",
   "ssh.installPollFailed": "暂时无法读取安装进度，任务可能仍在运行，请重查进度。",
   "ssh.installPollRetry": "重查进度",
   "ssh.installHint":
@@ -813,7 +811,7 @@ const zh: Record<MessageKey, string> = {
   "ssh.reconnectHint": "远端主机重启后可在此恢复服务。本版暂未配置远端开机自启。",
   "ssh.unknown": "状态未知",
   "ssh.unreachable":
-    "SSH 暂时无法连接。以下信息来自上次连接，Agent 可能仍在远端运行。请检查 SSH 后重试；若远端主机已重启，可在“新建 Agent”的选择大脑一步选中这台主机，点“准备或重新连接”。",
+    "SSH 暂时无法连接。以下信息来自上次连接，Agent 可能仍在远端运行。请检查 SSH 后重试；若远端主机已重启，请重新准备主机。",
   "ssh.independent": "本机离线后仍继续运行",
   "ssh.notice":
     "Agent 以你的权限在远端执行操作。它在一个聊天里得知的内容，可能会在另一个聊天里说出来。创建后不能更换运行位置。",

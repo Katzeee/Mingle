@@ -1,10 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import type { Navigate } from "./App.tsx";
-import { type AgentView, api, type BrainStatus, type ModelList } from "./api.ts";
+import { type AgentView, api, type BrainStatus, type ModelList, type SshHost } from "./api.ts";
 import { BrainRow, SignInBrain, useSignIn } from "./Brains.tsx";
 import { useCached } from "./cache.ts";
 import { errorText, type Locale, type MessageKey, useI18n } from "./i18n.ts";
-import { LocationSentence, SshSetup, useSshHosts } from "./SshLocation.tsx";
+import { LocationSentence, type Place, SshSetup, useSshHosts } from "./SshLocation.tsx";
 import {
   ApiKeyHint,
   Button,
@@ -127,15 +127,12 @@ export function NewAgent({
   onCreated: (agent: AgentView) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
-  const [location, setLocation] = useState("");
-  const remote = location && location !== "add" ? location : undefined;
+  const [place, setPlace] = useState<Place>({ host: null, setup: false });
   const { hosts, remember } = useSshHosts();
-  const remoteHost = hosts.find((host) => host.id === remote);
-  /** A known host being prepared again, after a restart left it unreachable. */
-  const [reconnecting, setReconnecting] = useState(false);
-  const selectedLocation = useRef(location);
-  selectedLocation.current = location;
-  const [brainError, setBrainError] = useState<string | null>(null);
+  const remote = place.host ?? undefined;
+  const remoteHost = hosts.find((host) => host.id === place.host);
+  /** A host is being set up: leaving now would drop it halfway, so the location word holds still. */
+  const [settingUp, setSettingUp] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [harness, setHarness] = useState("");
@@ -143,26 +140,18 @@ export function NewAgent({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { value: harnesses, reload: reloadBrains } = useCached<BrainStatus[]>(
-    location === "add" ? null : `brains:${remote ?? "local"}`,
-    () =>
-      api.brains(false, remote).catch((e) => {
-        if (selectedLocation.current === location) setBrainError(errorText(t, e));
-        throw e;
-      }),
+  // A host being added has no brains yet; every other place reads its own list.
+  const {
+    value: harnesses,
+    error: brainFailure,
+    reload: reloadBrains,
+  } = useCached<BrainStatus[]>(
+    place.host === null && place.setup ? null : `brains:${remote ?? "local"}`,
+    () => api.brains(false, remote),
     [],
-    () =>
-      api
-        .brains(true, remote)
-        .then((items) => {
-          if (selectedLocation.current === location) setBrainError(null);
-          return items;
-        })
-        .catch((e) => {
-          if (selectedLocation.current === location) setBrainError(errorText(t, e));
-          throw e;
-        }),
+    () => api.brains(true, remote),
   );
+  const brainError = brainFailure ? errorText(t, brainFailure) : null;
   const loadBrains = useCallback(() => void reloadBrains(), [reloadBrains]);
   // The first installed harness is the default choice, as soon as the list is known.
   useEffect(() => {
@@ -187,14 +176,17 @@ export function NewAgent({
     }
   }
 
-  function moveTo(value: string) {
-    if (value === location) void reloadBrains();
-    setLocation(value);
-    setReconnecting(false);
+  function moveTo(next: Place) {
+    // Choosing the same host again (or finishing its setup) asks it for its brains again.
+    if (next.host === place.host && !next.setup) void reloadBrains();
+    setPlace(next);
     setHarness("");
     setModel("");
-    setBrainError(null);
   }
+  const ready = (host: SshHost) => {
+    remember(host);
+    moveTo({ host: host.id, setup: false });
+  };
 
   const named = name.trim().length > 0;
   const chosen = harnesses?.find((h) => h.id === harness);
@@ -251,52 +243,56 @@ export function NewAgent({
           state={named ? "now" : "todo"}
           open
           title={t("new.step3")}
-          hint={<LocationSentence sentence="new.step3Hint" value={location} hosts={hosts} onChange={moveTo} />}
-        >
-          {location === "add" ? (
-            <SshSetup
-              disabled={busy}
-              onReady={(host) => {
-                remember(host);
-                moveTo(host.id);
-              }}
+          hint={
+            <LocationSentence
+              sentence="new.step3Hint"
+              place={place}
+              hosts={hosts}
+              disabled={busy || settingUp}
+              onChange={moveTo}
             />
-          ) : remoteHost && reconnecting ? (
+          }
+        >
+          {place.setup ? (
             <SshSetup
-              key={remoteHost.id}
+              key={remoteHost?.id ?? "new"}
               host={remoteHost}
               disabled={busy}
-              onCancel={() => setReconnecting(false)}
-              onReady={(host) => {
-                remember(host);
-                moveTo(host.id);
-              }}
+              onBusy={setSettingUp}
+              onReady={ready}
+              onCancel={remoteHost ? () => setPlace({ host: remoteHost.id, setup: false }) : undefined}
             />
-          ) : brainError ? (
-            <Problem title={brainError}>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={loadBrains}>{t("ssh.retry")}</Button>
-                {remoteHost ? <Button onClick={() => setReconnecting(true)}>{t("ssh.reconnect")}</Button> : null}
-              </div>
-            </Problem>
-          ) : null}
-          {location === "add" || reconnecting ? null : (
-            <BrainPicker
-              onBrainsChanged={loadBrains}
-              harnesses={harnesses}
-              harness={harness}
-              model={model}
-              onHarness={(id) => {
-                setHarness(id);
-                setModel("");
-              }}
-              onModel={setModel}
-            />
+          ) : (
+            <>
+              {brainError ? (
+                <Problem title={brainError}>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={loadBrains}>{t("ssh.retry")}</Button>
+                    {remoteHost ? (
+                      <Button onClick={() => setPlace({ host: remoteHost.id, setup: true })}>
+                        {t("ssh.reconnect")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </Problem>
+              ) : null}
+              <BrainPicker
+                onBrainsChanged={loadBrains}
+                harnesses={harnesses}
+                harness={harness}
+                model={model}
+                onHarness={(id) => {
+                  setHarness(id);
+                  setModel("");
+                }}
+                onModel={setModel}
+              />
+            </>
           )}
         </Step>
       </Steps>
       <div className="flex flex-col gap-3 border-t border-line pt-5">
-        <p className="text-small text-ink2">{t(location ? "ssh.notice" : "create.notice")}</p>
+        <p className="text-small text-ink2">{t(place.host || place.setup ? "ssh.notice" : "create.notice")}</p>
         {error ? <p className="text-small text-red">{error}</p> : null}
         <div className="flex items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy || !named || !chosen || Boolean(chosen.disabled)}>

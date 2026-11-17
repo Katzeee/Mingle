@@ -2036,6 +2036,13 @@ export async function reviewInteractions({
           await call(() => document.querySelector('input[placeholder="user@host"]').disabled),
           "host changed during installation",
         );
+        assert(
+          await call(
+            (label) => !document.querySelector(`main button[aria-label="${label}"]`),
+            zh ? "运行位置" : "Run on",
+          ),
+          "location can be left during installation",
+        );
         await shot(`${localeName}-${width}-ssh-install-running`);
         await call(() => sessionStorage.setItem("mingle.ssh-install-phase", "poll-failed"));
         await until(
@@ -2118,6 +2125,15 @@ export async function reviewInteractions({
         );
         assert(await call(pageFits), "unreachable remote page overflows");
         await shot(`${localeName}-${width}-ssh-offline`);
+        // A rebooted host is prepared again from its agent's page, in place.
+        await clickEl(await call(centerOfText, "main", "button", zh ? "准备或重新连接" : "Prepare or reconnect"));
+        await until(
+          "reconnect in place",
+          (text) => document.body.textContent.includes(text),
+          zh ? "远端主机重启后可在此恢复服务" : "Use after the remote host restarts",
+        );
+        assert(await call(pageFits), "reconnect panel overflows");
+        await shot(`${localeName}-${width}-ssh-reconnect`);
         await call(() => sessionStorage.removeItem("mingle.ssh-review"));
         passed++;
         console.log(`remote ${localeName} ${width}: passed`);

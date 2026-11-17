@@ -699,11 +699,14 @@ export function AgentStatusText({
   status,
   detail,
   where,
+  more,
 }: {
   status: AgentStatus;
   detail?: string | null;
   /** The SSH host it runs on; the status reads "unknown" while that host is out of reach. */
   where?: { host: string; reachable: boolean };
+  /** What follows, such as the chat apps in the sidebar. */
+  more?: string;
 }) {
   const { t } = useI18n();
   const known = where?.reachable !== false;
@@ -714,6 +717,7 @@ export function AgentStatusText({
         {known ? t(`status.${status}`) : t("ssh.unknown")}
         {known && detail && status === "working" ? ` · ${detail}` : ""}
         {where ? ` · ${where.host}` : ""}
+        {more ? ` · ${more}` : ""}
       </span>
     </span>
   );

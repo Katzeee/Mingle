@@ -31,6 +31,7 @@ import { Profile } from "./Profile.tsx";
 import { PlatformIcon } from "./platforms.tsx";
 import { usePolling } from "./poll.ts";
 import { OnlineRows } from "./Settings.tsx";
+import { SshSetup, useSshHosts } from "./SshLocation.tsx";
 import { KEYS, keysAria, onEscape, usePageShortcuts } from "./shortcuts.ts";
 import {
   AgentStatusText,
@@ -334,11 +335,7 @@ export function AgentPage({
       <div className="flex min-h-0 flex-1">
         <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
-            {agent.remote?.reachable === false ? (
-              <p role="status" className="rounded-control border border-line bg-bg2 p-3 text-small text-ink2">
-                {t("ssh.unreachable")}
-              </p>
-            ) : null}
+            {agent.remote?.reachable === false ? <Unreachable id={agent.remote.id} onReady={onChanged} /> : null}
             {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
             {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
             {agent.status === "error" ? <AgentError agent={agent} /> : null}
@@ -1176,6 +1173,40 @@ function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void 
       {failure ? <p className="px-1 text-small text-red">{failure}</p> : null}
       {saved ? <p className="px-1 text-small text-ink2">{t("agent.roleSaved")}</p> : null}
     </Section>
+  );
+}
+
+/**
+ * The SSH host stopped answering. What the page shows is from the last connection; after a
+ * remote reboot the host is prepared again here, in place.
+ */
+function Unreachable({ id, onReady }: { id: string; onReady: () => Promise<void> | void }) {
+  const { t } = useI18n();
+  const { hosts } = useSshHosts();
+  const host = hosts.find((item) => item.id === id);
+  const [open, setOpen] = useState(false);
+  if (host && open)
+    return (
+      <SshSetup
+        host={host}
+        lead={t("ssh.unreachable")}
+        disabled={false}
+        onCancel={() => setOpen(false)}
+        onReady={() => {
+          setOpen(false);
+          void onReady();
+        }}
+      />
+    );
+  return (
+    <div role="status" className="flex flex-col gap-3 rounded-control border border-line bg-bg2 p-3">
+      <p className="text-small text-ink2">{t("ssh.unreachable")}</p>
+      {host ? (
+        <Button small className="self-start" onClick={() => setOpen(true)}>
+          {t("ssh.reconnect")}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
