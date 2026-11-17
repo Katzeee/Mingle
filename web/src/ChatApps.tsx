@@ -165,6 +165,8 @@ function BotPermissions({
   const [read, setRead] = useState(0);
   const permissions = usePermissions(connection.id, connection.state === "connected", read);
   const missing = permissions?.find((p) => p.id === "group_messages" && !p.granted) ?? null;
+  /** Every permission not granted yet; one scan can turn them all on (docs/spec.md 6.1). */
+  const off = permissions?.filter((p) => !p.granted) ?? [];
   const info = platforms?.find((p) => p.platform === connection.platform);
   const rescan = Boolean(info?.reauthorize);
   const grant = missing?.grant;
@@ -236,7 +238,14 @@ function BotPermissions({
               </GroupRow>
             ))}
           </Group>
-          <p className="px-1 text-caption text-ink3">{t("permission.rescanHint")}</p>
+          <div className="flex items-center gap-3 px-1">
+            {off.length > 1 ? (
+              <Button small className="shrink-0" onClick={() => setScanning(off.map((p) => p.id))}>
+                {t("permission.turnOnAll")}
+              </Button>
+            ) : null}
+            <p className="text-caption text-ink3">{t("permission.rescanHint")}</p>
+          </div>
         </>
       ) : (
         <>
