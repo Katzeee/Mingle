@@ -188,6 +188,64 @@ describe("message flow", () => {
     expect(current.turns).toHaveLength(2);
   });
 
+  it("does not remind about a message the harness queued for its next turn", async () => {
+    // A harness that cannot steer queues input behind the running turn (`delivered … (queued)`)
+    // and runs it as the next turn. When the first turn ends the model has not seen it yet:
+    // a reminder then would race the message itself and arrive stale (as Raft's queuedForNextTurn).
+    let firstDone: () => void = () => {};
+    const first = new Promise<void>((r) => {
+      firstDone = r;
+    });
+    current = await rig(
+      async (t) => {
+        if (t.input.includes("one")) {
+          await first;
+          const [id] = messageIds(t.input);
+          await runCli(t.options.env as Record<string, string>, ["message", "reply", id as string], "done");
+        }
+      },
+      {
+        wrap: (harness) => ({
+          ...harness,
+          open: async (options, events) => {
+            let running = false;
+            const session = await harness.open(options, {
+              ...events,
+              onTurnStarted: (self) => {
+                running = true;
+                events.onTurnStarted(self);
+              },
+              onTurnEnded: (outcome) => {
+                running = false;
+                events.onTurnEnded(outcome);
+              },
+            });
+            return {
+              ...session,
+              deliver: async (text: string, inputId: string) => {
+                const busy = running;
+                const result = await session.deliver(text, inputId);
+                return busy && result.outcome === "steered" ? { outcome: "queued" as const } : result;
+              },
+            };
+          },
+        }),
+      },
+    );
+    const { channel } = current;
+    channel.receive({ text: "one" });
+    await until(() => current?.turns.length === 1);
+    channel.receive({ text: "two" });
+    await until(() => current?.turns[0]?.steered.length === 1);
+    firstDone();
+    await until(() => channel.sent.length === 1);
+    await sleep(500);
+    expect(current.turns.map((t) => t.input).filter((i) => i.startsWith("[mingle] Not answered yet"))).toEqual([]);
+    // Once a turn has run after it, the usual check applies again.
+    channel.receive({ text: "three" });
+    await until(() => current?.turns.some((t) => t.input.startsWith("[mingle] Not answered yet")));
+  });
+
   it("marks a message unanswered when the agent ignores the nudge too", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
