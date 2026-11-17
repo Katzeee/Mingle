@@ -564,7 +564,9 @@ const en = {
   "permission.about.member_profiles": "Reads people's department and title, so {name} knows who is who.",
   "permission.on": "On",
   "permission.turnOn": "Turn on",
-  "permission.rescanHint": "Turning one on means scanning again. It is added to the same app.",
+  "permission.turnOnAll": "Turn all on",
+  "permission.rescanHint":
+    "Turning one on means scanning again — a single scan can cover several. They are added to the same app.",
   "permission.missingWithSteps": "{missing} {steps}",
   "access.title": "Access",
   "access.rule.public":
@@ -1299,7 +1301,8 @@ const zh: Record<MessageKey, string> = {
   "permission.about.member_profiles": "读取成员的部门和职务，让{name}认得谁是谁。",
   "permission.on": "已开启",
   "permission.turnOn": "开启",
-  "permission.rescanHint": "开启时需要再扫一次码，权限会补到同一个应用上。",
+  "permission.turnOnAll": "全部开启",
+  "permission.rescanHint": "开启时要再扫一次码；一次扫码可以把没开的都补上，加到同一个应用上。",
   "permission.missingWithSteps": "{missing}{steps}",
   "access.title": "访问权限",
   "access.rule.public":

@@ -224,7 +224,7 @@ const PERMISSIONS_MOCK = String.raw`(() => {
     if (path === "/v1/admin/connections/n2/permissions")
       return json({
         permissions: [
-          { id: "group_messages", granted: true },
+          { id: "group_messages", granted: on() !== "several" },
           { id: "bot_messages", granted: true },
           { id: "member_profiles", granted: on() === "granted", optional: true },
         ],
@@ -2189,7 +2189,7 @@ export async function reviewInteractions({
     for (const [localeName, labels] of Object.entries(LOCALES)) {
       const zh = localeName === "zh-CN";
       for (const width of [1440, 560]) {
-        for (const state of ["off", "granted"]) {
+        for (const state of ["off", "granted", "several"]) {
           const tag = `permissions ${localeName} ${width} ${state}`;
           await metrics(width);
           await send("Page.navigate", { url: `${url}/a/${slug}#token=${token}` });
@@ -2220,7 +2220,16 @@ export async function reviewInteractions({
           const profiles = zh ? "成员资料" : "Member profiles";
           await until("permission rows", (text) => document.body.textContent.includes(text), profiles);
           const turnOn = await call(centerOfText, "main", "button", zh ? "开启" : "Turn on");
-          assert(state === "off" ? Boolean(turnOn) : !turnOn, `${tag}: turn-on button ${turnOn ? "shown" : "missing"}`);
+          assert(
+            state === "granted" ? !turnOn : Boolean(turnOn),
+            `${tag}: turn-on button ${turnOn ? "shown" : "missing"}`,
+          );
+          // More than one permission off gets a single button that scans for all of them.
+          const turnAll = await call(centerOfText, "main", "button", zh ? "全部开启" : "Turn all on");
+          assert(
+            state === "several" ? Boolean(turnAll) : !turnAll,
+            `${tag}: turn-all-on button ${turnAll ? "shown" : "missing"}`,
+          );
           await until(
             "contact with profile",
             (text) => document.body.textContent.includes(text),
@@ -2228,9 +2237,9 @@ export async function reviewInteractions({
           );
           assert(await call(pageFits), `${tag}: page overflows`);
           await shot(`${localeName}-${width}-permissions-${state}`);
-          if (state === "off" && width === 1440) {
-            // Turning one on opens the scan in place, for that permission only.
-            await clickEl(turnOn);
+          if ((state === "off" || state === "several") && width === 1440) {
+            // Turning on opens the scan in place: one row adds one, "Turn all on" adds them all.
+            await clickEl(state === "several" ? turnAll : turnOn);
             await until(
               "scan opens in place",
               (cancel) => [...document.querySelectorAll("main button")].some((b) => b.textContent.trim() === cancel),
