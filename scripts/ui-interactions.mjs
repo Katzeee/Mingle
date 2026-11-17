@@ -1976,9 +1976,14 @@ export async function reviewInteractions({
           (label) => !!document.querySelector(`main button[aria-label="${label}"]`),
           zh ? "运行位置" : "Run on",
         );
+        // The chosen brain's model picker is a legitimate select here; only the SSH
+        // form's own controls may not take room before the location menu is opened.
         assert(
           await call(
-            () => !document.querySelector("main select") && !document.querySelector('input[placeholder="user@host"]'),
+            (model) =>
+              [...document.querySelectorAll("main select")].every((s) => s.getAttribute("aria-label") === model) &&
+              !document.querySelector('input[placeholder="user@host"]'),
+            zh ? "模型" : "Model",
           ),
           "location takes room before it is opened",
         );
