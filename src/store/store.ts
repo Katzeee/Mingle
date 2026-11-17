@@ -1199,6 +1199,16 @@ export class Store {
     return rows.map(toMessage);
   }
 
+  /** Whether the agent sent anything into this chat after `at`: a reply to another message, or a plain send. */
+  spokeSince(chatId: string, at: number): boolean {
+    const row = this.db
+      .prepare(
+        "SELECT 1 FROM messages WHERE chat_id = ? AND direction = 'out' AND state = 'sent' AND created_at >= ? LIMIT 1",
+      )
+      .get(chatId, at);
+    return row !== undefined;
+  }
+
   markNudged(ids: readonly string[]): void {
     const stmt = this.db.prepare("UPDATE messages SET nudged = 1 WHERE id = ?");
     for (const id of ids) stmt.run(id);
