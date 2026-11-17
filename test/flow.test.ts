@@ -574,6 +574,76 @@ describe("admin API (console)", () => {
     expect(anonymous.status).toBe(401);
   });
 
+  it("lists the activity by conversation, keeping what needs the owner however old", async () => {
+    current = await rig(async () => {});
+    const { mingle, agentId, admin } = current;
+    const store = mingle.store;
+    const connection = store.connections(agentId)[0] as { id: string };
+    const dm = store.upsertChat({ connectionId: connection.id, platformId: "u1", kind: "dm", name: "Ann" });
+    const channel = store.upsertChat({ connectionId: connection.id, platformId: "C1", kind: "group", name: "#design" });
+    const thread = store.upsertChat({
+      connectionId: connection.id,
+      platformId: "C1:9",
+      kind: "thread",
+      name: "Release notes",
+      parentId: channel.id,
+    });
+    const t0 = Date.now() - 60_000;
+    const say = (chatId: string, n: number, body: string, triggers = false) =>
+      store.insertInbound({
+        chatId,
+        platformId: `${chatId}-${n}`,
+        senderId: "u1",
+        senderName: "Ann",
+        body,
+        attachments: [],
+        replyTo: null,
+        triggers,
+        createdAt: t0 + n,
+      }) as { id: string };
+    const old = say(dm.id, 0, "the old request", true);
+    store.moveInbound([old.id], "fail");
+    for (let n = 1; n <= 9; n++) say(dm.id, n, `dm ${n}`);
+    say(thread.id, 20, "in the thread");
+
+    type View = {
+      chat: { id: string; kind: string; name: string };
+      parent: { id: string; name: string } | null;
+      earlier: number;
+      cursor: number | null;
+      messages: { body: string; state: string }[];
+    };
+    const views = (await admin("GET", `/v1/admin/agents/${agentId}/conversations`)).json as View[];
+    // Newest conversation first; a thread names the channel it belongs to.
+    expect(views.map((v) => v.chat.name)).toEqual(["Release notes", "Ann"]);
+    expect(views[0]?.parent).toMatchObject({ id: channel.id, name: "#design" });
+    expect(views[1]?.parent).toBeNull();
+    // The latest six, oldest first, and the failed request from before them.
+    expect(views[1]?.messages.map((m) => m.body)).toEqual([
+      "the old request",
+      "dm 4",
+      "dm 5",
+      "dm 6",
+      "dm 7",
+      "dm 8",
+      "dm 9",
+    ]);
+    expect(views[1]?.messages[0]?.state).toBe("failed");
+    expect(views[1]?.earlier).toBe(3);
+
+    // One chat further back, from where the last read stopped.
+    const back = (
+      await admin(
+        "GET",
+        `/v1/admin/agents/${agentId}/conversations?chat=${dm.id}&before=${views[1]?.cursor}&messages=2`,
+      )
+    ).json as View[];
+    expect(back).toHaveLength(1);
+    expect(back[0]?.messages.map((m) => m.body)).toEqual(["the old request", "dm 2", "dm 3"]);
+    expect(back[0]?.earlier).toBe(1);
+    expect((await admin("GET", `/v1/admin/agents/${agentId}/conversations?chat=cnope`)).status).toBe(404);
+  });
+
   it("keeps onboarding complete outside the recent activity window", async () => {
     current = await rig(async () => {});
     const { mingle, agentId, admin } = current;

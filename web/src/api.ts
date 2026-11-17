@@ -232,6 +232,19 @@ export interface Activity {
   createdAt: number;
 }
 
+/** One chat in the activity, with its latest messages (oldest first) and what still needs the owner. */
+export interface Conversation {
+  chat: { id: string; kind: "dm" | "group" | "thread"; name: string | null };
+  /** The channel a thread belongs to. */
+  parent: { id: string; kind: "dm" | "group" | "thread"; name: string | null } | null;
+  platform: Platform;
+  latestAt: number;
+  /** Older messages not shown; read them with `cursor` as `before`. */
+  earlier: number;
+  cursor: number | null;
+  messages: Activity[];
+}
+
 export interface Harness {
   id: string;
   name: string;
@@ -440,7 +453,11 @@ export const api = {
     call<{ person: string }>("POST", `/v1/admin/agents/${id}/people/link`, { contacts }),
   unlinkContact: (id: string, contact: string) =>
     call<{ ok: true }>("POST", `/v1/admin/agents/${id}/people/unlink`, { contact }),
-  activity: (id: string) => call<Activity[]>("GET", `/v1/admin/agents/${id}/activity?limit=30`),
+  conversations: (id: string, page?: { chat: string; before: number }) =>
+    call<Conversation[]>(
+      "GET",
+      `/v1/admin/agents/${id}/conversations${page ? `?chat=${encodeURIComponent(page.chat)}&before=${page.before}&messages=20` : ""}`,
+    ),
   handoffs: (id: string) => call<HandoffView[]>("GET", `/v1/admin/agents/${id}/handoffs?limit=30`),
   handoff: (id: string, body: string) =>
     call<{ handoff: HandoffView; state: "idle" | "busy" | "paused" }>("POST", `/v1/admin/agents/${id}/handoffs`, {

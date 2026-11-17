@@ -1103,6 +1103,74 @@ export class Store {
   }
 
   /**
+   * The agent's chats that spoke most recently, newest first, each with its latest messages
+   * (oldest first) for the console. Messages that still need the owner (unanswered, failed,
+   * waiting, held) come along however old, so a busy chat cannot hide them. `before` pages one
+   * chat further back.
+   */
+  agentConversations(
+    agentId: string,
+    opts: { chats: number; messages: number; chatId?: string; before?: number },
+  ): {
+    chat: Chat;
+    parent: Chat | null;
+    platform: Platform;
+    latestAt: number;
+    /** How many older messages are not shown; `cursor` as `before` reads them. */
+    earlier: number;
+    cursor: number | null;
+    messages: Message[];
+  }[] {
+    const scope = opts.chatId ? "AND c.id = ?" : "";
+    const heads = this.db
+      .prepare(
+        `SELECT c.id, n.platform, max(m.created_at) AS latest FROM messages m JOIN chats c ON c.id = m.chat_id
+         JOIN connections n ON n.id = c.connection_id WHERE n.agent_id = ? ${scope}
+         GROUP BY c.id ORDER BY latest DESC, max(m.rowid) DESC LIMIT ?`,
+      )
+      .all(agentId, ...(opts.chatId ? [opts.chatId] : []), opts.chats) as Row[];
+    const before = opts.before ?? Number.MAX_SAFE_INTEGER;
+    return heads.map((h) => {
+      const chat = this.chat(String(h.id)) as Chat;
+      const latest = (
+        this.db
+          .prepare(
+            `SELECT * FROM messages WHERE chat_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+          )
+          .all(chat.id, before, opts.messages) as Row[]
+      ).map(toMessage);
+      const oldest = latest.at(-1);
+      const pending = oldest
+        ? (
+            this.db
+              .prepare(
+                `SELECT * FROM messages WHERE chat_id = ? AND direction = 'in' AND created_at < ?
+                 AND state IN ('unanswered', 'failed', 'waiting', 'held')`,
+              )
+              .all(chat.id, oldest.createdAt) as Row[]
+          ).map(toMessage)
+        : [];
+      const shown = [...latest, ...pending].sort((a, b) => a.createdAt - b.createdAt);
+      const total = Number(
+        (
+          this.db
+            .prepare("SELECT count(*) AS n FROM messages WHERE chat_id = ? AND created_at < ?")
+            .get(chat.id, before) as Row
+        ).n,
+      );
+      return {
+        chat,
+        parent: chat.parentId ? (this.chat(chat.parentId) ?? null) : null,
+        platform: String(h.platform) as Platform,
+        latestAt: Number(h.latest),
+        earlier: total - shown.length,
+        cursor: oldest?.createdAt ?? null,
+        messages: shown,
+      };
+    });
+  }
+
+  /**
    * The agent's latest conversation across all its chats, oldest first. Ignored inbound messages
    * (background chatter, paused work, or requests the owner dismissed), messages still waiting for the
    * owner to let their sender in (docs/spec.md 4.7) and failed sends are left out.
