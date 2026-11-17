@@ -596,6 +596,7 @@ Mingle 启动 harness 时通过 OAR 的 `env` 放入三个环境变量：本地 
 - **认得出是哪个私聊**：私聊记下对方的平台 ID（`chats.peer_id`，入站时写入，旧数据按第一条入站消息回填）。飞书按 open_id 发出第一条后才知道私聊的 `chat_id`，发送结果把它带回来，Mingle 改写这个聊天的平台 ID，对方的回复落进同一个聊天。
 - **平台能力**：飞书（应用可见范围内的人）、Slack（`conversations.open`）、Discord（同在一个服务器）可以主动开私聊。Telegram、QQ、个人微信只允许回复先找过机器人的人，钉钉、企业微信暂未接入，这时报 `direct_unavailable`，下一步是在共同的群里找他，或告诉提出要求的人。平台拒绝（如不在飞书应用可见范围）报 `direct_refused` 或 `send_forbidden`。
 - **默认放开，不加开关**：能被 Agent 主动私聊的只有它的联系人，即在它的私聊、群里出现过的人；平台本身的可见范围仍然生效。
+- **只用 `mingle` 说话（MING-100）**：本机常装着聊天软件自己的 CLI、MCP 或 skill（飞书 CLI、Slack、微信、`gh` 等），登录的是 owner 或别的真人账号（实测：飞书 CLI 登着一个叫 Thomas AI 的旧账号，两个 Agent 都用它去私聊同事）。harness 没有跨平台的工具黑名单，Mingle 也不碰这些工具的登录态，所以靠操作指南明说：说话只走 `mingle`，就算 skill 主动提供、就算 `mingle` 联系不到人，也不用这些工具发消息、回复或加表情，联系不到就告诉提出要求的人。`direct_unavailable`、`direct_refused` 和找不到联系人的提示里也重复这一句，因为 Agent 正是在这些时候去找别的路。
 
 `reply` 和 `send` 的正文从标准输入读取，用 heredoc 传入，避免引号、反引号和换行被 shell 解释。`--file <路径>` 附带文件，可重复：
 
