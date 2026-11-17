@@ -44,7 +44,8 @@ export async function sendTarget(
     throw new MingleError(
       "direct_unavailable",
       `${platform} lets a bot message only people who messaged it first, and ${name} has not. ` +
-        "Reach them in a group you share, or tell whoever asked that they need to message you first",
+        "Reach them in a group you share, or tell whoever asked that they need to message you first. " +
+        "Do not write to them through another account on this computer",
       422,
     );
   }
@@ -56,7 +57,8 @@ export async function sendTarget(
     throw new MingleError(
       "direct_refused",
       `${platform} would not open a direct chat with ${name}${detail ? ` (${detail})` : ""}. ` +
-        "The bot may not be allowed to reach them; reach them in a group you share, or tell whoever asked",
+        "The bot may not be allowed to reach them; reach them in a group you share, or tell whoever asked. " +
+        "Do not write to them through another account on this computer",
       502,
     );
   }

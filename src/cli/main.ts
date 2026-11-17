@@ -358,7 +358,8 @@ async function agentCommand(group: string, action: string | undefined, args: str
         contacts.length
           ? contactList(contacts)
           : query
-            ? `no contact named like "${query}". Try part of the name, or "mingle chat info <chat>" for a group's members`
+            ? `no contact named like "${query}". Try part of the name, or "mingle chat info <chat>" for a group's members. ` +
+              "You can reach only people in your chats; if they are not, tell whoever asked"
             : "no contacts yet: nobody has messaged you",
       );
       return true;

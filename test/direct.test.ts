@@ -121,6 +121,7 @@ describe("messaging a person directly", { timeout: 60_000 }, () => {
     });
     await until(() => finished(), 30_000);
     expect(out.err).toMatch(/^error: direct_unavailable\nnext: telegram lets a bot message only people/);
+    expect(out.err).toContain("Do not write to them through another account on this computer");
   });
 
   it("says when the chat app refuses the person", async () => {
