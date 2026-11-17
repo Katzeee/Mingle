@@ -97,6 +97,48 @@ describe("message flow", () => {
     expect(mingle.store.chatMessages(chat, 10).find((m) => m.direction === "in")?.state).toBe("replied");
   });
 
+  it("drops the nudge when the agent answers before it is delivered", async () => {
+    // MING-103: the agent started a long command and ended its turn. The command finished and woke
+    // it (a turn the harness began itself) while the reminder waited; it answered then. The
+    // reminder must not arrive afterwards, or the agent answers the same message again.
+    let env: Record<string, string> = {};
+    let wake: { begin(): void; end(): void } | undefined;
+    current = await rig(
+      async (t) => {
+        env = t.options.env as Record<string, string>;
+      },
+      {
+        wrap: (harness) => ({
+          ...harness,
+          open: (options, events) =>
+            harness.open(options, {
+              ...events,
+              onTurnEnded: (outcome) => {
+                events.onTurnEnded(outcome);
+                if (wake) return;
+                // The background command wakes the agent right as its first turn ends.
+                wake = {
+                  begin: () => events.onTurnStarted(true),
+                  end: () => events.onTurnEnded({ kind: "completed" }),
+                };
+                wake.begin();
+              },
+            }),
+        }),
+      },
+    );
+    const { channel } = current;
+    const inbound = channel.receive({ text: "download the files" });
+    await until(() => wake);
+    const chat = current.mingle.store.agentChats(current.agentId)[0]?.id as string;
+    const id = current.mingle.store.messageByPlatformId(chat, inbound.platformId)?.id as string;
+    await runCli(env, ["message", "reply", id], "Downloaded.");
+    wake?.end();
+    await sleep(500);
+    expect(channel.sent.map((m) => m.text)).toEqual(["Downloaded."]);
+    expect(current.turns).toHaveLength(1); // No "Not answered yet" turn.
+  });
+
   it("marks a message unanswered when the agent ignores the nudge too", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
