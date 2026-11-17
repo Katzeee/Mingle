@@ -376,6 +376,14 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
                 : { file: { source, fileName: name } };
               last = (await channel.send(message.chat.platformId, input, opts)).messageId;
             }
+            // Sent to a person by their open_id (openDirect): learn the direct chat's own ID.
+            if (message.chat.platformId.startsWith("ou_")) {
+              const chat = await channel.rawClient.im.v1.message
+                .get({ path: { message_id: last } })
+                .then((r) => r.data?.items?.[0]?.chat_id)
+                .catch(() => undefined);
+              if (chat) return { kind: "sent", platformId: last, chat };
+            }
             return { kind: "sent", platformId: last };
           } catch (error) {
             return withTextSent(sendFailure(error), textId);
@@ -477,6 +485,11 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             return [];
           }
           return members;
+        },
+
+        // A bot can write to anyone in its availability range; the chat gets its ID with the first message.
+        async openDirect(userId: string) {
+          return userId;
         },
 
         async messageUser(userId: string, text: string) {

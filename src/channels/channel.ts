@@ -234,7 +234,16 @@ export interface OutboundMessage {
 }
 
 export type SendResult =
-  | { readonly kind: "sent"; readonly platformId: string; readonly degraded?: readonly Degradation[] }
+  | {
+      readonly kind: "sent";
+      readonly platformId: string;
+      readonly degraded?: readonly Degradation[];
+      /**
+       * The chat's own ID, when it was addressed another way: a direct chat opened by the person's
+       * ID (`openDirect`) on a platform that names the chat only once a message is in it.
+       */
+      readonly chat?: string;
+    }
   /** The platform refused. `retryable` says whether trying again can help. */
   | {
       readonly kind: "failed";
@@ -345,6 +354,13 @@ export interface ChannelConnection {
   download(attachment: InboundAttachment, toPath: string): Promise<void>;
   /** Open a direct conversation with a user by sending the first message. Where the platform allows it. */
   messageUser?(userId: string, text: string): Promise<void>;
+  /**
+   * The ID to send to for a direct chat with this user, when they have not messaged the bot yet
+   * (docs/spec.md 5.3). Absent where the platform lets a bot write only to people who wrote first;
+   * throws when the platform refuses this user. A platform that names the chat only once a message
+   * is in it may return the user's ID, and reports the chat's own ID on the first send (`chat`).
+   */
+  openDirect?(userId: string): Promise<string>;
   listMembers(chat: ChatRef): Promise<readonly Sender[]>;
   /**
    * Permissions the owner can grant this bot on the platform, read live (docs/spec.md 4.2). Absent

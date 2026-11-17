@@ -1230,6 +1230,7 @@ export class Mingle {
       kind: inbound.chat.kind,
       name: inbound.chat.name,
       parentId: parent?.id,
+      ...(inbound.chat.kind === "dm" ? { peerId: inbound.sender.id } : {}),
     });
     let contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
     if (!connection.ownerId && chat.kind === "dm" && !knownBot && this.claim(connection, chat, contact, inbound))

@@ -251,9 +251,13 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "message send": {
-      const to = need(flags.to, "chat_required", "usage: mingle message send --to <chat-id> <<'MSG' ... MSG");
+      const to = need(
+        flags.to,
+        "chat_required",
+        "usage: mingle message send --to <chat-id | contact-id> <<'MSG' ... MSG",
+      );
       const text = await readStdin();
-      const report = await call()<SendReport>("POST", "/v1/agent/messages/send", { chatId: to, text, files });
+      const report = await call()<SendReport>("POST", "/v1/agent/messages/send", { to, text, files });
       print(report, () => sendText(report));
       return true;
     }
@@ -323,13 +327,16 @@ async function agentCommand(group: string, action: string | undefined, args: str
         platform: string;
         kind: string;
         name: string | null;
-        members: { name: string }[] | null;
+        members: { id: string; name: string }[] | null;
       }>("GET", `/v1/agent/chats/${chat}`);
       print(info, () =>
         [
           `${info.id}  ${info.platform}  ${info.kind}  ${info.name ?? "-"}`,
           info.members
-            ? `members: ${info.members.map((m) => m.name).join(", ")}`
+            ? [
+                "members:",
+                ...info.members.map((m) => `  ${m.id}  ${m.name ? JSON.stringify(m.name) : "no name"}`),
+              ].join("\n")
             : "members: not available on this chat app",
         ].join("\n"),
       );
@@ -877,7 +884,7 @@ For the owner:
   mingle disconnect <connection-id>
 
 For agents (inside a session):
-  mingle message reply <msg> | send --to <chat> | read <chat> | search <words>
+  mingle message reply <msg> | send --to <chat|contact> | read <chat> | search <words>
   mingle chat list | info <chat>
   mingle contact list | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>

@@ -81,6 +81,7 @@ describe("formatMessage", () => {
         name: "Weekend hikes",
         parentId: null,
         access: null,
+        peerId: null,
       },
       "feishu",
       { ownerId: "u1" },
@@ -116,6 +117,7 @@ describe("message header contacts", () => {
     name: null,
     parentId: null,
     access: null,
+    peerId: null,
   };
   const contact = {
     id: "u7k2",

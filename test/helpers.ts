@@ -46,6 +46,15 @@ export class FakeChannel implements Channel {
   }[] = [];
   /** Off by default so most tests see plain replies; the live-reply tests turn it on. */
   liveEnabled = false;
+  /** Group members, as listMembers reports them; empty means the app cannot list them. */
+  members: { id: string; name: string; isBot: boolean }[] = [];
+  /**
+   * How the bot opens a direct chat with someone who has not written: not at all, by getting the
+   * chat's ID up front (Slack, Discord), or by the person's ID with the chat named on the first send (Feishu).
+   */
+  opensDirect: "none" | "chat" | "user" = "none";
+  /** People the platform will not let the bot write to. */
+  unreachable = new Set<string>();
   /** Live replies refuse their final content, as QQ's stream does past its window. */
   finishFails = false;
   /** How many times a bot connected, and how many of those connections were closed. */
@@ -78,6 +87,7 @@ export class FakeChannel implements Channel {
       throw new Error("fixture network down");
     }
     this.events = events;
+    const channel = this;
     return {
       bot: { id: "bot1", name: "@alex_bot" },
       capabilities: () => ({
@@ -86,13 +96,23 @@ export class FakeChannel implements Channel {
         typingIndicator: true,
         fileUpload: true,
         fileDownload: false,
-        listMembers: false,
+        listMembers: channel.members.length > 0,
         maxTextLength: 4096,
       }),
       send: async (message) => {
         const platformId = String(this.seq++);
         this.sent.push({ ...message, platformId });
-        return { kind: "sent", platformId };
+        const byUser = this.opensDirect === "user" && message.chat.platformId.startsWith("user:");
+        return { kind: "sent", platformId, ...(byUser ? { chat: `dm-${message.chat.platformId.slice(5)}` } : {}) };
+      },
+      // Read when used: tests set opensDirect after the bot has connected.
+      get openDirect() {
+        return channel.opensDirect === "none"
+          ? undefined
+          : async (userId: string) => {
+              if (channel.unreachable.has(userId)) throw new Error("fixture: not in the bot's range");
+              return channel.opensDirect === "chat" ? `dm-${userId}` : `user:${userId}`;
+            };
       },
       react: async (_chat: ChatRef, id: string, state: ReactionState) => {
         this.reactions.push(`${id}:${state}`);
@@ -125,11 +145,11 @@ export class FakeChannel implements Channel {
         : {}),
       setTyping: async () => {},
       download: async () => {},
-      listMembers: async () => [],
+      listMembers: async () => this.members,
       close: async () => {
         this.closes++;
       },
-    };
+    } as ChannelConnection;
   }
 
   /** Report a state of the live connection, as the platform adapter would. */

@@ -70,6 +70,16 @@ The trail report is done. Summary attached.
 MSG
 ```
 
+Message one person directly with their contact ID (the `user=` in a header, or a member listed by `chat info`). Their direct chat with you is used, and opened on the first send if there is none yet, so they do not have to have written to you:
+
+```bash
+"$MINGLE_CLI" message send --to u7k2p <<'MSG'
+Hi Mei, Zhang San asked me to check the KB repo layout with you. Which repo holds the operators?
+MSG
+```
+
+Say who you are and why you are writing when they have not heard from you before. Some chat apps let a bot write only to people who wrote to it first; the command says so, and then you reach them in a group you share.
+
 Attach files with `--file <path>`, repeatable. Write the way the chat does: short, plain, in the language the person used. Markdown is rendered where the app supports it.
 
 Prefer `reply` over `send` when answering someone in a group, so it is clear who you are answering.
@@ -90,7 +100,7 @@ More messages can arrive while you are working. They appear in your session as t
 
 ```bash
 "$MINGLE_CLI" chat list                      # chats you are in: ID, app, name
-"$MINGLE_CLI" chat info c12                  # details; members where the app allows
+"$MINGLE_CLI" chat info c12                  # details; members with contact IDs, where the app allows
 "$MINGLE_CLI" message read c12 --limit 30    # recent messages in a chat
 "$MINGLE_CLI" message search ridge saturday   # messages with every word; --in c12 to narrow
 "$MINGLE_CLI" message search '"ridge route"' saturday   # keep the double quotes for an exact phrase
