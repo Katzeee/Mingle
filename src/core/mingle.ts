@@ -100,6 +100,9 @@ export interface MingleOptions {
 }
 
 /** Variables that give an agent a sign-in of its own, so it does not share the computer's usage limit. */
+/** How long a group's member list stays fresh before an active group is read again. */
+const ROSTER_TTL_MS = 6 * 60 * 60_000;
+
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
 
 /** The whole local process: store, agent runtimes, live IM connections, reminders. The HTTP API sits on top. */
@@ -122,6 +125,8 @@ export class Mingle {
   /** Paused agents (docs/spec.md 4.11), and the chats already told so during the current pause. */
   private readonly paused = new Set<string>();
   private readonly pauseNoted = new Set<string>();
+  /** When each group's member list was last read into the address book (docs/spec.md 4.2). */
+  private readonly rostered = new Map<string, number>();
   /** Wrong claim codes each ownerless bot took since its code was issued (docs/spec.md 4.7). */
   private readonly claimMisses = new Map<string, number>();
   /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
@@ -1190,13 +1195,35 @@ export class Mingle {
 
   private onMembership(connectionId: string, change: { chat: ChatRef; joined: boolean }): void {
     if (change.joined) {
-      this.store.upsertChat({
+      const chat = this.store.upsertChat({
         connectionId,
         platformId: change.chat.platformId,
         kind: change.chat.kind,
         name: change.chat.name,
       });
+      this.roster(connectionId, chat.id, change.chat);
     }
+  }
+
+  /**
+   * Put a group's members in the address book, the way a person learns who is in a group they
+   * joined: on joining, then again when the group is active and the list is older than a few hours.
+   * Where the chat app can list members; best effort.
+   */
+  private roster(connectionId: string, chatId: string, ref: ChatRef): void {
+    const live = this.live.get(connectionId);
+    if (ref.kind === "dm" || !live?.capabilities().listMembers) return;
+    const last = this.rostered.get(chatId);
+    if (last !== undefined && Date.now() - last < ROSTER_TTL_MS) return;
+    this.rostered.set(chatId, Date.now());
+    void live
+      .listMembers(ref)
+      .then((members) => {
+        for (const m of members) {
+          if (m.id && m.id !== live.bot.id && !m.isBot) this.store.touchContact(connectionId, m.id, m.name);
+        }
+      })
+      .catch((error) => this.log(`could not read the members of ${chatId}: ${(error as Error).message}`));
   }
 
   // ------------------------------------------------------------------- inbox
@@ -1286,6 +1313,7 @@ export class Mingle {
       createdAt: inbound.sentAt,
     });
     if (!message || inbound.earlier) return; // Delivered before, or the group's past.
+    if (chat.kind !== "dm") this.roster(connectionId, chat.id, inbound.chat);
     if (!bot) this.botHops.person(chat.id);
     else if (triggers) this.botHops.woke(chat.id);
     else if (decision === "brake" && this.botHops.braked(chat.id)) {

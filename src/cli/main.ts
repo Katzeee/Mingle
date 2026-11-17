@@ -343,8 +343,18 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "contact list": {
-      const contacts = await call()<ContactRow[]>("GET", "/v1/agent/contacts");
-      print(contacts, () => (contacts.length ? contactList(contacts) : "no contacts yet: nobody has messaged you"));
+      const query = args.join(" ").trim();
+      const contacts = await call()<ContactRow[]>(
+        "GET",
+        `/v1/agent/contacts${query ? `?${new URLSearchParams({ q: query })}` : ""}`,
+      );
+      print(contacts, () =>
+        contacts.length
+          ? contactList(contacts)
+          : query
+            ? `no contact named like "${query}". Try part of the name, or "mingle chat info <chat>" for a group's members`
+            : "no contacts yet: nobody has messaged you",
+      );
       return true;
     }
     case "contact info": {
@@ -886,7 +896,7 @@ For the owner:
 For agents (inside a session):
   mingle message reply <msg> | send --to <chat|contact> | read <chat> | search <words>
   mingle chat list | info <chat>
-  mingle contact list | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
+  mingle contact list [name] | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
   mingle task create | list | update
   mingle reminder set | list | snooze | cancel
