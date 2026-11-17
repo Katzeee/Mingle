@@ -5,6 +5,7 @@ import {
   api,
   type BotPermission,
   type ConnectionView,
+  type PermissionId,
   type PlatformInfo,
 } from "./api.ts";
 import { QrFlow } from "./Connect.tsx";
@@ -141,10 +142,12 @@ export function BotPage({
 }
 
 /**
- * The platform permissions this bot's app has (docs/spec.md 4.2, 6.1). A bot that only sees the group
- * messages that @ it says so, with how to change it: where the platform can add grants to an
- * existing app, a button runs its scan again in place (the confirm page lists what is being added,
- * and the same connection keeps working); elsewhere, a link to the platform's own setting.
+ * The platform permissions this bot's app has (docs/spec.md 4.2, 6.1). Where the platform can add
+ * grants to an existing app (Feishu), each permission is a row: what it gives the agent, and either
+ * "On" or a button that runs the scan again in place for that one permission (the confirm page lists
+ * what is being added, and the same connection keeps working). Optional ones are not asked for when
+ * the bot is created, so connecting stays simple, and are turned on here later. Elsewhere, a bot that
+ * only sees the group messages that @ it says so, with a link to the platform's own setting.
  */
 function BotPermissions({
   agent,
@@ -157,58 +160,90 @@ function BotPermissions({
 }) {
   const { t } = useI18n();
   const { value: platforms } = useCached<PlatformInfo[]>("platforms", api.platforms, []);
-  const [updating, setUpdating] = useState(false);
+  /** The scan running in place, with the permissions it adds; null while none is. */
+  const [scanning, setScanning] = useState<PermissionId[] | null>(null);
   const [read, setRead] = useState(0);
-  const missing = useMissingGroupMessages(connection.id, connection.state === "connected", read);
+  const permissions = usePermissions(connection.id, connection.state === "connected", read);
+  const missing = permissions?.find((p) => p.id === "group_messages" && !p.granted) ?? null;
   const info = platforms?.find((p) => p.platform === connection.platform);
   const rescan = Boolean(info?.reauthorize);
   const grant = missing?.grant;
   if (!rescan && !grant) return null;
-  const steps = rescan ? "rescan" : grant?.steps;
+
+  if (!rescan) {
+    const steps = grant?.steps;
+    return (
+      <Section title={t("connection.permissions")}>
+        <p className="-mt-1 px-1 text-small text-ink2">
+          {steps
+            ? t("permission.missingWithSteps", {
+                missing: t("permission.groupMessages"),
+                steps: t(`permission.steps.${steps}` as MessageKey),
+              })
+            : t("permission.groupMessages")}
+        </p>
+        {grant ? (
+          <a
+            href={grant.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-7 items-center self-start rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
+          >
+            {t("permission.grant")}
+          </a>
+        ) : null}
+      </Section>
+    );
+  }
+
   return (
     <Section title={t("connection.permissions")}>
-      {updating && info ? (
+      {scanning && info ? (
         <div className="flex flex-col items-start gap-4 rounded-card border border-line bg-card px-4 py-3.5">
           <QrFlow
             agent={agent}
             info={info}
             update={connection.id}
+            adding={scanning}
             onDone={() => {
-              setUpdating(false);
+              setScanning(null);
               setRead((n) => n + 1);
               void onChanged();
             }}
           />
-          <Button variant="ghost" small onClick={() => setUpdating(false)}>
+          <Button variant="ghost" small onClick={() => setScanning(null)}>
             {t("agent.cancel")}
           </Button>
         </div>
+      ) : permissions && permissions.length > 0 ? (
+        <>
+          <Group>
+            {permissions.map((p) => (
+              <GroupRow key={p.id}>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span>{t(`permission.name.${p.id}` as MessageKey)}</span>
+                  <span className="text-small text-ink2">
+                    {t(`permission.about.${p.id}` as MessageKey, { name: agent.name })}
+                  </span>
+                </span>
+                {p.granted ? (
+                  <span className="shrink-0 text-small text-ink3">{t("permission.on")}</span>
+                ) : (
+                  <Button small className="shrink-0" onClick={() => setScanning([p.id])}>
+                    {t("permission.turnOn")}
+                  </Button>
+                )}
+              </GroupRow>
+            ))}
+          </Group>
+          <p className="px-1 text-caption text-ink3">{t("permission.rescanHint")}</p>
+        </>
       ) : (
         <>
-          <p className="-mt-1 px-1 text-small text-ink2">
-            {missing
-              ? steps
-                ? t("permission.missingWithSteps", {
-                    missing: t("permission.groupMessages"),
-                    steps: t(`permission.steps.${steps}` as MessageKey),
-                  })
-                : t("permission.groupMessages")
-              : t("connection.permissionsHint")}
-          </p>
-          {rescan ? (
-            <Button variant="ghost" small className="self-start" onClick={() => setUpdating(true)}>
-              {t("connection.permissionsUpdate")}
-            </Button>
-          ) : grant ? (
-            <a
-              href={grant.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-7 items-center self-start rounded-control border border-line2 px-2.5 text-small font-medium hover:bg-bg3"
-            >
-              {t("permission.grant")}
-            </a>
-          ) : null}
+          <p className="-mt-1 px-1 text-small text-ink2">{t("connection.permissionsHint")}</p>
+          <Button variant="ghost" small className="self-start" onClick={() => setScanning([])}>
+            {t("connection.permissionsUpdate")}
+          </Button>
         </>
       )}
     </Section>
@@ -444,15 +479,16 @@ function ConnectionRow({
 }
 
 /**
- * The group-messages permission the bot still lacks on its platform, read live (docs/spec.md 4.2),
- * or null. Read again whenever the window comes back, since the owner grants it on the platform.
+ * The permissions the owner can grant this bot on its platform, read live (docs/spec.md 4.2), or
+ * null while unknown (offline, or the platform would not say). Read again whenever the window comes
+ * back, since the owner may grant one on the platform.
  */
-function useMissingGroupMessages(connectionId: string, connected: boolean, again: number): BotPermission | null {
-  const [missing, setMissing] = useState<BotPermission | null>(null);
+function usePermissions(connectionId: string, connected: boolean, again: number): BotPermission[] | null {
+  const [permissions, setPermissions] = useState<BotPermission[] | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `again` asks for a fresh read after a rescan.
   useEffect(() => {
     if (!connected) {
-      setMissing(null);
+      setPermissions(null);
       return;
     }
     let live = true;
@@ -460,7 +496,7 @@ function useMissingGroupMessages(connectionId: string, connected: boolean, again
       api
         .permissions(connectionId)
         .then(({ permissions }) => {
-          if (live) setMissing(permissions.find((p) => p.id === "group_messages" && !p.granted) ?? null);
+          if (live) setPermissions(permissions);
         })
         .catch(() => {});
     void read();
@@ -470,7 +506,7 @@ function useMissingGroupMessages(connectionId: string, connected: boolean, again
       window.removeEventListener("focus", read);
     };
   }, [connectionId, connected, again]);
-  return missing;
+  return permissions;
 }
 
 /**

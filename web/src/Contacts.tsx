@@ -141,6 +141,8 @@ function Row({
   const label = useLabel();
   const platforms = [...new Set(entry.accounts.map((a) => t(`platform.${a.platform}` as MessageKey)))];
   const tags = [
+    // Department and title, where the chat app gives them: who they are, before what is marked.
+    entry.accounts.find((a) => a.profile)?.profile ?? null,
     waiting ? t("contacts.waiting") : here.some((a) => a.access === "blocked") ? t("access.declined") : null,
     entry.accounts.some((a) => a.owner) ? t("contacts.owner") : null,
     entry.accounts.some((a) => a.bot) ? t("contacts.bot") : null,
@@ -331,6 +333,7 @@ function AccountLine({
   const { t } = useI18n();
   const platform = t(`platform.${account.platform}` as MessageKey);
   const tags = [
+    account.profile,
     account.owner ? t("contacts.owner") : null,
     account.bot ? t("contacts.bot") : null,
     account.linkedBy === "agent" ? t("contacts.linkedByAgent", { name: agentName }) : null,

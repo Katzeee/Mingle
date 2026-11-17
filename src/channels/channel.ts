@@ -129,6 +129,11 @@ export interface OnboardingContext {
    * rebinds the existing connection.
    */
   readonly reauthorize?: Credentials;
+  /**
+   * Optional permissions the owner turned on for this re-authorization (docs/spec.md 6.1). The app
+   * asks for them on top of what it always asks for, and keeps those it was already granted.
+   */
+  readonly adding?: readonly PermissionId[];
 }
 
 export type OnboardingFailure =
@@ -367,6 +372,12 @@ export interface ChannelConnection {
    * where the platform has none to grant. Best effort; never throws, leaves out what it cannot tell.
    */
   permissions?(): Promise<readonly BotPermission[]>;
+  /**
+   * Where this person sits in the organization, in one line ("Product · Product manager"), where
+   * the platform says and the owner turned member profiles on. Undefined when it cannot tell.
+   * Best effort; never throws.
+   */
+  profile?(userId: string): Promise<string | undefined>;
 
   close(): Promise<void>;
 }
@@ -375,10 +386,19 @@ export interface ChannelConnection {
  * A permission the owner grants a bot on the platform itself.
  * `group_messages`: every message in the bot's groups, not only the ones that @ it; on Feishu also
  * the group's earlier messages.
+ * `member_profiles`: the department and title of the people the bot meets, so the agent knows who
+ * is who in the organization (Feishu).
  */
+export type PermissionId = "group_messages" | "member_profiles";
+
 export interface BotPermission {
-  readonly id: "group_messages";
+  readonly id: PermissionId;
   readonly granted: boolean;
+  /**
+   * Not asked for when the bot is created: the owner turns it on later from the bot's settings,
+   * which keeps connecting simple (docs/spec.md 6.1).
+   */
+  readonly optional?: boolean;
   /**
    * How the owner grants it on the platform's site. Absent where it cannot be granted there, or
    * where the console grants it itself (`Channel.reauthorize`). `url` opens the platform's page with the change prefilled where the

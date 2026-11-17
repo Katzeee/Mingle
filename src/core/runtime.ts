@@ -626,22 +626,27 @@ export class AgentRuntime {
   }
 
   /**
-   * The agent's note on the sender, the first time they speak in this session (borrowed from
-   * Raft's peer card): what it wrote down about someone is in front of it when that person shows
-   * up, without a lookup. Empty when there is no note or it was already shown.
+   * Who the sender is, the first time they speak in this session (borrowed from Raft's peer card):
+   * where they sit in the organization, as the chat app says, and what the agent wrote down about
+   * them, in front of it without a lookup. Empty when there is neither, or it was already shown.
    */
   private introduce(senderId: string | null, connectionId: string): string {
     const { store } = this.deps;
     const contact = senderId ? store.contactByPlatformId(connectionId, senderId) : undefined;
-    const personId = contact?.personId;
-    if (!contact || !personId || this.introduced.has(personId)) return "";
-    const note = store.agentPerson(this.agentId, personId)?.note?.trim();
-    if (!note) return "";
-    this.introduced.add(personId);
+    if (!contact) return "";
+    const key = contact.personId ?? contact.id;
+    if (this.introduced.has(key)) return "";
+    const note = contact.personId ? store.agentPerson(this.agentId, contact.personId)?.note?.trim() : undefined;
+    if (!note && !contact.profile) return "";
+    this.introduced.add(key);
     const name = contactName(contact) ?? contact.id;
-    const short =
-      note.length > NOTE_CARD_CHARS ? `${note.slice(0, NOTE_CARD_CHARS)}… (rest: contact info ${contact.id})` : note;
-    return `[mingle] Your note on ${name} (${contact.id}):\n${short}\n`;
+    const lines = [`[mingle] About ${name} (${contact.id})${contact.profile ? `: ${contact.profile}` : ""}`];
+    if (note) {
+      const short =
+        note.length > NOTE_CARD_CHARS ? `${note.slice(0, NOTE_CARD_CHARS)}… (rest: contact info ${contact.id})` : note;
+      lines.push(`Your note: ${short}`);
+    }
+    return `${lines.join("\n")}\n`;
   }
 
   private async ensureSession(): Promise<HarnessSession> {

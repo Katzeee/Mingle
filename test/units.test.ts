@@ -130,6 +130,7 @@ describe("message header contacts", () => {
     personId: null,
     personName: null,
     linkedBy: null,
+    profile: null,
     updatedAt: 0,
   };
 
