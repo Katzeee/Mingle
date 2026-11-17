@@ -147,6 +147,12 @@ export class AgentRuntime {
   private running = false;
   private pending: Pending[] = [];
   private timer: NodeJS.Timeout | undefined;
+  /**
+   * Messages the harness queued behind the running turn (`delivered … (queued)`): it runs them as
+   * its next turn, so the model has not seen them when this turn ends. Borrowed from Raft's
+   * `queuedForNextTurn`: they are not "unanswered" until a turn has run on them.
+   */
+  private queued = new Set<string>();
   /** The deferred unanswered check after an empty turn. */
   private emptyWait: NodeJS.Timeout | undefined;
   private chain: Promise<void> = Promise.resolve();
@@ -457,6 +463,7 @@ export class AgentRuntime {
       notes.map((n) => n.id),
     );
     this.deps.store.markHandoffsDelivered(batch.flatMap((p) => (p.kind === "handoff" ? [p.id] : [])));
+    if (result.outcome === "queued") for (const id of messageIds) this.queued.add(id);
     this.deps.log?.(`${this.agentId}: delivered ${messageIds.join(",") || "note"} (${result.outcome})`);
   }
 
@@ -719,6 +726,8 @@ export class AgentRuntime {
             void this.session?.abort().catch(() => {});
           }
           this.running = true;
+          // The harness runs what it queued as the turn it starts for a prompt.
+          if (!self) this.queued.clear();
           this.turnRevision = this.deps.limitRevision(key);
           this.setStatus("thinking");
           this.deps.onActivity?.("thinking");
@@ -783,6 +792,8 @@ export class AgentRuntime {
     if (fresh) this.deps.store.replaceSession(this.agentId, session.id);
     else this.deps.store.setSessionId(this.agentId, session.id);
     this.session = session;
+    // What the previous session queued is gone with it: nothing still waits on a turn there.
+    this.queued.clear();
     return session;
   }
 
@@ -822,7 +833,8 @@ export class AgentRuntime {
   private afterTurn(completed = false): void {
     if (this.disposed) return;
     const { store } = this.deps;
-    const awaiting = store.awaitingReply(this.agentId);
+    // Still queued behind this turn: the model has not seen them yet, so neither remind nor give up.
+    const awaiting = store.awaitingReply(this.agentId).filter((m) => !this.queued.has(m.id));
     // After the owner's stop, a nudge would restart the work they stopped: what is
     // unanswered is marked so at once, for the owner to retry or ignore.
     const fresh = this.stopped ? [] : awaiting.filter((m) => !store.wasNudged(m.id));
