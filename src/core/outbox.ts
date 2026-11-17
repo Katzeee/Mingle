@@ -1,4 +1,4 @@
-import type { ChannelConnection, Degradation, SendResult } from "../channels/channel.ts";
+import type { ChannelConnection, ChatRef, Degradation, SendResult } from "../channels/channel.ts";
 import type { Message, Store } from "../store/store.ts";
 import { MingleError, notFound } from "./errors.ts";
 import type { LiveReplies } from "./live.ts";
@@ -63,7 +63,7 @@ export class Outbox {
     }
 
     const chunks = split(text, live.capabilities().maxTextLength);
-    const ref = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
+    let ref: ChatRef = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
     const sent: Message[] = [];
     const degraded = new Set<Degradation>(chunks.length > 1 ? ["text_split"] : []);
     for (const [i, chunk] of chunks.entries()) {
@@ -97,6 +97,10 @@ export class Outbox {
         });
       }
       if (result.kind === "sent") {
+        if (result.chat && result.chat !== chat.platformId) {
+          store.renameChatPlatformId(chat.id, result.chat);
+          ref = { ...ref, platformId: result.chat };
+        }
         store.setOutboundResult(record.id, "sent", result.platformId);
         for (const d of result.degraded ?? []) degraded.add(d);
         sent.push(store.message(record.id) as Message);

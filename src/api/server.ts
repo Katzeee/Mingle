@@ -7,6 +7,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import QRCode from "qrcode";
 import type { CredentialField, OnboardingMethod, Platform, Trust } from "../channels/channel.ts";
+import { sendTarget } from "../core/direct.ts";
 import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
 import { readRole } from "../core/home.ts";
@@ -149,9 +150,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.post("/v1/agent/messages/send", async (c) => {
     const agent = c.get("agent");
     refuseIfStopped(agent);
-    const body = await c.req.json<{ chatId: string; text: string; files?: string[] }>();
+    const body = await c.req.json<{ to?: string; chatId?: string; text: string; files?: string[] }>();
+    // A chat, or a person by contact or person ID: their direct chat, opened if need be.
+    const to = body.to ?? body.chatId ?? "";
+    const chatId = await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to);
     const report = await mingle.outbox.send(agent.id, {
-      chatId: body.chatId,
+      chatId,
       text: body.text ?? "",
       files: resolveFiles(mingle.homeDir(agent), body.files),
     });
@@ -180,7 +184,13 @@ export function createApi(mingle: Mingle): Hono<Env> {
     let members: { id: string; name: string }[] | null = null;
     if (live?.capabilities().listMembers) {
       const ref = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
-      members = (await live.listMembers(ref)).map((m) => ({ id: m.id, name: m.name }));
+      // Each member as a contact, so the agent can name them anywhere a contact ID goes (send --to).
+      members = (await live.listMembers(ref))
+        .filter((m) => m.id && m.id !== live.bot.id)
+        .map((m) => {
+          const contact = store.touchContact(chat.connectionId, m.id, m.name);
+          return { id: contact.id, name: contactName(contact) ?? m.name };
+        });
     }
     return c.json({ id: chat.id, platform: connection?.platform, kind: chat.kind, name: chat.name, members });
   });

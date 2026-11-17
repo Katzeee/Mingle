@@ -427,6 +427,11 @@ export function slackChannel(options: SlackOptions = {}): Channel {
           await writeFile(toPath, Buffer.from(await response.arrayBuffer()));
         },
 
+        async openDirect(userId: string) {
+          const { channel } = await call<{ channel: { id: string } }>("conversations.open", { users: userId });
+          return channel.id;
+        },
+
         async messageUser(userId: string, text: string) {
           const { channel } = await call<{ channel: { id: string } }>("conversations.open", { users: userId });
           await call("chat.postMessage", { channel: channel.id, ...content(text) });

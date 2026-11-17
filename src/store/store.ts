@@ -126,6 +126,8 @@ export interface Chat {
   parentId: string | null;
   /** Groups only: whether the owner let this group in. */
   access: Access;
+  /** Direct chats only: the other person's ID on the platform, when known. */
+  peerId: string | null;
 }
 
 export interface Attachment {
@@ -454,6 +456,8 @@ export class Store {
     kind: ChatKind;
     name?: string | undefined;
     parentId?: string | undefined;
+    /** Direct chats: the other person. */
+    peerId?: string | undefined;
   }): Chat {
     const existing = this.db
       .prepare("SELECT * FROM chats WHERE connection_id = ? AND platform_id = ?")
@@ -470,15 +474,52 @@ export class Store {
           .prepare("UPDATE chats SET parent_id = ?, updated_at = ? WHERE id = ?")
           .run(input.parentId, t, String(existing.id));
       }
+      if (input.peerId && !existing.peer_id) {
+        this.db
+          .prepare("UPDATE chats SET peer_id = ?, updated_at = ? WHERE id = ?")
+          .run(input.peerId, t, String(existing.id));
+      }
       return this.chat(String(existing.id)) as Chat;
     }
     const id = this.mint("chats", "c", 4);
     this.db
       .prepare(
-        "INSERT INTO chats (id, connection_id, platform_id, kind, name, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chats (id, connection_id, platform_id, kind, name, parent_id, peer_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, input.connectionId, input.platformId, input.kind, input.name ?? null, input.parentId ?? null, t, t);
+      .run(
+        id,
+        input.connectionId,
+        input.platformId,
+        input.kind,
+        input.name ?? null,
+        input.parentId ?? null,
+        input.peerId ?? null,
+        t,
+        t,
+      );
     return this.chat(id) as Chat;
+  }
+
+  /** The direct chat with this person on this bot, if there is one. */
+  directChat(connectionId: string, peerId: string): Chat | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM chats WHERE connection_id = ? AND kind = 'dm' AND peer_id = ? ORDER BY created_at LIMIT 1",
+      )
+      .get(connectionId, peerId) as Row | undefined;
+    return row && toChat(row);
+  }
+
+  /**
+   * The platform named the chat once it existed: a direct chat opened by addressing the person gets
+   * the chat's own ID, so their replies land in it. Kept as it was if another chat already has that ID.
+   */
+  renameChatPlatformId(id: string, platformId: string): void {
+    try {
+      this.db.prepare("UPDATE chats SET platform_id = ?, updated_at = ? WHERE id = ?").run(platformId, this.now(), id);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+    }
   }
 
   chat(id: string): Chat | undefined {
@@ -1423,6 +1464,7 @@ function toChat(r: Row): Chat {
     name: str(r.name),
     parentId: str(r.parent_id),
     access: access(r.access),
+    peerId: str(r.peer_id),
   };
 }
 

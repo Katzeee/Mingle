@@ -97,6 +97,11 @@ function fakeLark() {
               if (!history) throw Object.assign(new Error("no permission"), { code: 230027 });
               return { code: 0, data: { items: history } };
             },
+            // A message sent to someone by open_id lives in the direct chat Feishu made for it.
+            async get({ path }: { path: { message_id: string } }) {
+              const to = sent.find((_, i) => `om_out_${i + 1}` === path.message_id)?.to ?? "";
+              return { code: 0, data: { items: [{ message_id: path.message_id, chat_id: `oc_dm_${to}` }] } };
+            },
           },
           chatMembers: {
             async get({ path, params }: { path: { chat_id: string }; params?: { page_token?: string } }) {
@@ -368,6 +373,23 @@ describe("feishu group messages permission", () => {
     });
     const connection = await channel.connect({ appId: "cli_1", appSecret: "s" }, events);
     expect(options?.policy).toMatchObject({ requireMention: false });
+    await connection.close();
+  });
+
+  it("writes first to someone by open_id and reports the direct chat Feishu made", async () => {
+    const lark = fakeLark();
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect({ appId: "cli_1", appSecret: "s" }, events);
+    const to = await connection.openDirect?.("ou_9");
+    expect(to).toBe("ou_9");
+    const result = await connection.send({ chat: { platformId: to as string, kind: "dm" }, text: "hi" });
+    expect(lark.sent[0]?.to).toBe("ou_9");
+    expect(result).toEqual({ kind: "sent", platformId: "om_out_1", chat: "oc_dm_ou_9" });
+    // A chat Feishu already named needs no lookup.
+    expect(await connection.send({ chat: { platformId: "oc_dm_ou_9", kind: "dm" }, text: "again" })).toEqual({
+      kind: "sent",
+      platformId: "om_out_2",
+    });
     await connection.close();
   });
 
