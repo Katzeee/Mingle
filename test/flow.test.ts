@@ -139,6 +139,55 @@ describe("message flow", () => {
     expect(current.turns).toHaveLength(1); // No "Not answered yet" turn.
   });
 
+  it("waits after a turn the harness ended without running it, then the late answer counts (#125)", async () => {
+    // Kimi Code answers a prompt queued behind its own turn at once, with no model work. The
+    // model sees the message minutes later and answers it then.
+    let env: Record<string, string> = {};
+    current = await rig(
+      async (t) => {
+        env = t.options.env as Record<string, string>;
+      },
+      { emptyTurnWaitMs: 3000 },
+    );
+    const { channel, mingle, agentId } = current;
+    const inbound = channel.receive({ text: "authorized" });
+    await until(() => current?.turns.length === 1);
+    await sleep(200);
+    const chat = mingle.store.agentChats(agentId)[0]?.id as string;
+    const message = mingle.store.messageByPlatformId(chat, inbound.platformId);
+    expect(message?.state).toBe("delivered"); // Not nudged, not given up on.
+    await runCli(env, ["message", "reply", message?.id as string], "Done, all 22 files are filed.");
+    await sleep(3500);
+    expect(current.turns).toHaveLength(1); // No reminder: it was answered.
+    expect(mingle.store.message(message?.id as string)?.state).toBe("replied");
+  });
+
+  it("reminds at once after a turn where the model worked but did not answer (#125)", async () => {
+    current = await rig(
+      async (t) => {
+        if (!t.input.startsWith("[mingle]")) await t.tool("Bash", "ls", async () => {});
+      },
+      { emptyTurnWaitMs: 60_000 },
+    );
+    current.channel.receive({ text: "one" });
+    await until(() => current?.turns.length === 2, 3000);
+    expect(current.turns[1]?.input).toMatch(/^\[mingle\] Not answered yet/);
+  });
+
+  it("after an empty turn and no answer, still reminds once and then gives up (#125)", async () => {
+    current = await rig(async () => {}, { emptyTurnWaitMs: 300 });
+    const { channel, mingle, agentId } = current;
+    const inbound = channel.receive({ text: "authorized" });
+    await until(() => current?.turns.length === 1);
+    await sleep(150);
+    expect(current.turns).toHaveLength(1);
+    await until(() => current?.turns.length === 2);
+    expect(current.turns[1]?.input).toMatch(/^\[mingle\] Not answered yet/);
+    const chat = mingle.store.agentChats(agentId)[0]?.id as string;
+    await until(() => mingle.store.messageByPlatformId(chat, inbound.platformId)?.state === "unanswered");
+    expect(current.turns).toHaveLength(2);
+  });
+
   it("marks a message unanswered when the agent ignores the nudge too", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
