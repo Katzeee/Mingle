@@ -122,6 +122,8 @@ export function holdUntil(why: FailureInfo, holds: number, now: number): number 
 type Pending =
   | { readonly kind: "message"; readonly id: string }
   | { readonly kind: "text"; readonly text: string }
+  /** The one reminder about messages the agent has not answered; checked again when delivered. */
+  | { readonly kind: "nudge"; readonly ids: readonly string[] }
   | { readonly kind: "handoff"; readonly id: string };
 
 /**
@@ -359,13 +361,17 @@ export class AgentRuntime {
     const taken = this.running ? this.pending.filter((p) => p.kind === "message") : this.pending.slice();
     this.pending = this.running ? this.pending.filter((p) => p.kind !== "message") : [];
     // A message settled while it waited (answered, or queued twice) is not delivered again.
-    const batch = taken.filter((p) =>
-      p.kind === "text"
-        ? true
-        : p.kind === "handoff"
-          ? this.deps.store.handoff(p.id)?.state === "waiting"
-          : this.deps.store.message(p.id)?.state === "received",
-    );
+    // A reminder names only what is still unanswered: the agent may have answered meanwhile (a
+    // background command finished and woke it), and a stale reminder makes it answer twice.
+    const batch = taken.flatMap((p): Pending[] => {
+      if (p.kind === "text") return [p];
+      if (p.kind === "handoff") return this.deps.store.handoff(p.id)?.state === "waiting" ? [p] : [];
+      if (p.kind === "nudge") {
+        const ids = p.ids.filter((id) => this.deps.store.message(id)?.state === "delivered");
+        return ids.length > 0 ? [{ kind: "nudge", ids }] : [];
+      }
+      return this.deps.store.message(p.id)?.state === "received" ? [p] : [];
+    });
     if (batch.length === 0) return;
     if (this.blocked && Date.now() >= this.blocked.until) this.unblock();
     if (this.holdBatch(batch)) return;
@@ -406,6 +412,7 @@ export class AgentRuntime {
     const text = batch
       .flatMap((p) => {
         if (p.kind === "text") return [p.text];
+        if (p.kind === "nudge") return [nudgeText(p.ids)];
         if (p.kind === "handoff") {
           const handoff = this.deps.store.handoff(p.id);
           return handoff ? [formatHandoff(handoff)] : [];
@@ -791,11 +798,7 @@ export class AgentRuntime {
     }
     if (fresh.length > 0) {
       store.markNudged(fresh.map((m) => m.id));
-      const ids = fresh.map((m) => m.id).join(", ");
-      this.pending.push({
-        kind: "text",
-        text: `[mingle] Not answered yet: ${ids}. Reply to each with "$MINGLE_CLI" message reply <id>; a short acknowledgement is enough when your answer is already elsewhere in the chat. A message left without any reply is shown to its sender as not answered.`,
-      });
+      this.pending.push({ kind: "nudge", ids: fresh.map((m) => m.id) });
     }
     // Only after work that finished, with nothing else waiting: the hint never interrupts or joins other work.
     if (completed && !this.stopped && this.pending.length === 0) this.checkMemory();
@@ -861,4 +864,8 @@ export class AgentRuntime {
     this.setStatus("error", message, failure);
     this.settleAwaiting({ failure });
   }
+}
+
+function nudgeText(ids: readonly string[]): string {
+  return `[mingle] Not answered yet: ${ids.join(", ")}. Reply to each with "$MINGLE_CLI" message reply <id>; a short acknowledgement is enough when your answer is already elsewhere in the chat. A message left without any reply is shown to its sender as not answered.`;
 }
