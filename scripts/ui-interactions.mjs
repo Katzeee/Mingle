@@ -225,6 +225,7 @@ const PERMISSIONS_MOCK = String.raw`(() => {
       return json({
         permissions: [
           { id: "group_messages", granted: true },
+          { id: "bot_messages", granted: true },
           { id: "member_profiles", granted: on() === "granted", optional: true },
         ],
       });

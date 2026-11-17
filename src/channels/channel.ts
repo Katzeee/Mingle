@@ -386,10 +386,12 @@ export interface ChannelConnection {
  * A permission the owner grants a bot on the platform itself.
  * `group_messages`: every message in the bot's groups, not only the ones that @ it; on Feishu also
  * the group's earlier messages.
+ * `bot_messages`: what other bots send in the bot's groups. Feishu only; other platforms do not
+ * report it.
  * `member_profiles`: the department and title of the people the bot meets, so the agent knows who
  * is who in the organization (Feishu).
  */
-export type PermissionId = "group_messages" | "member_profiles";
+export type PermissionId = "group_messages" | "bot_messages" | "member_profiles";
 
 export interface BotPermission {
   readonly id: PermissionId;
