@@ -774,7 +774,7 @@ export class AgentRuntime {
     const stale = this.stopped ? awaiting : awaiting.filter((m) => store.wasNudged(m.id));
     // Reminded once and still not quoted, but the agent did speak in that chat afterwards (it
     // answered by quoting another message there, or one answer covered several messages): the
-    // person has their answer, so the message ends as answered, not "did not get a reply".
+    // person has their answer, so the message ends as answered, not "no reply yet".
     const covered = this.stopped ? [] : stale.filter((m) => store.spokeSince(m.chatId, m.createdAt));
     const answered = store.moveInbound(
       covered.map((m) => m.id),

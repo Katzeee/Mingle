@@ -129,7 +129,7 @@ describe("live replies", () => {
     const { channel } = current;
     const inbound = channel.receive({ text: "hello?" });
     await until(() => channel.lives[0]?.final);
-    expect(channel.lives[0]?.final).toBe("*This message did not get a reply.*");
+    expect(channel.lives[0]?.final).toBe("*No reply yet.*");
     expect(channel.reactions.at(-1)).toBe(`${inbound.platformId}:none`);
   });
 
