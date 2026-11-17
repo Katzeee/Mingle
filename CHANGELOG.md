@@ -3,6 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.2.4
+
+- An agent no longer stays "working" forever on a command that never ends. When a turn reports nothing at all — no thinking, text, tool call, subagent or background-task update — for twenty minutes, Mingle stops the turn on its own rather than counting it an owner stop: the harness gets thirty seconds to end it before its process is replaced and the conversation continues in a new one. Messages sent while it was stuck are then answered in a fresh turn, or shown as "No reply yet", instead of disappearing into the stuck turn — the status no longer sits on a tool name and the owner no longer has to reset the agent by hand.
+
 ## 0.2.3
 
 - A message is no longer written off a second after it was sent when the agent's harness acknowledged it without running it. Kimi Code answers a prompt queued behind its own background task instantly with an empty turn, and Mingle used to take that as the agent staying silent — it reminded once, got the same instant empty answer, and marked the message unanswered, all before the model ever saw it. Such a turn now counts as no turn at all: the message waits for the turn that really runs it, is checked again after ten minutes or the next real turn, and the agent's late answer still settles it. A message a harness without steer queued for its next turn is likewise not reminded about until a turn has run on it.
