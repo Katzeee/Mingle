@@ -6,7 +6,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import QRCode from "qrcode";
-import type { CredentialField, OnboardingMethod, Platform, Trust } from "../channels/channel.ts";
+import type { CredentialField, OnboardingMethod, PermissionId, Platform, Trust } from "../channels/channel.ts";
 import { sendTarget } from "../core/direct.ts";
 import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
@@ -188,8 +188,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
       members = (await live.listMembers(ref))
         .filter((m) => m.id && m.id !== live.bot.id)
         .map((m) => {
-          const contact = store.touchContact(chat.connectionId, m.id, m.name);
-          return { id: contact.id, name: contactName(contact) ?? m.name };
+          let contact = store.touchContact(chat.connectionId, m.id, m.name);
+          if (m.isBot && !contact.isBot) contact = store.setContactBot(contact.id, true) ?? contact;
+          return {
+            id: contact.id,
+            name: contactName(contact) ?? m.name,
+            profile: contact.profile,
+            bot: contact.isBot,
+          };
         });
     }
     return c.json({ id: chat.id, platform: connection?.platform, kind: chat.kind, name: chat.name, members });
@@ -205,6 +211,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     bot: k.isBot && !k.owner,
     person: k.personId,
     linkedBy: k.linkedBy,
+    profile: k.profile,
   });
 
   app.get("/v1/agent/contacts", (c) => {
@@ -775,7 +782,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.get("/v1/admin/agents/:id/contacts", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const shared = sharedOwners(store.connections(agent.id));
-    const all = store.agentContacts(agent.id);
+    // Who talked to the agent, or whom someone already decided something about. Group members it
+    // only knows from the member list stay in its address book, not on the owner's page.
+    const wrote = store.contactsWhoWrote(agent.id);
+    const all = store
+      .agentContacts(agent.id)
+      .filter((k) => wrote.has(k.id) || k.owner || k.personId || k.alias || k.access !== null);
     const account = (k: (typeof all)[number]) => ({
       id: k.id,
       platform: k.platform,
@@ -788,6 +800,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       ownerShared: k.owner && shared.has(k.connectionId),
       bot: k.isBot && !k.owner,
       linkedBy: k.linkedBy,
+      profile: k.profile,
     });
     const byPerson = new Map(store.agentPeople(agent.id).map((p) => [p.id, p]));
     const seen = new Set<string>();
@@ -1055,8 +1068,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   /** QR onboarding: start, then poll. The QR is rendered here so the console needs no encoder. */
   app.post("/v1/admin/agents/:id/onboarding", async (c) => {
-    const { platform, connectionId } = await c.req.json<{ platform: Platform; connectionId?: string }>();
-    const session = mingle.startOnboarding(c.req.param("id"), platform, connectionId || undefined);
+    const { platform, connectionId, adding } = await c.req.json<{
+      platform: Platform;
+      connectionId?: string;
+      /** Optional permissions to turn on while re-authorizing that bot. */
+      adding?: PermissionId[];
+    }>();
+    const known: readonly PermissionId[] = ["group_messages", "bot_messages", "member_profiles"];
+    const session = mingle.startOnboarding(
+      c.req.param("id"),
+      platform,
+      connectionId || undefined,
+      (adding ?? []).filter((id) => known.includes(id)),
+    );
     return c.json({ id: session.id });
   });
 

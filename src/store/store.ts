@@ -92,6 +92,8 @@ export interface Contact {
   personName: string | null;
   /** Who put it in its person. Only the owner's links may carry anything beyond a name and a note. */
   linkedBy: LinkedBy | null;
+  /** Their department and title as the chat app reports them, where member profiles are on. */
+  profile: string | null;
   updatedAt: number;
 }
 
@@ -610,6 +612,20 @@ export class Store {
     return rows.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform, owner: r.is_owner === 1 }));
   }
 
+  /** This agent's contacts who have written to one of its bots: who the owner has seen talk to it. */
+  contactsWhoWrote(agentId: string): Set<string> {
+    const rows = this.db
+      .prepare(
+        `SELECT k.id FROM contacts k JOIN connections n ON n.id = k.connection_id
+         WHERE n.agent_id = ? AND EXISTS (
+           SELECT 1 FROM messages m JOIN chats c ON c.id = m.chat_id
+           WHERE c.connection_id = k.connection_id AND m.direction = 'in' AND m.sender_id = k.platform_id
+         )`,
+      )
+      .all(agentId) as Row[];
+    return new Set(rows.map((r) => String(r.id)));
+  }
+
   setContactAccess(id: string, access: Access): void {
     this.db.prepare("UPDATE contacts SET access = ?, updated_at = ? WHERE id = ?").run(access, this.now(), id);
   }
@@ -679,6 +695,11 @@ export class Store {
   }
 
   /** Mark a contact as a bot, or as a person again. */
+  /** What the chat app says about where they sit; null when it no longer says. */
+  setContactProfile(id: string, profile: string | null): void {
+    this.db.prepare("UPDATE contacts SET profile = ? WHERE id = ?").run(profile, id);
+  }
+
   setContactBot(id: string, isBot: boolean): Contact | undefined {
     this.db.prepare("UPDATE contacts SET is_bot = ?, updated_at = ? WHERE id = ?").run(isBot ? 1 : 0, this.now(), id);
     return this.contact(id);
@@ -1441,6 +1462,7 @@ function toContact(r: Row): Contact {
     personId: str(r.person_id),
     personName: str(r.person_name),
     linkedBy: (str(r.linked_by) as LinkedBy | null) ?? null,
+    profile: str(r.profile),
     updatedAt: Number(r.updated_at),
   };
 }

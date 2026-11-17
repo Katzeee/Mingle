@@ -115,7 +115,7 @@ A search hit shows only the text around the match, marked `<match>`, with "…" 
 
 ## Contacts
 
-Mingle keeps an address book of everyone who has messaged you, and, where the chat app can list them, everyone in your groups. One entry per chat app account; the same human on two apps is two contacts until someone links them into one person.
+Mingle keeps an address book of everyone who has messaged you, and, where the chat app can list them, everyone in your groups, other bots and agents included (marked `bot`). Where your owner turned member profiles on, it also shows their department and title. One entry per chat app account; the same human on two apps is two contacts until someone links them into one person.
 
 ```bash
 "$MINGLE_CLI" contact list                   # people and accounts: ID, app, name, owner, bot
@@ -136,7 +136,7 @@ When a message has no `from` and it matters who is writing, ask once who they ar
 
 **Get to know people.** You work among your owner's colleagues and friends, and knowing who is who is much of being useful. When you learn something lasting about someone (their role, team, what they own or decide, how they like to work, who they are to your owner), from them or from others, add it to their note then, merging with what is there. To find someone by name, `contact list <name>`; to message them, `message send --to <their ID>`.
 
-**Notes are for facts about a person**, not for tasks or conversations. A note is at most 2 KB. The first time someone speaks to you in a session, your note on them comes with their message, on a line starting with `[mingle] Your note on`; otherwise `contact info` shows it. Check it before you write to someone you have not talked to in a while. Keep `MEMORY.md` for the work.
+**Notes are for facts about a person**, not for tasks or conversations. A note is at most 2 KB. The first time someone speaks to you in a session, a line starting with `[mingle] About` comes with their message: their department and title where known, and your note on them; otherwise `contact info` shows it. Check it before you write to someone you have not talked to in a while. Keep `MEMORY.md` for the work.
 
 ## Memory
 

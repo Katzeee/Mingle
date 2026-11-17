@@ -64,6 +64,19 @@ export const FEISHU_SCOPES = [
   "contact:user.base:readonly",
 ];
 
+/**
+ * Asked for only when the owner turns member profiles on from the bot's settings (docs/spec.md
+ * 4.2, 6.1): reading a user or a department at all, then the title, the departments, and their
+ * names. Email and phone stay out. Checked against Feishu's docs for contact-v3 user/get and
+ * department/get; the data is limited to the app's contact range.
+ */
+export const PROFILE_SCOPES = [
+  "contact:contact.base:readonly",
+  "contact:user.employee:readonly",
+  "contact:user.department:readonly",
+  "contact:department.base:readonly",
+];
+
 const CAPABILITIES: Capabilities = {
   quoteReply: true,
   reactions: true,
@@ -103,6 +116,8 @@ export interface FeishuApi {
     agentName?: string;
     /** Re-authorize an existing app: the confirm page shows the permissions being added. */
     appId?: string;
+    /** Tenant scopes to ask for. */
+    scopes: readonly string[];
     onQRCodeReady: (info: { url: string; expireIn: number }) => void;
   }): Promise<{ appId: string; appSecret: string; ownerId?: string; domain: Domain }>;
   botInfo(credentials: { appId: string; appSecret: string; domain: Domain }): Promise<BotInfo>;
@@ -168,6 +183,19 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
         return;
       }
 
+      // What to ask for: the base set, and member profiles when the owner is turning them on now
+      // or the app already has them (a later scan never drops what was granted).
+      let scopes: readonly string[] = FEISHU_SCOPES;
+      const updating = context?.reauthorize;
+      let profiles = context?.adding?.includes("member_profiles") ?? false;
+      if (!profiles && updating?.appId && updating.appSecret) {
+        const granted = await api
+          .scopes({ appId: updating.appId, appSecret: updating.appSecret, domain: domainOf(updating) })
+          .catch(() => new Map<string, boolean>());
+        profiles = PROFILE_SCOPES.every((scope) => granted.get(scope) === true);
+      }
+      if (profiles) scopes = [...FEISHU_SCOPES, ...PROFILE_SCOPES];
+
       // QR registration. The SDK reports the QR through a callback; turn it into the event stream.
       const queue: OnboardingEvent[] = [];
       let wake: (() => void) | undefined;
@@ -180,6 +208,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           signal,
           ...(context?.agentName ? { agentName: context.agentName } : {}),
           ...(context?.reauthorize?.appId ? { appId: context.reauthorize.appId } : {}),
+          scopes,
           onQRCodeReady: ({ url, expireIn }) =>
             push({ kind: "qr_ready", qrContent: url, expiresAt: Date.now() + expireIn * 1000 }),
         })
@@ -361,23 +390,60 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
       const readPermissions = async (): Promise<readonly BotPermission[]> => {
         try {
           const granted = await api.scopes(credentials);
-          // Both granted by scanning again from the bot's settings (`reauthorize`), not on Feishu's site.
+          // Granted by scanning again from the bot's settings (`reauthorize`), not on Feishu's site.
           return [
             { id: "group_messages", granted: granted.get(GROUP_MESSAGES_SCOPE) === true },
             { id: "bot_messages", granted: BOT_MESSAGES_SCOPES.every((s) => granted.get(s) === true) },
+            {
+              id: "member_profiles",
+              granted: PROFILE_SCOPES.every((scope) => granted.get(scope) === true),
+              optional: true,
+            },
           ];
         } catch {
           return [];
         }
+      };
+      const permissions = (): Promise<readonly BotPermission[]> => {
+        if (!scopes || Date.now() - scopes.at > SCOPES_TTL_MS) scopes = { at: Date.now(), read: readPermissions() };
+        return scopes.read;
+      };
+      const departments = new Map<string, Promise<string | undefined>>();
+      const department = (id: string): Promise<string | undefined> => {
+        let name = departments.get(id);
+        if (!name) {
+          name = (channel as LarkChannelLike).rawClient.contact.v3.department
+            .get({ path: { department_id: id }, params: { department_id_type: "open_department_id" } })
+            .then((r) => r.data?.department?.name || undefined)
+            .catch(() => undefined);
+          departments.set(id, name);
+        }
+        return name;
       };
 
       return {
         bot,
         capabilities: () => CAPABILITIES,
 
-        permissions() {
-          if (!scopes || Date.now() - scopes.at > SCOPES_TTL_MS) scopes = { at: Date.now(), read: readPermissions() };
-          return scopes.read;
+        permissions,
+
+        async profile(userId: string) {
+          if (!channel) return undefined;
+          const on = (await permissions()).some((p) => p.id === "member_profiles" && p.granted);
+          if (!on) return undefined;
+          try {
+            const response = await channel.rawClient.contact.v3.user.get({
+              path: { user_id: userId },
+              params: { user_id_type: "open_id", department_id_type: "open_department_id" },
+            });
+            const user = response.data?.user;
+            const names = await Promise.all((user?.department_ids ?? []).slice(0, 3).map(department));
+            const where = names.filter(Boolean).join(", ");
+            return [where, user?.job_title?.trim()].filter(Boolean).join(" · ") || undefined;
+          } catch {
+            // Outside the app's contact range, or offline.
+            return undefined;
+          }
         },
 
         async send(message: OutboundMessage): Promise<SendResult> {
@@ -499,6 +565,17 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
               }
               if (!response.data?.has_more || !response.data.page_token) break;
               pageToken = response.data.page_token;
+            }
+            // The member list leaves bots out; Feishu lists them separately (im:chat:readonly).
+            const raw = channel.rawClient;
+            // People are listed even when the bots cannot be.
+            const bots = await (async () =>
+              raw.request<{ data?: { items?: { bot_id?: string; bot_name?: string }[] } }>({
+                method: "GET",
+                url: `/open-apis/im/v1/chats/${encodeURIComponent(chat.platformId)}/members/bots`,
+              }))().catch(() => undefined);
+            for (const item of bots?.data?.items ?? []) {
+              if (item.bot_id) members.push({ id: item.bot_id, name: item.bot_name ?? "", isBot: true });
             }
           } catch {
             // Not in the chat, a missing im:chat:readonly grant, or a network error: report nobody.
@@ -631,7 +708,7 @@ function sendFailure(error: unknown): SendResult {
 
 function officialApi(): FeishuApi {
   return {
-    async register({ signal, agentName, appId, onQRCodeReady }) {
+    async register({ signal, agentName, appId, scopes, onQRCodeReady }) {
       const result = await lark.registerApp({
         source: "mingle",
         signal,
@@ -646,7 +723,7 @@ function officialApi(): FeishuApi {
               },
             }),
         addons: {
-          scopes: { tenant: [...FEISHU_SCOPES] },
+          scopes: { tenant: [...scopes] },
           events: { items: { tenant: ["im.message.receive_v1", "im.chat.member.bot.added_v1"] } },
         },
         onQRCodeReady,

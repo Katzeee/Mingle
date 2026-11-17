@@ -25,8 +25,10 @@ describe("getting to know people", { timeout: 60_000 }, () => {
     current.channel.members = MEMBERS;
     current.channel.joined({ platformId: "-200", kind: "group", name: "KBE" });
     await until(() => names(current as Rig).includes("Ying Shanshan"));
-    // People only: other bots are not read in from the list.
-    expect(names(current)).toEqual(["Ying Shanshan", "Zhang San"]);
+    await until(() => names(current as Rig).includes("Other bot") || undefined);
+    // Other bots too, marked as bots: agents talk to each other.
+    expect(names(current)).toEqual(["Other bot", "Ying Shanshan", "Zhang San"]);
+    expect(current.mingle.store.agentContacts(current.agentId).find((k) => k.name === "Other bot")?.isBot).toBe(true);
     expect(current.channel.memberReads).toBe(1);
 
     // Active in the same group within a few hours: not read again.
@@ -78,7 +80,7 @@ describe("getting to know people", { timeout: 60_000 }, () => {
     channel.receive({ text: "@alex_bot I run the hiking club" });
     await until(() => channel.sent.length === 1);
     // Before the note existed: nothing to show.
-    expect(inputs[0]).not.toContain("[mingle] Your note on");
+    expect(inputs[0]).not.toContain("[mingle] About");
 
     const idle = () => until(() => !current?.mingle.runtime(current.agentId)?.busy || undefined);
     await idle();
@@ -86,12 +88,36 @@ describe("getting to know people", { timeout: 60_000 }, () => {
     await until(() => inputs.find((i) => i.includes("what's on Saturday")));
     const second = inputs.find((i) => i.includes("what's on Saturday")) as string;
     expect(second).toMatch(
-      /\[mingle\] Your note on Zhang San \(u\w+\):\nRuns the hiking club\. Prefers short messages\.\n\[msg=/,
+      /\[mingle\] About Zhang San \(u\w+\)\nYour note: Runs the hiking club\. Prefers short messages\.\n\[msg=/,
     );
 
     await idle();
     channel.receive({ text: "@alex_bot and Sunday?" });
     const third = await until(() => inputs.find((i) => i.includes("and Sunday?")));
-    expect(third).not.toContain("Your note on");
+    expect(third).not.toContain("[mingle] About");
+  });
+
+  it("learns where people sit and shows it with their first message", async () => {
+    const inputs: string[] = [];
+    current = await rig(async (t) => {
+      inputs.push(t.input);
+    });
+    current.channel.members = MEMBERS;
+    current.channel.profiles.set("u2", "Product · Product manager");
+    current.channel.joined({ platformId: "-200", kind: "group", name: "KBE" });
+    const store = current.mingle.store;
+    const shanshan = await until(() =>
+      store.agentContacts(current?.agentId as string).find((k) => k.profile === "Product · Product manager"),
+    );
+    // Bots have no profile to read.
+    expect(store.agentContacts(current.agentId).find((k) => k.name === "Other bot")?.profile).toBeNull();
+
+    current.channel.receive({
+      chat: { platformId: "-200", kind: "group", name: "KBE" },
+      sender: { id: "u2", name: "Ying Shanshan", isBot: false },
+      text: "@alex_bot the operators live in kb-operators",
+    });
+    const first = await until(() => inputs.find((i) => i.includes("kb-operators")));
+    expect(first).toContain(`[mingle] About Ying Shanshan (${shanshan.id}): Product · Product manager\n[msg=`);
   });
 });

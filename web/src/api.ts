@@ -93,9 +93,13 @@ export interface ConnectionView {
  * every message in its groups, not only the ones that @ it. `bot_messages`: what other bots send in
  * its groups (Feishu only). `grant.steps` picks the instructions.
  */
+export type PermissionId = "group_messages" | "bot_messages" | "member_profiles";
+
 export interface BotPermission {
-  id: "group_messages" | "bot_messages";
+  id: PermissionId;
   granted: boolean;
+  /** Not asked for when the bot is created; the owner turns it on here (Feishu member profiles). */
+  optional?: boolean;
   grant?: { url: string; steps?: "telegram" | "discord" };
 }
 
@@ -182,6 +186,8 @@ export interface ContactAccount {
   ownerShared: boolean;
   bot: boolean;
   linkedBy: "owner" | "agent" | null;
+  /** Department and title from the chat app, where member profiles are on. */
+  profile: string | null;
 }
 
 /** A person with their accounts, or one account on its own (`person` null). */
@@ -460,10 +466,11 @@ export const api = {
   /** A fresh code for claiming a bot that has no owner yet. */
   claim: (connectionId: string) =>
     call<{ code: string; expiresAt: number }>("POST", `/v1/admin/connections/${connectionId}/claim`),
-  startOnboarding: (id: string, platform: Platform, connectionId?: string) =>
+  startOnboarding: (id: string, platform: Platform, connectionId?: string, adding?: readonly PermissionId[]) =>
     call<{ id: string }>("POST", `/v1/admin/agents/${id}/onboarding`, {
       platform,
       ...(connectionId ? { connectionId } : {}),
+      ...(adding?.length ? { adding } : {}),
     }),
   onboarding: (id: string) => call<OnboardingState>("GET", `/v1/admin/onboarding/${id}`),
   cancelOnboarding: (id: string) => call("DELETE", `/v1/admin/onboarding/${id}`),

@@ -12,6 +12,7 @@ import {
   feishuChannel,
   GROUP_MESSAGES_SCOPE,
   type LarkChannelLike,
+  PROFILE_SCOPES,
   toInbound,
 } from "../src/channels/feishu/feishu.ts";
 import { eventually, type Rig, rig, until } from "./helpers.ts";
@@ -121,12 +122,25 @@ function fakeLark() {
           },
         },
       },
+      async request({ url }: { url: string }) {
+        if (url === "/open-apis/im/v1/chats/oc_1/members/bots")
+          return { code: 0, data: { items: [{ bot_id: "ou_other_bot", bot_name: "值班机器人" }] } };
+        throw new Error(`unexpected ${url}`);
+      },
       contact: {
         v3: {
           user: {
             get: async ({ path }: { path: { user_id: string } }) => {
               contactGets.push(path.user_id);
-              return { data: { user: { name: "李四" } } };
+              return {
+                data: { user: { name: "李四", job_title: "产品经理", department_ids: ["od_pd", "od_gone"] } },
+              };
+            },
+          },
+          department: {
+            get: async ({ path }: { path: { department_id: string } }) => {
+              if (path.department_id !== "od_pd") throw Object.assign(new Error("no authority"), { code: 41050 });
+              return { data: { department: { name: "产品部" } } };
             },
           },
         },
@@ -158,11 +172,11 @@ function fakeApi(options: {
   deny?: boolean;
   hold?: Promise<void>;
   scopes?: () => ReadonlyMap<string, boolean>;
-  onRegister?: (options: { appId: string | undefined }) => void;
+  onRegister?: (options: { appId: string | undefined; scopes: readonly string[] }) => void;
 }): FeishuApi {
   return {
-    async register({ appId, onQRCodeReady }) {
-      options.onRegister?.({ appId });
+    async register({ appId, scopes, onQRCodeReady }) {
+      options.onRegister?.({ appId, scopes });
       onQRCodeReady({ url: "https://open.feishu.cn/page/launcher?user_code=ABCD", expireIn: 600 });
       await (options.hold ?? new Promise((r) => setTimeout(r, 20)));
       if (options.deny) throw Object.assign(new Error("denied"), { code: "access_denied" });
@@ -358,6 +372,8 @@ describe("feishu connection", () => {
     expect(await connection.listMembers({ platformId: "oc_1", kind: "group" })).toEqual([
       { id: "ou_1", name: "张三", isBot: false },
       { id: "ou_2", name: "李四", isBot: false },
+      // Bots come from their own list.
+      { id: "ou_other_bot", name: "值班机器人", isBot: true },
     ]);
     expect(lark.memberCalls).toEqual([
       { chatId: "oc_1", pageToken: undefined },
@@ -434,6 +450,23 @@ describe("feishu group messages permission", () => {
     await connection.close();
   });
 
+  it("asks for member profiles only when the owner turns them on, and keeps them on later scans", async () => {
+    const asked: (readonly string[])[] = [];
+    let granted = new Map<string, boolean>();
+    const channel = feishuChannel({
+      api: fakeApi({ activated: () => true, scopes: () => granted, onRegister: ({ scopes }) => asked.push(scopes) }),
+    });
+    const ctrl = new AbortController();
+    const app = { appId: "cli_1", appSecret: "s" };
+    await collect(channel.onboard(undefined, ctrl.signal, {}));
+    await collect(channel.onboard(undefined, ctrl.signal, { reauthorize: app, adding: ["member_profiles"] }));
+    granted = new Map(PROFILE_SCOPES.map((p) => [p, true]));
+    await collect(channel.onboard(undefined, ctrl.signal, { reauthorize: app }));
+    expect(asked[0]).toEqual(FEISHU_SCOPES);
+    expect(asked[1]).toEqual([...FEISHU_SCOPES, ...PROFILE_SCOPES]);
+    expect(asked[2]).toEqual([...FEISHU_SCOPES, ...PROFILE_SCOPES]);
+  });
+
   it("gives each bot its own duplicate check, so two bots in one group both get a message", async () => {
     const options: LarkChannelOptions[] = [];
     const channel = feishuChannel({
@@ -472,6 +505,7 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: false },
         { id: "bot_messages", granted: false },
+        { id: "member_profiles", granted: false, optional: true },
       ]);
       granted = new Map([[GROUP_MESSAGES_SCOPE, true]]);
       expect((await connection.permissions?.())?.[0]?.granted).toBe(false);
@@ -480,7 +514,10 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: true },
         { id: "bot_messages", granted: false },
+        { id: "member_profiles", granted: false, optional: true },
       ]);
+      // Member profiles stay off until asked for, and read nothing while off.
+      expect(await connection.profile?.("ou_2")).toBeUndefined();
       clock.at += 20_000;
       granted = new Map([
         [GROUP_MESSAGES_SCOPE, true],
@@ -490,7 +527,13 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: true },
         { id: "bot_messages", granted: true },
+        { id: "member_profiles", granted: false, optional: true },
       ]);
+      clock.at += 20_000;
+      granted = new Map([...granted, ...PROFILE_SCOPES.map((p) => [p, true] as const)]);
+      expect((await connection.permissions?.())?.[2]).toEqual({ id: "member_profiles", granted: true, optional: true });
+      // A department outside the app's contact range is left out.
+      expect(await connection.profile?.("ou_2")).toBe("产品部 · 产品经理");
       await connection.close();
     } finally {
       Date.now = realNow;

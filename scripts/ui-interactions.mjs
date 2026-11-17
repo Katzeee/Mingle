@@ -210,6 +210,46 @@ const INSTALL_MOCK = String.raw`(() => {
   };
 })()`;
 
+// The Feishu bot (n2) as if it were online, with its permissions and a few contacts, while
+// sessionStorage "mingle.permissions-review" is set: the permission rows read the platform
+// live, which this throwaway Mingle has no connection for. Everything else is real.
+const PERMISSIONS_MOCK = String.raw`(() => {
+  const on = () => sessionStorage.getItem("mingle.permissions-review");
+  const json = (payload) => new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+  const real = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const path = typeof input === "string" ? input : input.url;
+    const method = (init && init.method) || "GET";
+    if (!on() || method !== "GET") return real(input, init);
+    if (path === "/v1/admin/connections/n2/permissions")
+      return json({
+        permissions: [
+          { id: "group_messages", granted: true },
+          { id: "bot_messages", granted: true },
+          { id: "member_profiles", granted: on() === "granted", optional: true },
+        ],
+      });
+    if (path === "/v1/admin/status" || /^\/v1\/admin\/agents\/[^/]+\/contacts$/.test(path)) {
+      const body = await (await real(input, init)).json();
+      if (path === "/v1/admin/status") {
+        for (const agent of body.agents)
+          for (const c of agent.connections) if (c.id === "n2") Object.assign(c, { state: "connected", detail: null, owner: "ou_owner" });
+        return json(body);
+      }
+      const account = (id, name, profile, bot) => ({
+        id, platform: "feishu", connection: "n2", name, platformName: name, owner: false, access: null,
+        ownerShared: false, bot, linkedBy: null, profile,
+      });
+      body.push(
+        { person: null, name: "应珊珊", note: null, accounts: [account("uys1", "应珊珊", "KubeBlocks Enterprise 产品部, 平台与基础设施组 · 高级产品经理", false)] },
+        { person: null, name: "Thomas the Coder", note: null, accounts: [account("utc1", "Thomas the Coder", null, true)] },
+      );
+      return json(body);
+    }
+    return real(input, init);
+  };
+})()`;
+
 // A fetch mock for the first status poll: held until the page's own release() defers to
 // the real request, so the "loading your agents" state can be checked deterministically.
 const STATUS_HOLD = String.raw`(() => {
@@ -319,6 +359,7 @@ export async function reviewInteractions({
     // The fake-harness mock must exist in every document, full reloads included.
     await send("Page.addScriptToEvaluateOnNewDocument", { source: INSTALL_MOCK });
     await send("Page.addScriptToEvaluateOnNewDocument", { source: REMOTE_MOCK });
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: PERMISSIONS_MOCK });
 
     // Run a function in the page; page errors and timeouts are real failures.
     const prelude = `const connTriggers=(more)=>[...document.querySelectorAll("button[aria-label]")].filter((b)=>b.getAttribute("aria-label")===more&&!b.closest("header")&&!b.closest("aside")&&b.closest('[id^="connection-"]'));const brainRow=(name)=>{const el=[...document.querySelectorAll("span.font-medium")].find((s)=>s.textContent.trim()===name);return el?el.closest(".divide-y > *"):null;};`;
@@ -2139,6 +2180,66 @@ export async function reviewInteractions({
         console.log(`remote ${localeName} ${width}: passed`);
       }
     }
+    // --- bot permissions: each one a row, the optional ones turned on in place -------------
+    for (const [localeName, labels] of Object.entries(LOCALES)) {
+      const zh = localeName === "zh-CN";
+      for (const width of [1440, 560]) {
+        for (const state of ["off", "granted"]) {
+          const tag = `permissions ${localeName} ${width} ${state}`;
+          await metrics(width);
+          await send("Page.navigate", { url: `${url}/a/${slug}#token=${token}` });
+          await until("page load", () => document.readyState === "complete" && !!document.querySelector("header"));
+          await call(
+            (locale, mode) => {
+              localStorage.setItem("mingle.locale", locale);
+              sessionStorage.setItem("mingle.permissions-review", mode);
+            },
+            labels.storage,
+            state,
+          );
+          await send("Page.reload");
+          await until("app ready", () => !!document.querySelector('header [role="radiogroup"]'));
+          await call((settings) => {
+            const tab = [...document.querySelectorAll('header [role="radio"]')].find(
+              (b) => b.textContent.trim() === settings,
+            );
+            tab?.click();
+          }, labels.settings);
+          // Rows load in over a moment: click once the row has stopped moving.
+          await clickEl(await settled("feishu bot row", centerOfText, "main", "span", "Alex 徒步助手"));
+          await until(
+            "feishu bot page",
+            (name) => document.querySelector("main nav") && document.body.textContent.includes(name),
+            zh ? "飞书" : "Feishu",
+          );
+          const profiles = zh ? "成员资料" : "Member profiles";
+          await until("permission rows", (text) => document.body.textContent.includes(text), profiles);
+          const turnOn = await call(centerOfText, "main", "button", zh ? "开启" : "Turn on");
+          assert(state === "off" ? Boolean(turnOn) : !turnOn, `${tag}: turn-on button ${turnOn ? "shown" : "missing"}`);
+          await until(
+            "contact with profile",
+            (text) => document.body.textContent.includes(text),
+            "KubeBlocks Enterprise 产品部",
+          );
+          assert(await call(pageFits), `${tag}: page overflows`);
+          await shot(`${localeName}-${width}-permissions-${state}`);
+          if (state === "off" && width === 1440) {
+            // Turning one on opens the scan in place, for that permission only.
+            await clickEl(turnOn);
+            await until(
+              "scan opens in place",
+              (cancel) => [...document.querySelectorAll("main button")].some((b) => b.textContent.trim() === cancel),
+              labels.cancel,
+            );
+            await shot(`${localeName}-${width}-permissions-scan`);
+          }
+          await call(() => sessionStorage.removeItem("mingle.permissions-review"));
+          passed++;
+          console.log(`${tag}: passed`);
+        }
+      }
+    }
+
     console.log(`${passed} interaction scenarios passed`);
   } finally {
     try {

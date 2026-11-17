@@ -53,6 +53,8 @@ export class FakeChannel implements Channel {
    * chat's ID up front (Slack, Discord), or by the person's ID with the chat named on the first send (Feishu).
    */
   opensDirect: "none" | "chat" | "user" = "none";
+  /** Department and title the platform reports for each user, where member profiles are on. */
+  profiles = new Map<string, string>();
   /** How many times a group's member list was read. */
   memberReads = 0;
   /** People the platform will not let the bot write to. */
@@ -147,6 +149,7 @@ export class FakeChannel implements Channel {
         : {}),
       setTyping: async () => {},
       download: async () => {},
+      profile: async (userId: string) => channel.profiles.get(userId),
       listMembers: async () => {
         this.memberReads++;
         return this.members;

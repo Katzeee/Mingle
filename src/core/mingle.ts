@@ -11,6 +11,7 @@ import type {
   InboundMessage,
   OnboardingEvent,
   OnboardingFailure,
+  PermissionId,
   Platform,
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
@@ -127,6 +128,9 @@ export class Mingle {
   private readonly pauseNoted = new Set<string>();
   /** When each group's member list was last read into the address book (docs/spec.md 4.2). */
   private readonly rostered = new Map<string, number>();
+  /** Contacts whose profile was read this run, and the queue the reads go through. */
+  private readonly profiled = new Set<string>();
+  private profiling: Promise<void> = Promise.resolve();
   /** Wrong claim codes each ownerless bot took since its code was issued (docs/spec.md 4.7). */
   private readonly claimMisses = new Map<string, number>();
   /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
@@ -863,7 +867,12 @@ export class Mingle {
    * With `connectionId`, this is a re-authorization of that already-connected bot: the platform
    * adds permissions to the same app instead of creating a new one (`Channel.reauthorize`).
    */
-  startOnboarding(agentId: string, platform: Platform, connectionId?: string): OnboardingSession {
+  startOnboarding(
+    agentId: string,
+    platform: Platform,
+    connectionId?: string,
+    adding: readonly PermissionId[] = [],
+  ): OnboardingSession {
     const agent = this.agent(agentId);
     const channel = this.channel(platform);
     const updating = connectionId ? this.store.connection(connectionId) : undefined;
@@ -907,6 +916,7 @@ export class Mingle {
           awaitCode,
           knownCredentials,
           ...(reauthorize ? { reauthorize } : {}),
+          ...(reauthorize && adding.length ? { adding } : {}),
         })) {
           if (event.kind === "qr_ready") set({ kind: "qr", content: event.qrContent, expiresAt: event.expiresAt });
           else if (event.kind === "scanned") set({ kind: "scanned" });
@@ -1206,6 +1216,21 @@ export class Mingle {
   }
 
   /**
+   * Read where someone sits in the organization (department, title) once per run, where the chat
+   * app says and the owner turned member profiles on (docs/spec.md 4.2). One read at a time, in
+   * the background, so a large group does not burst the platform's rate limit.
+   */
+  private learnProfile(connectionId: string, contact: Contact): void {
+    const live = this.live.get(connectionId);
+    if (!live?.profile || this.profiled.has(contact.id)) return;
+    this.profiled.add(contact.id);
+    this.profiling = this.profiling.then(async () => {
+      const found = await live.profile?.(contact.platformId).catch(() => undefined);
+      if (found !== undefined && found !== contact.profile) this.store.setContactProfile(contact.id, found);
+    });
+  }
+
+  /**
    * Put a group's members in the address book, the way a person learns who is in a group they
    * joined: on joining, then again when the group is active and the list is older than a few hours.
    * Where the chat app can list members; best effort.
@@ -1220,7 +1245,11 @@ export class Mingle {
       .listMembers(ref)
       .then((members) => {
         for (const m of members) {
-          if (m.id && m.id !== live.bot.id && !m.isBot) this.store.touchContact(connectionId, m.id, m.name);
+          if (!m.id || m.id === live.bot.id || m.id === live.bot.senderId) continue;
+          // Other bots and agents too: agents work with each other, and @-mention each other by name.
+          let contact = this.store.touchContact(connectionId, m.id, m.name);
+          if (m.isBot && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
+          if (!contact.isBot) this.learnProfile(connectionId, contact);
         }
       })
       .catch((error) => this.log(`could not read the members of ${chatId}: ${(error as Error).message}`));
@@ -1314,6 +1343,7 @@ export class Mingle {
     });
     if (!message || inbound.earlier) return; // Delivered before, or the group's past.
     if (chat.kind !== "dm") this.roster(connectionId, chat.id, inbound.chat);
+    if (!bot) this.learnProfile(connectionId, contact);
     if (!bot) this.botHops.person(chat.id);
     else if (triggers) this.botHops.woke(chat.id);
     else if (decision === "brake" && this.botHops.braked(chat.id)) {

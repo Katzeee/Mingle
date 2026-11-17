@@ -121,6 +121,7 @@ interface ContactRow {
   owner: boolean;
   bot: boolean;
   person: string | null;
+  profile: string | null;
 }
 
 interface ContactInfo {
@@ -133,17 +134,20 @@ interface ContactInfo {
     owner: boolean;
     bot: boolean;
     linkedBy: "owner" | "agent" | null;
+    profile: string | null;
     chats: { id: string; kind: string; name: string | null }[];
   }[];
 }
 
 const marks = (k: { owner: boolean; bot: boolean }) => `${k.owner ? "  owner" : ""}${k.bot ? "  bot" : ""}`;
+/** Department and title, where the chat app gives them. */
+const where = (k: { profile?: string | null }) => (k.profile ? `  ${JSON.stringify(k.profile)}` : "");
 
 /** One line per account; accounts of one person under the person's line. */
 function contactList(contacts: readonly ContactRow[]): string {
   const line = (k: ContactRow, indent: string) => {
     const given = k.name && k.name !== k.platformName && k.platformName ? `  (${k.platformName} on ${k.platform})` : "";
-    return `${indent}${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${marks(k)}`;
+    return `${indent}${k.id}  ${k.platform}  ${k.name ? JSON.stringify(k.name) : "no name"}${given}${where(k)}${marks(k)}`;
   };
   const out: string[] = [];
   const done = new Set<string>();
@@ -170,7 +174,7 @@ function contactInfo(found: ContactInfo): string {
   for (const k of found.accounts) {
     const by = k.linkedBy === "owner" ? "  linked by your owner" : k.linkedBy === "agent" ? "  linked by you" : "";
     out.push(
-      `  ${k.id}  ${k.platform}  ${k.platformName ? JSON.stringify(k.platformName) : "no name"}${marks(k)}${by}`,
+      `  ${k.id}  ${k.platform}  ${k.platformName ? JSON.stringify(k.platformName) : "no name"}${where(k)}${marks(k)}${by}`,
     );
     const dm = k.chats.find((c) => c.kind === "dm");
     if (dm) out.push(`    direct chat: ${dm.id}`);
@@ -327,7 +331,7 @@ async function agentCommand(group: string, action: string | undefined, args: str
         platform: string;
         kind: string;
         name: string | null;
-        members: { id: string; name: string }[] | null;
+        members: { id: string; name: string; profile: string | null; bot: boolean }[] | null;
       }>("GET", `/v1/agent/chats/${chat}`);
       print(info, () =>
         [
@@ -335,7 +339,9 @@ async function agentCommand(group: string, action: string | undefined, args: str
           info.members
             ? [
                 "members:",
-                ...info.members.map((m) => `  ${m.id}  ${m.name ? JSON.stringify(m.name) : "no name"}`),
+                ...info.members.map(
+                  (m) => `  ${m.id}  ${m.name ? JSON.stringify(m.name) : "no name"}${where(m)}${m.bot ? "  bot" : ""}`,
+                ),
               ].join("\n")
             : "members: not available on this chat app",
         ].join("\n"),
