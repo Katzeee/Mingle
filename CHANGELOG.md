@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.2.3
+
+- A message is no longer written off a second after it was sent when the agent's harness acknowledged it without running it. Kimi Code answers a prompt queued behind its own background task instantly with an empty turn, and Mingle used to take that as the agent staying silent — it reminded once, got the same instant empty answer, and marked the message unanswered, all before the model ever saw it. Such a turn now counts as no turn at all: the message waits for the turn that really runs it, is checked again after ten minutes or the next real turn, and the agent's late answer still settles it. A message a harness without steer queued for its next turn is likewise not reminded about until a turn has run on it.
+- "This message did not get a reply" no longer appears when the agent did answer — by quoting another message in the same chat, or by answering after the reminder was already queued. The line now reads "No reply yet." so it stays true when a late answer arrives, and the reminder is re-checked at delivery so the agent never sees one for messages it already answered.
+
 ## 0.2.2
 
 - The activity on an agent's page is now grouped by conversation instead of one timeline. Each chat gets a row, newest first; a closed row shows the last question and the agent's answer, and opening it reads the latest six messages in place with a link for earlier ones — the newest conversation starts open, and ↑↓ / → / ← move, open and close rows like a Mac list. Threads a platform attaches to a channel (Slack today) nest under that channel. What still needs you — messages that failed, went unanswered or wait for your approval — is marked right on the row and comes back however old, so a busy group can no longer push an unanswered request out of view. Discord threads and Telegram topics still show as their own rows for now.
