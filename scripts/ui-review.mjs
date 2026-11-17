@@ -21,13 +21,14 @@ const OUT = resolve(".ui-review");
 const PORT = 7490 + Math.floor(Math.random() * 100);
 // Desktop Chrome will not lay out narrower than 500 px, so smaller widths only crop the image.
 const WIDTHS = (process.env.WIDTHS ?? "1440,1024,760,560").split(",").map(Number);
+const CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.UI_CONCURRENCY) || 4));
 const LOCALES = ["en-US", "zh-CN"];
 
 const home = mkdtempSync(join(tmpdir(), "mingle-ui-"));
 const ENV_SECRET = "ui-review-not-a-real-secret";
 /** Run before the daemon stops: undo what the review put outside its own folder. */
 const cleanups = [];
-rmSync(OUT, { recursive: true, force: true });
+if (!process.env.UI_REMOTE_ONLY) rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const daemon = spawn(process.execPath, ["dist/cli/main.js", "start", "--port", String(PORT), "--no-open"], {
@@ -418,32 +419,34 @@ try {
   insert("UPDATE agents SET status = 'idle', has_replied = 1 WHERE id = ?", lonelyAgent.id);
   db.close();
 
-  const pages = [
-    ["agent", `/a/${alex.slug}`],
-    ["long", `/a/${long.slug}`],
-    ["new", "/new"],
-    ["home", "/"],
-    ["settings", "/settings"],
-    // The QR step is not here: it needs a live call to the platform, which headless Chrome's
-    // virtual clock outruns. Check it in the desktop app (desktop/README.md) instead.
-    ["connect", `/a/${long.slug}/connect`],
-    ["connect-counts", `/a/${alex.slug}/connect`],
-    ["connect-slack", `/a/${long.slug}/connect/slack`],
-    ["connect-discord", `/a/${long.slug}/connect/discord`],
-    ["connect-telegram", `/a/${alex.slug}/connect/telegram`],
-    // The token guide. Signing in with a code asks GitHub for a live code, so it is checked by hand.
-    ["connect-github", `/a/${long.slug}/connect/github`],
-    // Live checks of this Mac's own permissions; read-only, they never make macOS ask anything.
-    ...(process.platform === "darwin" ? [["connect-imessage", `/a/${alex.slug}/connect/imessage`]] : []),
-    ["onboard-idle", `/a/${idleAgent.slug}`],
-    ["onboard-busy", `/a/${busyAgent.slug}`],
-    ["onboard-offline", `/a/${offAgent.slug}`],
-    ["onboard-done", `/a/${doneAgent.slug}`],
-    ["no-bot", `/a/${lonelyAgent.slug}`],
-    ["paused", `/a/${pausedAgent.slug}`],
-    ["shared-wechat", `/a/${sharedAgent.slug}`],
-    ["claim", `/a/${claimAgent.slug}`],
-  ];
+  const pages = process.env.UI_REMOTE_ONLY
+    ? []
+    : [
+        ["agent", `/a/${alex.slug}`],
+        ["long", `/a/${long.slug}`],
+        ["new", "/new"],
+        ["home", "/"],
+        ["settings", "/settings"],
+        // The QR step is not here: it needs a live call to the platform, which headless Chrome's
+        // virtual clock outruns. Check it in the desktop app (desktop/README.md) instead.
+        ["connect", `/a/${long.slug}/connect`],
+        ["connect-counts", `/a/${alex.slug}/connect`],
+        ["connect-slack", `/a/${long.slug}/connect/slack`],
+        ["connect-discord", `/a/${long.slug}/connect/discord`],
+        ["connect-telegram", `/a/${alex.slug}/connect/telegram`],
+        // The token guide. Signing in with a code asks GitHub for a live code, so it is checked by hand.
+        ["connect-github", `/a/${long.slug}/connect/github`],
+        // Live checks of this Mac's own permissions; read-only, they never make macOS ask anything.
+        ...(process.platform === "darwin" ? [["connect-imessage", `/a/${alex.slug}/connect/imessage`]] : []),
+        ["onboard-idle", `/a/${idleAgent.slug}`],
+        ["onboard-busy", `/a/${busyAgent.slug}`],
+        ["onboard-offline", `/a/${offAgent.slug}`],
+        ["onboard-done", `/a/${doneAgent.slug}`],
+        ["no-bot", `/a/${lonelyAgent.slug}`],
+        ["paused", `/a/${pausedAgent.slug}`],
+        ["shared-wechat", `/a/${sharedAgent.slug}`],
+        ["claim", `/a/${claimAgent.slug}`],
+      ];
   const checkPlatformCounts = (dom, zh, expected) => {
     const buttons = [...dom.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map((match) => match[0]);
     for (const [platform, count] of expected) {
@@ -561,7 +564,7 @@ try {
       for (const [name, path] of pages) {
         const file = join(OUT, `${locale}-${width}-${name}.png`);
         const profile = mkdtempSync(join(tmpdir(), "mingle-chrome-"));
-        // Thunks, so only four Chromes run at a time.
+        // Thunks keep browser memory bounded; lower concurrency on busy development machines.
         const shoot = () =>
           run(
             CHROME,
@@ -598,7 +601,8 @@ try {
       }
     }
   }
-  for (let i = 0; i < jobs.length; i += 4) await Promise.all(jobs.slice(i, i + 4).map((job) => job()));
+  for (let i = 0; i < jobs.length; i += CONCURRENCY)
+    await Promise.all(jobs.slice(i, i + CONCURRENCY).map((job) => job()));
   console.log(`${jobs.length} screenshots in ${OUT}`);
 
   // Static shots never click: run the live-browser checks for menus and Manage.

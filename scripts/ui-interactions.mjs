@@ -12,6 +12,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { REMOTE_MOCK } from "./ui-remote.mjs";
+
 const LOCALES = {
   "en-US": {
     storage: "en",
@@ -316,6 +318,7 @@ export async function reviewInteractions({
     await send("Runtime.enable");
     // The fake-harness mock must exist in every document, full reloads included.
     await send("Page.addScriptToEvaluateOnNewDocument", { source: INSTALL_MOCK });
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: REMOTE_MOCK });
 
     // Run a function in the page; page errors and timeouts are real failures.
     const prelude = `const connTriggers=(more)=>[...document.querySelectorAll("button[aria-label]")].filter((b)=>b.getAttribute("aria-label")===more&&!b.closest("header")&&!b.closest("aside")&&b.closest('[id^="connection-"]'));const brainRow=(name)=>{const el=[...document.querySelectorAll("span.font-medium")].find((s)=>s.textContent.trim()===name);return el?el.closest(".divide-y > *"):null;};`;
@@ -1913,6 +1916,229 @@ export async function reviewInteractions({
     );
     passed++;
     console.log("ignore zh-CN 1440: passed");
+    // Remote creation, local-only host preparation errors, and stale-state presentation.
+    for (const [localeName, labels] of Object.entries(LOCALES)) {
+      const zh = localeName === "zh-CN";
+      for (const width of [1024, 560]) {
+        await metrics(width, 1600);
+        await call(() => sessionStorage.setItem("mingle.ssh-review", "online"));
+        await goto(`/a/ssh_0123456789ab~remote-review`, labels);
+        await until("remote location", () =>
+          document.body.textContent.includes("developer@remote-development-machine.example"),
+        );
+        assert(await call(pageFits), "remote status overflows");
+        await shot(`${localeName}-${width}-ssh-online`);
+        await spaNav("/new");
+        // Running elsewhere is a word in the brain step's hint, not a field above the form.
+        await until(
+          "location word",
+          (label) => !!document.querySelector(`main button[aria-label="${label}"]`),
+          zh ? "运行位置" : "Run on",
+        );
+        assert(
+          await call(
+            () => !document.querySelector("main select") && !document.querySelector('input[placeholder="user@host"]'),
+          ),
+          "location takes room before it is opened",
+        );
+        await shot(`${localeName}-${width}-ssh-local`);
+        await clickEl(
+          await call(
+            (label) => {
+              const r = document.querySelector(`main button[aria-label="${label}"]`).getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            },
+            zh ? "运行位置" : "Run on",
+          ),
+        );
+        await until("location menu", () => document.querySelectorAll('[role="menuitemradio"]').length === 3);
+        await shot(`${localeName}-${width}-ssh-menu`);
+        await clickEl(
+          await call(centerOfText, "body", '[role="menuitemradio"]', zh ? "添加 SSH 主机…" : "Add SSH host…"),
+        );
+        await until("host form", () => !!document.querySelector('input[placeholder="user@host"]'));
+        await until("config aliases", () => !!document.querySelector('option[value="review-fixture"]'));
+        assert(await call(pageFits), "SSH host form overflows");
+        await shot(`${localeName}-${width}-ssh-add`);
+        const setInput = (selector, value) => {
+          const input = document.querySelector(selector);
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        // Refresh is read-only; empty and failed reads still allow manual targets.
+        for (const mode of ["empty", "failed", "partial"]) {
+          await call((mode) => sessionStorage.setItem("mingle.ssh-config", mode), mode);
+          await clickEl(await call(centerOfText, "main", "button", zh ? "刷新" : "Refresh"));
+          const messages = zh
+            ? { empty: "没有找到主机别名", failed: "无法读取 SSH 配置", partial: "部分配置未能读取" }
+            : {
+                empty: "No host aliases found",
+                failed: "Could not read SSH config",
+                partial: "Some configuration could not be read",
+              };
+          await until("config result", (text) => document.body.textContent.includes(text), messages[mode]);
+          assert(await call(pageFits), "SSH config message overflows");
+          await shot(`${localeName}-${width}-ssh-config-${mode}`);
+        }
+        await call(() => sessionStorage.removeItem("mingle.ssh-config"));
+        await call(setInput, 'input[placeholder="user@host"]', "bad-host");
+        await clickEl(await call(centerOfText, "main", "button", zh ? "准备并连接" : "Prepare and connect"));
+        await until(
+          "localized SSH error",
+          (text) => document.body.textContent.includes(text),
+          zh ? "SSH 认证失败" : "SSH authentication failed",
+        );
+        await shot(`${localeName}-${width}-ssh-error`);
+        await clickEl(await call(centerOfText, "main", "button", zh ? "刷新" : "Refresh"));
+        await until(
+          "config refreshed",
+          () => !document.querySelector('option[value="review-fixture"]').parentElement.disabled,
+        );
+        assert(
+          await call(() => document.querySelector('input[placeholder="user@host"]').value === "bad-host"),
+          "refresh discarded manual target",
+        );
+        await call(setInput, 'input[placeholder="user@host"]', "missing-node");
+        await clickEl(await call(centerOfText, "main", "button", zh ? "准备并连接" : "Prepare and connect"));
+        await until(
+          "remote installer",
+          (text) => document.body.textContent.includes(text),
+          zh ? "在远端安装 Node.js" : "Install Node.js on the remote host",
+        );
+        assert(await call(pageFits), "remote installer overflows");
+        assert(
+          await call(() =>
+            /github\.com\/gerayking\/Mingle\/blob\/[a-f0-9]{40}\/scripts\/install-remote\.sh$/.test(
+              document.querySelector('a[href*="scripts/install-remote.sh"]').href,
+            ),
+          ),
+          "installer source is not pinned",
+        );
+        assert(await call(() => !document.querySelector("main pre")), "manual command should be collapsed");
+        await shot(`${localeName}-${width}-ssh-install-auto`);
+        await clickEl(await call(centerOfText, "main", "button", zh ? "手动安装" : "Manual installation"));
+        await clickEl(await call(centerOfText, "main", "button", zh ? "复制安装命令" : "Copy install command"));
+        await until(
+          "install command copied or shown",
+          (copied, failed) => document.body.textContent.includes(copied) || document.body.textContent.includes(failed),
+          zh ? "已复制命令" : "Command copied",
+          zh ? "复制失败" : "Could not copy",
+        );
+        await shot(`${localeName}-${width}-ssh-install`);
+        await clickEl(await call(centerOfText, "main", "button", zh ? "手动安装" : "Manual installation"));
+        await clickEl(await call(centerOfText, "main", "button", zh ? "安装并连接" : "Install and connect"));
+        await until(
+          "install progress",
+          (text) => document.body.textContent.includes(text),
+          zh ? "正在安装远端环境" : "Installing remote environment",
+        );
+        assert(
+          await call(() => document.querySelector('input[placeholder="user@host"]').disabled),
+          "host changed during installation",
+        );
+        assert(
+          await call(
+            (label) => !document.querySelector(`main button[aria-label="${label}"]`),
+            zh ? "运行位置" : "Run on",
+          ),
+          "location can be left during installation",
+        );
+        await shot(`${localeName}-${width}-ssh-install-running`);
+        await call(() => sessionStorage.setItem("mingle.ssh-install-phase", "poll-failed"));
+        await until(
+          "install progress unavailable",
+          (text) => document.body.textContent.includes(text),
+          zh ? "重查进度" : "Check progress again",
+        );
+        await shot(`${localeName}-${width}-ssh-install-poll-failed`);
+        await call(() => sessionStorage.setItem("mingle.ssh-install-phase", "preparing"));
+        await clickEl(await call(centerOfText, "main", "button", zh ? "重查进度" : "Check progress again"));
+        await until(
+          "install preparing",
+          (text) => document.body.textContent.includes(text),
+          zh ? "正在准备远端 Mingle" : "Preparing remote Mingle",
+        );
+        await shot(`${localeName}-${width}-ssh-install-preparing`);
+        await call(() => sessionStorage.setItem("mingle.ssh-install-phase", "failed"));
+        await until(
+          "install failed",
+          (text) => document.body.textContent.includes(text),
+          zh ? "远端主机无法下载" : "The remote host could not download",
+        );
+        assert(
+          await call(() => !document.querySelector('input[placeholder="user@host"]').disabled),
+          "failed installation cannot be retried",
+        );
+        await shot(`${localeName}-${width}-ssh-install-failed`);
+        await call(() => {
+          const select = document.querySelector('option[value="review-fixture"]').parentElement;
+          select.value = "review-fixture";
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await until(
+          "config alias selected",
+          () => document.querySelector('input[placeholder="user@host"]').value === "review-fixture",
+        );
+        assert(
+          await call(() => !document.querySelector('a[href*="scripts/install-remote.sh"]')),
+          "installer state leaked to another host",
+        );
+        await clickEl(await call(centerOfText, "main", "button", zh ? "安装远端环境" : "Install remote environment"));
+        await clickEl(await call(centerOfText, "main", "button", zh ? "安装并连接" : "Install and connect"));
+        await until(
+          "install retry started",
+          (text) => document.body.textContent.includes(text),
+          zh ? "正在安装远端环境" : "Installing remote environment",
+        );
+        await call(() => sessionStorage.setItem("mingle.ssh-install-phase", "done"));
+        await until("remote brain", () => document.body.textContent.includes("Remote test brain"));
+        assert(
+          await call(() => JSON.parse(sessionStorage.getItem("mingle.ssh-installed")).host === "review-fixture"),
+          "installation did not use the SSH config alias",
+        );
+        assert(await call(pageFits), "remote brain form overflows");
+        await shot(`${localeName}-${width}-ssh-ready`);
+        await call(setInput, "input[aria-label]", "Remote companion");
+        await call(() => document.querySelector('button[type="submit"]').scrollIntoView({ block: "center" }));
+        await clickEl(
+          await call(() => {
+            const button = document.querySelector('button[type="submit"]');
+            const r = button.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }),
+        );
+        await until("remote create navigation", () =>
+          location.pathname.includes("ssh_0123456789ab~remote-review/connect"),
+        );
+        assert(
+          await call(
+            () => JSON.parse(sessionStorage.getItem("mingle.ssh-created")).harness === "ssh_0123456789ab~scripted",
+          ),
+          "created agent used local harness",
+        );
+        await call(() => sessionStorage.setItem("mingle.ssh-review", "offline"));
+        await goto(`/a/ssh_0123456789ab~remote-review`, labels);
+        await until(
+          "unreachable banner",
+          (text) => document.body.textContent.includes(text),
+          zh ? "SSH 暂时无法连接" : "SSH is unreachable",
+        );
+        assert(await call(pageFits), "unreachable remote page overflows");
+        await shot(`${localeName}-${width}-ssh-offline`);
+        // A rebooted host is prepared again from its agent's page, in place.
+        await clickEl(await call(centerOfText, "main", "button", zh ? "准备或重新连接" : "Prepare or reconnect"));
+        await until(
+          "reconnect in place",
+          (text) => document.body.textContent.includes(text),
+          zh ? "远端主机重启后可在此恢复服务" : "Use after the remote host restarts",
+        );
+        assert(await call(pageFits), "reconnect panel overflows");
+        await shot(`${localeName}-${width}-ssh-reconnect`);
+        await call(() => sessionStorage.removeItem("mingle.ssh-review"));
+        passed++;
+        console.log(`remote ${localeName} ${width}: passed`);
+      }
+    }
     console.log(`${passed} interaction scenarios passed`);
   } finally {
     try {

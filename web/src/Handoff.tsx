@@ -73,7 +73,7 @@ export function HandoffSection({
 }) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<"copy" | "paste">("copy");
+  const [mode, setMode] = useState<"copy" | "paste">(agent.remote ? "paste" : "copy");
   const recent = (handoffs ?? []).slice(0, RECENT);
   return (
     <Section title={t("handoff.title")}>
@@ -101,6 +101,7 @@ export function HandoffSection({
                 { value: "paste", label: t("handoff.tabPaste") },
               ]}
             />
+            {agent.remote && mode === "copy" ? <p className="text-small text-ink2">{t("ssh.handoffHint")}</p> : null}
             {mode === "copy" ? (
               <CopyPrompt agent={agent} handoffs={handoffs} onClose={() => setOpen(false)} />
             ) : (

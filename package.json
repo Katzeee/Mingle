@@ -13,7 +13,7 @@
     "mingle": "./dist/cli/main.js"
   },
   "scripts": {
-    "build": "pnpm build:web && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs && chmod +x dist/cli/main.js",
+    "build": "pnpm build:web && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs && node scripts/package-remote.mjs && chmod +x dist/cli/main.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

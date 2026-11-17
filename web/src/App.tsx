@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentPage } from "./AgentPage.tsx";
 import { type AgentView, ApiError, api, captureToken } from "./api.ts";
 import { ConnectPage } from "./Connect.tsx";
@@ -9,7 +9,17 @@ import { onNavigateRequest } from "./online.ts";
 import { usePolling } from "./poll.ts";
 import { SettingsPage } from "./Settings.tsx";
 import { KEYS, keysAria, useShellShortcuts } from "./shortcuts.ts";
-import { Avatar, Button, Eyebrow, PlusIcon, SettingsIcon, Shortcut, StatusDot, UpdateIcon, Waiting } from "./ui.tsx";
+import {
+  AgentStatusText,
+  Avatar,
+  Button,
+  Eyebrow,
+  PlusIcon,
+  SettingsIcon,
+  Shortcut,
+  UpdateIcon,
+  Waiting,
+} from "./ui.tsx";
 import { updates, useUpdates } from "./updates.ts";
 import { Welcome } from "./Welcome.tsx";
 
@@ -107,13 +117,17 @@ function Shell() {
     };
   }, []);
 
+  const refreshVersion = useRef(0);
   const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
     try {
       const status = await api.status();
+      if (version !== refreshVersion.current) return;
       setAgents(status.agents);
       setVersion(status.version);
       setProblem(null);
     } catch (e) {
+      if (version !== refreshVersion.current) return;
       setProblem(e instanceof ApiError && e.status === 401 ? "unauthorized" : "offline");
     }
   }, []);
@@ -266,12 +280,8 @@ function Sidebar({
                 <Avatar name={a.name} src={a.avatar} size={28} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate font-medium">{a.name}</span>
-                  <span className="flex min-w-0 items-center gap-1.5 text-caption text-ink2">
-                    <StatusDot state={a.status} />
-                    <span className="truncate">
-                      {t(`status.${a.status}`)}
-                      {apps ? ` · ${apps}` : ""}
-                    </span>
+                  <span className="text-caption text-ink2">
+                    <AgentStatusText status={a.status} where={a.remote} more={apps} />
                   </span>
                 </span>
               </button>

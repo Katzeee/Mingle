@@ -23,7 +23,8 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, remote?: string): Promise<T> {
+  if (remote) path = `/v1/admin/ssh/${remote}/${path.slice("/v1/admin/".length)}`;
   let response: Response;
   // Raw bytes (a picture) go as they are; everything else is JSON.
   const raw = body instanceof Blob;
@@ -122,7 +123,25 @@ export interface AccessEntry {
   access: "allowed" | "blocked";
 }
 
+export interface SshHost {
+  id: string;
+  host: string;
+  home: string;
+  reachable: boolean | null;
+}
+
+export interface SshInstallJob {
+  id: string;
+  host: string;
+  home: string;
+  state: "running" | "done" | "failed";
+  phase: "installing" | "preparing";
+  result?: SshHost;
+  error?: string;
+}
+
 export interface AgentView {
+  remote?: { id: string; host: string; reachable: boolean };
   id: string;
   slug: string;
   name: string;
@@ -339,9 +358,16 @@ export interface Reminder {
 
 export const api = {
   status: () => call<{ version: string; agents: AgentView[] }>("GET", "/v1/admin/status"),
-  harnesses: () => call<Harness[]>("GET", "/v1/admin/harnesses"),
+  sshHosts: () => call<SshHost[]>("GET", "/v1/admin/ssh/hosts"),
+  sshConfig: () => call<{ hosts: string[]; incomplete: boolean }>("GET", "/v1/admin/ssh/config"),
+  addSshHost: (host: string, home: string) => call<SshHost>("POST", "/v1/admin/ssh/hosts", { host, home }),
+  installSshHost: (host: string, home: string) =>
+    call<SshInstallJob>("POST", "/v1/admin/ssh/installations", { host, home }),
+  sshInstallation: (id: string) => call<SshInstallJob>("GET", `/v1/admin/ssh/installations/${id}`),
+  harnesses: (remote?: string) => call<Harness[]>("GET", "/v1/admin/harnesses", undefined, remote),
   /** The last catalog Mingle found at once; `fresh` probes every harness again, a second or more. */
-  brains: (fresh = false) => call<BrainStatus[]>("GET", `/v1/admin/brains${fresh ? "?fresh=1" : ""}`),
+  brains: (fresh = false, remote?: string) =>
+    call<BrainStatus[]>("GET", `/v1/admin/brains${fresh ? "?fresh=1" : ""}`, undefined, remote),
   signInState: (harness: string) => call<SignInState>("GET", `/v1/admin/brains/${harness}/sign-in`),
   installPlan: (harness: string) => call<InstallPlan>("GET", `/v1/admin/brains/${harness}/install-plan`),
   install: (harness: string) => call<Job>("POST", `/v1/admin/brains/${harness}/install`),
@@ -355,10 +381,11 @@ export const api = {
   models: (harness: string) => call<ModelList>("GET", `/v1/admin/harnesses/${harness}/models`),
   updateAgent: (id: string, patch: { name?: string; harness?: string; model?: string | null }) =>
     call<AgentView>("PATCH", `/v1/admin/agents/${id}`, patch),
-  platforms: () => call<PlatformInfo[]>("GET", "/v1/admin/platforms"),
-  setup: (platform: Platform) => call<SetupState>("GET", `/v1/admin/platforms/${platform}/setup`),
-  setupAction: (platform: Platform, action: string) =>
-    call<SetupState>("POST", `/v1/admin/platforms/${platform}/setup/${action}`),
+  platforms: (remote?: string) => call<PlatformInfo[]>("GET", "/v1/admin/platforms", undefined, remote),
+  setup: (platform: Platform, remote?: string) =>
+    call<SetupState>("GET", `/v1/admin/platforms/${platform}/setup`, undefined, remote),
+  setupAction: (platform: Platform, action: string, remote?: string) =>
+    call<SetupState>("POST", `/v1/admin/platforms/${platform}/setup/${action}`, undefined, remote),
   createAgent: (input: { name: string; role: string; harness: string; model?: string }) =>
     call<AgentView>("POST", "/v1/admin/agents", input),
   setAvatar: (id: string, image: Blob) => call<AgentView>("PUT", `/v1/admin/agents/${id}/avatar`, image),

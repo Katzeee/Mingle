@@ -31,6 +31,7 @@ import { Profile } from "./Profile.tsx";
 import { PlatformIcon } from "./platforms.tsx";
 import { usePolling } from "./poll.ts";
 import { OnlineRows } from "./Settings.tsx";
+import { SshSetup, useSshHosts } from "./SshLocation.tsx";
 import { KEYS, keysAria, onEscape, usePageShortcuts } from "./shortcuts.ts";
 import {
   AgentStatusText,
@@ -309,7 +310,7 @@ export function AgentPage({
       <PageHeader
         leading={<Avatar name={agent.name} src={agent.avatar} size={26} />}
         title={agent.name}
-        meta={<AgentStatusText status={agent.status} detail={agent.statusDetail} />}
+        meta={<AgentStatusText status={agent.status} detail={agent.statusDetail} where={agent.remote} />}
         actions={
           <>
             <Segmented
@@ -334,6 +335,7 @@ export function AgentPage({
       <div className="flex min-h-0 flex-1">
         <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
+            {agent.remote?.reachable === false ? <Unreachable id={agent.remote.id} onReady={onChanged} /> : null}
             {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
             {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
             {agent.status === "error" ? <AgentError agent={agent} /> : null}
@@ -420,9 +422,11 @@ export function AgentPage({
                           {agent.home}
                         </span>
                       </span>
-                      <Button small onClick={() => api.openHome(agent.id)}>
-                        {t("agent.openHome")}
-                      </Button>
+                      {!agent.remote ? (
+                        <Button small onClick={() => api.openHome(agent.id)}>
+                          {t("agent.openHome")}
+                        </Button>
+                      ) : null}
                     </GroupRow>
                     <DeleteRow
                       agent={agent}
@@ -1172,10 +1176,48 @@ function RoleEditor({ agent, onSaved }: { agent: AgentView; onSaved: () => void 
   );
 }
 
+/**
+ * The SSH host stopped answering. What the page shows is from the last connection; after a
+ * remote reboot the host is prepared again here, in place.
+ */
+function Unreachable({ id, onReady }: { id: string; onReady: () => Promise<void> | void }) {
+  const { t } = useI18n();
+  const { hosts } = useSshHosts();
+  const host = hosts.find((item) => item.id === id);
+  const [open, setOpen] = useState(false);
+  if (host && open)
+    return (
+      <SshSetup
+        host={host}
+        lead={t("ssh.unreachable")}
+        disabled={false}
+        onCancel={() => setOpen(false)}
+        onReady={() => {
+          setOpen(false);
+          void onReady();
+        }}
+      />
+    );
+  return (
+    <div role="status" className="flex flex-col gap-3 rounded-control border border-line bg-bg2 p-3">
+      <p className="text-small text-ink2">{t("ssh.unreachable")}</p>
+      {host ? (
+        <Button small className="self-start" onClick={() => setOpen(true)}>
+          {t("ssh.reconnect")}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 /** Which harness and model drive the agent. A change applies from the next message. */
 function Brain({ agent, onSaved }: { agent: AgentView; onSaved: () => void }) {
   const { t } = useI18n();
-  const { value: harnesses } = useCached<Harness[]>("harnesses", api.harnesses, []);
+  const { value: harnesses } = useCached<Harness[]>(
+    `harnesses:${agent.remote?.id ?? "local"}`,
+    () => api.harnesses(agent.remote?.id),
+    [],
+  );
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
   async function save(patch: { harness?: string; model?: string | null }) {
@@ -1202,6 +1244,15 @@ function Brain({ agent, onSaved }: { agent: AgentView; onSaved: () => void }) {
   return (
     <Section title={t("create.brain")}>
       <Group>
+        {agent.remote ? (
+          <GroupRow>
+            <span className="min-w-0 flex-1">{t("ssh.location")}</span>
+            <span className="flex min-w-0 flex-col items-end text-right">
+              <span className="selectable max-w-full wrap-anywhere text-ink2">{agent.remote.host}</span>
+              <span className="text-caption text-ink3">{t("ssh.independent")}</span>
+            </span>
+          </GroupRow>
+        ) : null}
         <GroupRow>
           {current ? <HarnessIcon harness={current} size={24} /> : null}
           <span className="min-w-0 flex-1">{t("brain.harness")}</span>
