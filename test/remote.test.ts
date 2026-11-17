@@ -190,7 +190,8 @@ describe("remote management", () => {
       expect(requests.at(-1)?.binary).toBe(Buffer.from("fake-image").toString("base64"));
       const status = await local.admin("GET", "/v1/admin/status");
       expect((status.json as { agents: unknown[] }).agents).toHaveLength(2);
-      expect(statSync(join(local.home, "ssh-hosts.json")).mode & 0o777).toBe(0o600);
+      // Windows chmod does not implement POSIX read permissions.
+      if (process.platform !== "win32") expect(statSync(join(local.home, "ssh-hosts.json")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(local.home, "ssh-hosts.json"), "utf8")).not.toContain(secret);
       available = false;
       const cached = await local.admin("GET", "/v1/admin/status");
