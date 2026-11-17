@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LarkChannelOptions, NormalizedMessage } from "@larksuiteoapi/node-sdk";
+import * as sdk from "@larksuiteoapi/node-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelEvents, ConnectionState, InboundMessage, OnboardingEvent } from "../src/channels/channel.ts";
 import {
@@ -368,6 +369,28 @@ describe("feishu group messages permission", () => {
     const connection = await channel.connect({ appId: "cli_1", appSecret: "s" }, events);
     expect(options?.policy).toMatchObject({ requireMention: false });
     await connection.close();
+  });
+
+  it("gives each bot its own duplicate check, so two bots in one group both get a message", async () => {
+    const options: LarkChannelOptions[] = [];
+    const channel = feishuChannel({
+      api: fakeApi({ activated: () => true }),
+      createChannel: (o) => {
+        options.push(o);
+        return fakeLark().channel;
+      },
+    });
+    const a = await channel.connect({ appId: "cli_a", appSecret: "s" }, events);
+    const b = await channel.connect({ appId: "cli_b", appSecret: "s" }, events);
+    const [first, second] = options.map((o) => o.cache);
+    expect(first).toBeDefined();
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(sdk.internalCache);
+    // What the SDK writes once bot A has handled a message must not mark it seen for bot B.
+    await first?.set("om_same", "1", Date.now() + 60_000, { namespace: "channel:seen" });
+    expect(await second?.get("om_same", { namespace: "channel:seen" })).toBeUndefined();
+    await a.close();
+    await b.close();
   });
 
   it("reports whether the scope is granted, and reads it again once it is", async () => {

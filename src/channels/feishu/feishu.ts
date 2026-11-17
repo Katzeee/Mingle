@@ -291,6 +291,10 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           // come through: the core keeps them as background (docs/spec.md 4.2).
           policy: { dmMode: "open", requireMention: false, respondToMentionAll: true },
           safety: { batch: { text: { delayMs: 0 }, media: { delayMs: 0 } } },
+          // The SDK's duplicate check falls back to one process-wide cache keyed by message ID. Two
+          // bots in one group get the same message ID, so whichever finished first made the other
+          // drop the message as already seen. Each connection keeps its own.
+          cache: new lark.DefaultCache(),
         });
         channel = instance;
         instance.on("message", async (message) => {
