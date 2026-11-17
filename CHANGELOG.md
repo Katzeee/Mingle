@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.3.0
+
+- An agent no longer stays "working" forever on a command that never ends. When a turn reports nothing at all — no thinking, text, tool call, subagent or background-task update, and no `mingle` command from the agent — for twenty minutes while a message is waiting on it, Mingle stops the turn on its own rather than counting it an owner stop: the harness gets thirty seconds to end it before its process is replaced and the conversation continues in a new one. Messages sent while it was stuck are then answered in a fresh turn, or shown as "No reply yet", instead of disappearing into the stuck turn — the status no longer sits on a tool name and the owner no longer has to reset the agent by hand.
+- A long job the agent took on after acknowledging a message is left alone: a quiet turn nobody is waiting on is not stopped. Mingle checks it again every minute and steps in only once a new message arrives and goes unanswered.
+
 ## 0.2.4
 
 - An agent no longer stays "working" forever on a command that never ends. When a turn reports nothing at all — no thinking, text, tool call, subagent or background-task update — for twenty minutes, Mingle stops the turn on its own rather than counting it an owner stop: the harness gets thirty seconds to end it before its process is replaced and the conversation continues in a new one. Messages sent while it was stuck are then answered in a fresh turn, or shown as "No reply yet", instead of disappearing into the stuck turn — the status no longer sits on a tool name and the owner no longer has to reset the agent by hand.
