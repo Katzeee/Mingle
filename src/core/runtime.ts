@@ -58,6 +58,12 @@ export interface RuntimeDeps {
   /** Wait before delivering to an idle agent, so a burst of messages becomes one input. */
   readonly coalesceMs?: number;
   /**
+   * After a turn the harness ended without running the model (`TurnEnd.empty`), how long to wait
+   * before reminding the agent or giving up on what it has not answered. The harness may still
+   * run the input later (earayu/Mingle#125). 0 checks at once, as after any other turn.
+   */
+  readonly emptyTurnWaitMs?: number;
+  /**
    * Cold start (docs/spec.md 4.1): when an input meets a large session that sat idle past the
    * prompt cache's lifetime, open a fresh session with a built context instead of resuming. Off
    * unless `rebuild`; cold turns are measured and logged either way, for the comparison.
@@ -82,6 +88,8 @@ export const QUOTA_WAIT_MS = 3_600_000;
 /** A little past the reported reset, so the first try after it is not refused again. */
 /** Characters of a person's note shown with their first message in a session. */
 const NOTE_CARD_CHARS = 600;
+/** How long an empty turn (earayu/Mingle#125) defers the unanswered check. */
+const EMPTY_TURN_WAIT_MS = 10 * 60_000;
 
 const QUOTA_MARGIN_MS = 15_000;
 /** A usage limit that keeps coming back this many times is no longer waited for. */
@@ -139,6 +147,8 @@ export class AgentRuntime {
   private running = false;
   private pending: Pending[] = [];
   private timer: NodeJS.Timeout | undefined;
+  /** The deferred unanswered check after an empty turn. */
+  private emptyWait: NodeJS.Timeout | undefined;
   private chain: Promise<void> = Promise.resolve();
   private status: AgentStatus | undefined;
   private disposed = false;
@@ -326,6 +336,7 @@ export class AgentRuntime {
     this.disposed = true;
     this.generation++;
     clearTimeout(this.timer);
+    clearTimeout(this.emptyWait);
     this.unblock();
     this.pending = [];
     // Written now, not after the session is gone: closing can wait on a session still opening.
@@ -728,7 +739,12 @@ export class AgentRuntime {
           // The sign-in answered: any usage-limit wait on it is over, for every agent sharing it.
           if (outcome.kind === "completed") this.deps.onTurnCompleted?.(key, this.turnRevision);
           this.turnRevision = undefined;
-          this.afterTurn(outcome.kind === "completed");
+          if (outcome.kind === "completed" && outcome.empty) this.afterEmptyTurn();
+          else {
+            clearTimeout(this.emptyWait);
+            this.emptyWait = undefined;
+            this.afterTurn(outcome.kind === "completed");
+          }
         },
         onActivity: (kind, detail) => {
           if (this.disposed || gen !== this.generation) return;
@@ -768,6 +784,38 @@ export class AgentRuntime {
     else this.deps.store.setSessionId(this.agentId, session.id);
     this.session = session;
     return session;
+  }
+
+  /**
+   * The harness answered the input without running the model on it (earayu/Mingle#125). It may
+   * have queued it behind a turn of its own, so the model can still answer later: reminding now
+   * would only queue the reminder too, and giving up a second later would be wrong. Deliver what
+   * else is pending, and check what is unanswered after a while, or after the next real turn.
+   */
+  private afterEmptyTurn(): void {
+    const wait = this.deps.emptyTurnWaitMs ?? EMPTY_TURN_WAIT_MS;
+    if (wait <= 0) {
+      this.afterTurn(true);
+      return;
+    }
+    if (this.disposed) return;
+    this.deps.log?.(
+      `${this.agentId}: the harness ended a turn without running it; checking replies in ${Math.round(wait / 1000)}s`,
+    );
+    if (!this.emptyWait) {
+      this.emptyWait = setTimeout(() => {
+        this.emptyWait = undefined;
+        if (this.disposed) return;
+        // A turn is running (the harness got to the input): its end does the check.
+        if (!this.running) this.afterTurn(false);
+      }, wait);
+      this.emptyWait.unref?.();
+    }
+    if (this.stale) {
+      void this.restart();
+      return;
+    }
+    if (this.pending.length > 0) this.flushSoon();
   }
 
   /** After each turn: remind the agent once about messages it has not answered (docs/spec.md 4.3). */

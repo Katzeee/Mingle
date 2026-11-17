@@ -239,6 +239,8 @@ export async function rig(
     /** Fully replaces the harness adapter (e.g. a wrapper around a runtime). */
     harnessAdapter?: Harness;
     coalesceMs?: number;
+    /** Scripted turns that do nothing are "empty"; by default they are checked at once, like a model's silence. */
+    emptyTurnWaitMs?: number;
     live?: boolean;
     channels?: Partial<Record<Platform, Channel>>;
     /** Change what the harness reports, e.g. to make a failed turn look like a sign-in problem. */
@@ -293,6 +295,7 @@ export async function rig(
     secrets: options.secrets ?? memorySecrets(),
     cliEntry: CLI_ENTRY,
     coalesceMs: options.coalesceMs ?? 150,
+    emptyTurnWaitMs: options.emptyTurnWaitMs ?? 0,
     ...(options.coldStart ? { coldStart: options.coldStart } : {}),
     reminderTickMs: 60_000,
     retryDelaysMs: [10],

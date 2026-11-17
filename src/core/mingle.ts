@@ -89,6 +89,8 @@ export interface MingleOptions {
   /** Absolute path of the CLI entry script, run with this Node binary. */
   readonly cliEntry: string;
   readonly coalesceMs?: number;
+  /** See `RuntimeDeps.emptyTurnWaitMs`. */
+  readonly emptyTurnWaitMs?: number;
   /** Which agents open a fresh session on a cold start (`cold.ts`); the value of `MINGLE_COLD_START`. */
   readonly coldStart?: string;
   readonly reminderTickMs?: number;
@@ -740,6 +742,7 @@ export class Mingle {
       env: () => ({ MINGLE_API: this.apiUrl, MINGLE_TOKEN: token, MINGLE_CLI: this.cliPath }),
       agentEnv: () => this.agentEnv(agent.id),
       ...(this.options.coalesceMs !== undefined ? { coalesceMs: this.options.coalesceMs } : {}),
+      ...(this.options.emptyTurnWaitMs !== undefined ? { emptyTurnWaitMs: this.options.emptyTurnWaitMs } : {}),
       coldStart: { rebuild: coldRebuildFor(this.options.coldStart, agent) },
       onActivity: (kind, detail) => this.replies.activity(agent.id, kind, detail),
       onSettled: (ids, outcome, why) => {

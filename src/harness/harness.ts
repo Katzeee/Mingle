@@ -104,6 +104,13 @@ export interface TurnEnd {
   readonly failure?: Failure;
   /** For `quota`: when the limit resets (epoch ms), where the harness reports it. */
   readonly resetsAt?: number;
+  /**
+   * A prompted turn that completed with no reasoning, text or tool call: the harness acknowledged
+   * the input without running the model on it. Kimi Code does this while a turn it began itself
+   * (a background task finishing) is running: the prompt is queued natively and answered at once,
+   * and the model only sees it when that turn ends (earayu/Mingle#125).
+   */
+  readonly empty?: boolean;
 }
 
 export interface HarnessEvents {
@@ -740,6 +747,8 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
 
       /** A turn is running: one Mingle prompted, or one the harness began itself. */
       let turn: "prompted" | "self" | undefined;
+      /** The open turn showed the model working: reasoning, text or a tool call. */
+      let worked = false;
       /** Tasks running beside the turns, which an abort of the turn leaves running. */
       const tasks = new Set<string>();
       /** The root agent's tool calls in flight, with the latest input reported for each. */
@@ -801,21 +810,22 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         }
         // Work with no turn open: the harness began a turn on its own (Claude Code wakes the
         // agent when a background command ends). OAR reports turn starts for prompts only.
-        if (
-          !turn &&
-          (event.kind === "tool_call_started" || event.kind === "reasoning" || event.kind === "text_delta")
-        ) {
+        const work = event.kind === "tool_call_started" || event.kind === "reasoning" || event.kind === "text_delta";
+        if (!turn && work) {
           turn = "self";
           turnBase = totals();
           events.onTurnStarted(true);
         }
+        if (work) worked = true;
         switch (event.kind) {
           case "turn_started":
             turn = "prompted";
+            worked = false;
             turnBase = totals();
             events.onTurnStarted();
             break;
           case "turn_ended": {
+            const empty = turn === "prompted" && !worked;
             turn = undefined;
             // Report before onTurnEnded can deliver another input or reopen the session.
             reportTurnUsage();
@@ -826,6 +836,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
               ...(outcome.reason ? { reason: outcome.reason } : {}),
               ...(outcome.kind === "failed" ? { failure: outcome.failure ?? "unknown" } : {}),
               ...(resetsAt > Date.now() ? { resetsAt } : {}),
+              ...(empty && outcome.kind === "completed" ? { empty: true } : {}),
             });
             break;
           }
