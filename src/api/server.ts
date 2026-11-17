@@ -94,6 +94,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
       );
     }
     c.set("agent", agent);
+    // A command from the agent is progress in its turn, whatever the harness reports.
+    mingle.runtime(agent.id)?.noteProgress();
     await next();
   });
 

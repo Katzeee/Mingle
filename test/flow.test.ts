@@ -329,6 +329,31 @@ describe("message flow", () => {
     await until(() => mingle.store.agent(agentId)?.status === "idle");
   });
 
+  it("leaves a silent turn alone until a message waits on it (#127)", async () => {
+    const lines: string[] = [];
+    current = await rig(
+      async (t) => {
+        if (t.input.startsWith("[mingle] Not answered yet")) return answerNudge(t);
+        // Acknowledge, then a long silent job: nobody waits on it.
+        for (const id of messageIds(t.input))
+          await withProgress(t, runCli(t.options.env as Record<string, string>, ["message", "reply", id], "on it"));
+        await t.tool("Bash", "long job", () => sleep(60_000, t.signal));
+      },
+      { stallMs: 400, log: (line) => lines.push(line) },
+    );
+    const { channel } = current;
+    channel.receive({ text: "start the long job" });
+    await until(() => channel.sent.length === 1);
+    await sleep(1500);
+    expect(lines.some((l) => l.includes("made no progress"))).toBe(false);
+    expect(current.turns).toHaveLength(1);
+    // Now someone waits on the silent turn: it is stopped, and the message answered.
+    channel.receive({ text: "how is it going?", sender: { id: "u2", name: "Li Si", isBot: false } });
+    await until(() => channel.sent.length === 2, 5000);
+    expect(lines.some((l) => l.includes("made no progress"))).toBe(true);
+    expect(current.turns[1]?.input).toMatch(/^\[mingle\] Not answered yet/);
+  });
+
   it("reopens the session when the harness does not end a stuck turn (#127)", async () => {
     const lines: string[] = [];
     let opens = 0;
