@@ -275,6 +275,84 @@ describe("message flow", () => {
     expect(reply.chat.platformId).toBe("7");
   });
 
+  /** Replies to every message the reminder lists. */
+  const answerNudge = async (t: { input: string; options: { env?: unknown } }) => {
+    const ids = (/Not answered yet: ([^.]+)\./.exec(t.input)?.[1] ?? "").split(", ").filter(Boolean);
+    for (const id of ids) await runCli(t.options.env as Record<string, string>, ["message", "reply", id], `late ${id}`);
+  };
+
+  it("stops a turn that makes no progress, and answers what was steered into it (#127)", async () => {
+    const lines: string[] = [];
+    current = await rig(
+      async (t) => {
+        if (t.input.startsWith("[mingle] Not answered yet")) return answerNudge(t);
+        // A command that never ends, until the turn is aborted.
+        await t.tool("Bash", "tail -f /dev/null", () => sleep(60_000, t.signal));
+      },
+      { stallMs: 800, log: (line) => lines.push(line) },
+    );
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "run it" });
+    await until(() => current?.turns.length === 1);
+    await sleep(100);
+    channel.receive({ text: "are you there?", sender: { id: "u2", name: "Li Si", isBot: false } });
+    await until(() => current?.turns[0]?.steered.length === 1);
+    expect(mingle.store.agent(agentId)?.status).toBe("working");
+    await until(() => channel.sent.length === 2, 5000);
+    expect(lines.some((l) => l.includes("made no progress"))).toBe(true);
+    expect(current.turns).toHaveLength(2);
+    expect(messageIds(current.turns[0]?.input ?? "")).toHaveLength(1);
+    const chat = mingle.store.agentChats(agentId)[0]?.id as string;
+    await until(() => mingle.store.chatMessages(chat, 10).every((m) => m.direction !== "in" || m.state === "replied"));
+    await until(() => mingle.store.agent(agentId)?.status === "idle");
+  });
+
+  it("reopens the session when the harness does not end a stuck turn (#127)", async () => {
+    const lines: string[] = [];
+    let opens = 0;
+    current = await rig(
+      async (t) => {
+        if (t.input.startsWith("[mingle] Not answered yet")) return answerNudge(t);
+        // Ignores the abort: only closing the session ends it.
+        await t.tool("Bash", "hang", () => sleep(60_000));
+      },
+      {
+        stallMs: 500,
+        log: (line) => lines.push(line),
+        wrap: (harness) => ({
+          ...harness,
+          open: async (options, events) => {
+            opens++;
+            const session = await harness.open(options, events);
+            return { ...session, abort: async () => true };
+          },
+        }),
+      },
+    );
+    const { channel } = current;
+    channel.receive({ text: "run it" });
+    await until(() => channel.sent.length === 1, 6000);
+    expect(lines.some((l) => l.includes("did not end the stuck turn"))).toBe(true);
+    expect(opens).toBe(2);
+    expect(current.turns[1]?.input).toMatch(/^\[mingle\] Not answered yet/);
+  });
+
+  it("does not stop a long turn that keeps reporting progress (#127)", async () => {
+    const lines: string[] = [];
+    current = await rig(
+      async (t) => {
+        for (let i = 0; i < 6; i++) await t.tool("Bash", `step ${i}`, () => sleep(200));
+        for (const id of messageIds(t.input))
+          await runCli(t.options.env as Record<string, string>, ["message", "reply", id], "done");
+      },
+      { stallMs: 500, log: (line) => lines.push(line) },
+    );
+    current.channel.receive({ text: "build it" });
+    await until(() => current?.channel.sent.length === 1, 6000);
+    expect(current.turns).toHaveLength(1);
+    expect(lines.some((l) => l.includes("made no progress"))).toBe(false);
+  });
+
   /**
    * Like Claude Code: the turn starts a background command and ends; when the command
    * finishes, the harness begins a turn of its own and the agent replies to the message.

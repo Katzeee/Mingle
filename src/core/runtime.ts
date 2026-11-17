@@ -64,6 +64,12 @@ export interface RuntimeDeps {
    */
   readonly emptyTurnWaitMs?: number;
   /**
+   * How long a turn may go without the harness reporting anything before Mingle stops it
+   * (earayu/Mingle#127): a command that hangs must not leave the agent working, and every message
+   * steered into it unanswered, forever. Undefined uses `STALL_MS`.
+   */
+  readonly stallMs?: number;
+  /**
    * Cold start (docs/spec.md 4.1): when an input meets a large session that sat idle past the
    * prompt cache's lifetime, open a fresh session with a built context instead of resuming. Off
    * unless `rebuild`; cold turns are measured and logged either way, for the comparison.
@@ -90,6 +96,14 @@ export const QUOTA_WAIT_MS = 3_600_000;
 const NOTE_CARD_CHARS = 600;
 /** How long an empty turn (earayu/Mingle#125) defers the unanswered check. */
 const EMPTY_TURN_WAIT_MS = 10 * 60_000;
+/**
+ * A turn with no harness event for this long is stuck (earayu/Mingle#127). Harnesses cap a
+ * foreground command at about 10 minutes (Claude Code's Bash tool, Codex's exec), so twice that
+ * in total silence is not work in progress.
+ */
+export const STALL_MS = 20 * 60_000;
+/** After stopping a stuck turn, how long the harness has to end it before its process is replaced. */
+const STALL_GRACE_MS = 30_000;
 
 const QUOTA_MARGIN_MS = 15_000;
 /** A usage limit that keeps coming back this many times is no longer waited for. */
@@ -155,6 +169,10 @@ export class AgentRuntime {
   private queued = new Set<string>();
   /** The deferred unanswered check after an empty turn. */
   private emptyWait: NodeJS.Timeout | undefined;
+  /** Watches the running turn for a stall (earayu/Mingle#127). */
+  private stallTimer: NodeJS.Timeout | undefined;
+  /** When the harness last reported anything during the running turn. */
+  private lastProgress = 0;
   private chain: Promise<void> = Promise.resolve();
   private status: AgentStatus | undefined;
   private disposed = false;
@@ -303,6 +321,7 @@ export class AgentRuntime {
         this.session = undefined;
         this.stale = false;
         this.running = false;
+        this.clearStall();
         await session?.dispose().catch(() => {});
         if (this.disposed) return;
         await this.ensureSession();
@@ -343,6 +362,7 @@ export class AgentRuntime {
     this.generation++;
     clearTimeout(this.timer);
     clearTimeout(this.emptyWait);
+    this.clearStall();
     this.unblock();
     this.pending = [];
     // Written now, not after the session is gone: closing can wait on a session still opening.
@@ -728,6 +748,7 @@ export class AgentRuntime {
           this.running = true;
           // The harness runs what it queued as the turn it starts for a prompt.
           if (!self) this.queued.clear();
+          this.watchStall();
           this.turnRevision = this.deps.limitRevision(key);
           this.setStatus("thinking");
           this.deps.onActivity?.("thinking");
@@ -735,6 +756,7 @@ export class AgentRuntime {
         onTurnEnded: (outcome) => {
           if (this.disposed || gen !== this.generation) return;
           this.running = false;
+          this.clearStall();
           this.idleSince = this.now();
           if (outcome.kind === "failed") {
             const failure = outcome.failure ?? "unknown";
@@ -757,13 +779,18 @@ export class AgentRuntime {
         },
         onActivity: (kind, detail) => {
           if (this.disposed || gen !== this.generation) return;
+          this.lastProgress = this.now();
           this.setStatus(kind === "tool" ? "working" : "thinking", detail ?? null);
           this.deps.onActivity?.(kind, detail);
         },
         onAction: (tool, input) => {
           if (this.disposed || gen !== this.generation) return;
+          this.lastProgress = this.now();
           this.actions.push({ at: this.now(), text: describeAction(tool, input) });
           if (this.actions.length > RECENT_ACTIONS) this.actions.splice(0, this.actions.length - RECENT_ACTIONS);
+        },
+        onProgress: () => {
+          if (gen === this.generation) this.lastProgress = this.now();
         },
         onTurnUsage: (usage) => {
           if (gen !== this.generation) return;
@@ -827,6 +854,66 @@ export class AgentRuntime {
       return;
     }
     if (this.pending.length > 0) this.flushSoon();
+  }
+
+  /**
+   * Watch the turn that just began: if the harness reports nothing for `stallMs` the turn is stuck
+   * (a command that never ends), and steered messages would wait in it forever. One timer per
+   * turn, re-armed for whatever is left since the last event.
+   */
+  private watchStall(): void {
+    this.lastProgress = this.now();
+    if (this.stallTimer) return;
+    const limit = this.deps.stallMs ?? STALL_MS;
+    const check = (wait: number) => {
+      this.stallTimer = setTimeout(() => {
+        this.stallTimer = undefined;
+        if (this.disposed || !this.running) return;
+        const quiet = this.now() - this.lastProgress;
+        if (quiet < limit) check(limit - quiet);
+        else void this.unstick(quiet);
+      }, wait);
+      this.stallTimer.unref?.();
+    };
+    check(limit);
+  }
+
+  private clearStall(): void {
+    clearTimeout(this.stallTimer);
+    this.stallTimer = undefined;
+  }
+
+  /**
+   * Stop a stuck turn the way `/stop` would, but as Mingle's own way out rather than the owner's:
+   * what the turn left unanswered is reminded about as after any turn, so the agent answers in a
+   * fresh one (or the messages end as not answered). If the harness does not end the turn, its
+   * session is replaced: the process and the command it hangs on go with it.
+   */
+  private async unstick(quiet: number): Promise<void> {
+    const session = this.session;
+    const gen = this.generation;
+    if (!session) return;
+    this.deps.log?.(`${this.agentId}: the turn made no progress for ${Math.round(quiet / 60_000)}m; stopping it`);
+    // The grace period starts now, not when the abort returns: a hung harness may never answer it.
+    const grace = Math.min(STALL_GRACE_MS, this.deps.stallMs ?? STALL_MS);
+    const timer = setTimeout(() => {
+      if (this.disposed || gen !== this.generation || !this.running) return;
+      this.deps.log?.(`${this.agentId}: the harness did not end the stuck turn; reopening its session`);
+      this.generation++;
+      this.session = undefined;
+      this.running = false;
+      this.clearStall();
+      this.turnRevision = undefined;
+      this.idleSince = this.now();
+      // What the old process queued goes with it: those messages are reminded about too.
+      this.queued.clear();
+      void session.dispose().catch(() => {});
+      this.setStatus("idle");
+      // The next input (the reminder) resumes the conversation in a new process.
+      this.afterTurn(false);
+    }, grace);
+    timer.unref?.();
+    await session.abort().catch(() => false);
   }
 
   /** After each turn: remind the agent once about messages it has not answered (docs/spec.md 4.3). */
@@ -919,6 +1006,7 @@ export class AgentRuntime {
     this.generation++;
     this.session = undefined;
     this.running = false;
+    this.clearStall();
     void session?.dispose().catch(() => {});
     const failure = failureOf(error);
     this.setStatus("error", message, failure);
