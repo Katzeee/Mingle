@@ -1139,6 +1139,7 @@ docs/             文档
 | QQ | 接入流程实测到出码（2026-11-12）：Mingle 以来源 `mingle` 向 QQ 申请到真实的绑定页（`q.qq.com/qqbot/openclaw/connect.html`），取消时连接器正确结束。扫码与收发尚未真机验证（需要手机 QQ 扫） |
 | 个人微信 | 接入流程实测到出码：Mingle 向腾讯 iLink 申请到真实二维码，控制台正确显示。扫码、验证码、收发尚未真机验证（需要用手机微信扫） |
 | 飞书管理员审核 | 用 `bot/v3/info` 的 `activate_status` 判断：不为 2 时连接显示"等待管理员审核"，每 30 秒检查一次，通过后自动连上。逻辑有测试覆盖；需要审核的租户尚未实测 |
+| 飞书同群多个机器人 | 源码确认（MING-97，SDK 1.76.0）：`LarkChannel` 的去重缓存不传 `cache` 时落到进程级 `internalCache`，按消息 ID 记"已处理"。同一进程里两个机器人在同一群收到同一条消息（消息 ID 相同），先处理完的一个会让另一个把它当重复消息丢掉，表现为同时 @ 两个机器人只有一个收到，取决于先后，时好时坏。现在每个连接传自己的 `DefaultCache`，有测试覆盖；修复后的真机回归待做 |
 | Mingle 端到端，Codex 0.167.1 | 通过。第二个人的问题在 Codex 执行命令期间插入，Codex 先回答了插入的问题，再回"On it."，最后给出第一个任务的结果；三条消息全部标为已回复 |
 | Mingle 端到端，Claude Code | 通过（`test/e2e.test.ts`）。Agent 读了注入的指南，用 `mingle message reply` 引用回复；第二个人在它执行 15 秒命令期间发问，两件事分别回复，四条消息全部标为已回复 |
 | Mingle 端到端，OpenCode 1.19.5 | 通过（2026-11-13，`MINGLE_E2E=opencode MINGLE_E2E_DEEP= pnpm vitest run test/e2e.test.ts`）。真实 OpenCode 在收到消息前开启会话，读取注入的指南后通过 CLI 引用回复 PONG；聊天通道为测试替身，未发送真实 IM 消息。OpenCode 2.x 的指令注入仍不受 OAR 0.97.0 支持，Mingle 在选择和打开会话前拦截 |
