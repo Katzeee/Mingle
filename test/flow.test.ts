@@ -276,9 +276,31 @@ describe("message flow", () => {
   });
 
   /** Replies to every message the reminder lists. */
-  const answerNudge = async (t: { input: string; options: { env?: unknown } }) => {
+  const answerNudge = async (t: { input: string; options: { env?: unknown }; think: (text: string) => void }) => {
     const ids = (/Not answered yet: ([^.]+)\./.exec(t.input)?.[1] ?? "").split(", ").filter(Boolean);
-    for (const id of ids) await runCli(t.options.env as Record<string, string>, ["message", "reply", id], `late ${id}`);
+    for (const id of ids)
+      await withProgress(t, runCli(t.options.env as Record<string, string>, ["message", "reply", id], `late ${id}`));
+  };
+
+  /**
+   * A `mingle` CLI call is a subprocess that can outlast the stall watchdog's limit on its own;
+   * a real harness keeps streaming while a command runs, so report thinking until it lands.
+   */
+  const withProgress = async (t: { think: (text: string) => void }, work: Promise<unknown>) => {
+    let done = false;
+    void work.then(
+      () => {
+        done = true;
+      },
+      () => {
+        done = true;
+      },
+    );
+    while (!done) {
+      t.think("still at it");
+      await sleep(200);
+    }
+    await work;
   };
 
   it("stops a turn that makes no progress, and answers what was steered into it (#127)", async () => {
@@ -343,7 +365,7 @@ describe("message flow", () => {
       async (t) => {
         for (let i = 0; i < 6; i++) await t.tool("Bash", `step ${i}`, () => sleep(200));
         for (const id of messageIds(t.input))
-          await runCli(t.options.env as Record<string, string>, ["message", "reply", id], "done");
+          await withProgress(t, runCli(t.options.env as Record<string, string>, ["message", "reply", id], "done"));
       },
       { stallMs: 500, log: (line) => lines.push(line) },
     );
