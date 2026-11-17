@@ -91,6 +91,8 @@ export interface MingleOptions {
   readonly coalesceMs?: number;
   /** See `RuntimeDeps.emptyTurnWaitMs`. */
   readonly emptyTurnWaitMs?: number;
+  /** See `RuntimeDeps.stallMs`. */
+  readonly stallMs?: number;
   /** Which agents open a fresh session on a cold start (`cold.ts`); the value of `MINGLE_COLD_START`. */
   readonly coldStart?: string;
   readonly reminderTickMs?: number;
@@ -743,6 +745,7 @@ export class Mingle {
       agentEnv: () => this.agentEnv(agent.id),
       ...(this.options.coalesceMs !== undefined ? { coalesceMs: this.options.coalesceMs } : {}),
       ...(this.options.emptyTurnWaitMs !== undefined ? { emptyTurnWaitMs: this.options.emptyTurnWaitMs } : {}),
+      ...(this.options.stallMs !== undefined ? { stallMs: this.options.stallMs } : {}),
       coldStart: { rebuild: coldRebuildFor(this.options.coldStart, agent) },
       onActivity: (kind, detail) => this.replies.activity(agent.id, kind, detail),
       onSettled: (ids, outcome, why) => {

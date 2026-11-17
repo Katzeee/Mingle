@@ -126,6 +126,11 @@ export interface HarnessEvents {
   onAction?(tool: string, input?: string): void;
   /** What the turn that just ended cost, once the harness reports it. */
   onTurnUsage?(usage: TurnUsage): void;
+  /**
+   * The harness reported anything at all: the session is alive, whatever the event. Subagent
+   * work and background tasks count too, though they show no activity of their own.
+   */
+  onProgress?(): void;
 }
 
 /** Tokens one turn used, every model call in it together. */
@@ -779,6 +784,7 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         });
       };
       session.events((event) => {
+        events.onProgress?.();
         switch (event.kind) {
           case "task_started":
             if (!event.ambient) tasks.add(event.taskId);
