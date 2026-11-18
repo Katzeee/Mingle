@@ -324,6 +324,12 @@ export interface LiveOptions {
 }
 
 export interface LiveReply {
+  /**
+   * When the platform stops taking updates to this reply, if it does (WeCom's stream window).
+   * Before then Mingle closes it with a note and sends the answer as a message of its own, so
+   * the reply does not stay frozen on its last progress.
+   */
+  readonly until?: number;
   /** Replace the progress content. Markdown. Best effort. */
   update(markdown: string): Promise<void>;
   /** Replace the content with the final answer and close the reply. `mentions` as in `OutboundMessage`. */

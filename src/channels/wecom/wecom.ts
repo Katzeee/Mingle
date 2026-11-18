@@ -36,6 +36,11 @@ const POLL_EVERY_MS = 3000;
 const MAX_TEXT = 3500;
 /** Inbound frames kept for streaming replies. */
 const FRAME_TTL_MS = 30 * 60_000;
+/**
+ * A stream reply ends by itself ten minutes after it began (the platform docs; to be verified on
+ * a real bot). Mingle hands over a minute before that.
+ */
+const STREAM_WINDOW_MS = 9 * 60_000;
 
 const CAPABILITIES: Capabilities = {
   quoteReply: true,
@@ -279,6 +284,7 @@ export function wecomChannel(options: WecomOptions = {}): Channel {
           const streamId = randomUUID();
           await client.replyStream(known.frame, streamId, options.initial, false);
           return {
+            until: Date.now() + STREAM_WINDOW_MS,
             update: async (markdown) => {
               await client.replyStream(known.frame, streamId, markdown, false).catch(() => {});
             },
