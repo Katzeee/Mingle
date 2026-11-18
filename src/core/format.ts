@@ -33,6 +33,8 @@ export function formatMessage(
     contact?: Contact | undefined;
     /** On delivery: messages around this one that did not reach the agent (docs/spec.md 4.2). */
     unseen?: number;
+    /** On delivery: the message this one replies to, quoted under the header so the reply reads in context. */
+    quoted?: { readonly from: string; readonly body: string };
   } = {},
 ): string {
   const parts = [`msg=${message.id}`, `chat=${chat.id}`, `im=${platform}`];
@@ -55,7 +57,25 @@ export function formatMessage(
   for (const a of message.attachments) parts.push(`file=${a.id}:${quote(a.name)}`);
   parts.push(`time=${localTime(message.createdAt)}`);
   if (opts.unseen) parts.push(`unseen=${opts.unseen}`);
-  return `[${parts.join(" ")}]\n${message.body}`;
+  const quoted = opts.quoted
+    ? `${quoteLines(`${opts.quoted.from}: ${clip(opts.quoted.body, REPLY_QUOTE_CHARS)}`)}\n`
+    : "";
+  return `[${parts.join(" ")}]\n${quoted}${message.body}`;
+}
+
+/** Characters of a replied-to message quoted on delivery; the rest is one `message read` away. */
+const REPLY_QUOTE_CHARS = 200;
+
+function clip(text: string, max: number): string {
+  const chars = [...text];
+  return chars.length > max ? `${chars.slice(0, max).join("").trimEnd()}…` : text;
+}
+
+function quoteLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
 }
 
 /** Characters of context kept before and after a search match: more after, where the answer to it tends to be. */
@@ -132,12 +152,7 @@ export function formatReminder(reminder: Reminder, at: number, source?: string):
   parts.push(`time=${localTime(at)}`);
   const text = `[${parts.join(" ")}]\n${reminder.body}`;
   if (!source) return text;
-  const chars = [...source];
-  const cut = chars.length > SOURCE_QUOTE_CHARS ? `${chars.slice(0, SOURCE_QUOTE_CHARS).join("").trimEnd()}…` : source;
-  return `${text}\n${cut
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n")}`;
+  return `${text}\n${quoteLines(clip(source, SOURCE_QUOTE_CHARS))}`;
 }
 
 /** A handoff as it reaches the agent (docs/spec.md 4.12): one header line, then the owner's text. */

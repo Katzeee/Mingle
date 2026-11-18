@@ -246,6 +246,28 @@ describe("message flow", () => {
     await until(() => current?.turns.some((t) => t.input.startsWith("[mingle] Not answered yet")));
   });
 
+  it("quotes what a reply answers, so a bare '已授权' reads in context (MING-103)", async () => {
+    current = await rig(async (t) => {
+      if (!t.input.includes("download")) return;
+      const [id] = messageIds(t.input);
+      await runCli(
+        t.options.env as Record<string, string>,
+        ["message", "reply", id as string],
+        "The download needs a permission. Open this link to grant it.",
+      );
+    });
+    const { channel } = current;
+    channel.receive({ text: "download the attachments" });
+    await until(() => channel.sent.length === 1);
+    channel.receive({ text: "已授权", replyTo: channel.sent[0]?.platformId as string });
+    const input = await until(() =>
+      current?.turns.flatMap((t) => [t.input, ...t.steered]).find((i) => i.includes("已授权")),
+    );
+    expect(input).toMatch(
+      /reply_to=m\w+ .*\]\n> you: The download needs a permission\. Open this link to grant it\.\n已授权$/,
+    );
+  });
+
   it("marks a message unanswered when the agent ignores the nudge too", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
