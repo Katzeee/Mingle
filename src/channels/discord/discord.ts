@@ -568,7 +568,11 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
         /** Works once the user shares a server with the bot. */
         async messageUser(userId: string, text: string) {
           const dm = await request<{ id: string }>("POST", "/users/@me/channels", { recipient_id: userId });
-          await request("POST", `/channels/${dm.id}/messages`, { content: text, allowed_mentions: { parse: [] } });
+          const sent = await request<{ id: string }>("POST", `/channels/${dm.id}/messages`, {
+            content: text,
+            allowed_mentions: { parse: [] },
+          });
+          return { chat: dm.id, platformId: sent.id };
         },
 
         async listMembers() {

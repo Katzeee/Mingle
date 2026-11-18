@@ -591,10 +591,12 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
 
         async messageUser(userId: string, text: string) {
           if (!channel) throw new Error("the Feishu connection is not ready");
-          await channel.rawClient.im.v1.message.create({
+          const sent = await channel.rawClient.im.v1.message.create({
             params: { receive_id_type: "open_id" },
             data: { receive_id: userId, msg_type: "text", content: JSON.stringify({ text }) },
           });
+          const chat = sent.data?.chat_id;
+          return chat ? { chat, ...(sent.data?.message_id ? { platformId: sent.data.message_id } : {}) } : undefined;
         },
 
         async close() {

@@ -72,10 +72,13 @@ export class Outbox {
         chatId: chat.id,
         body: chunk,
         replyTo: i === 0 ? (quoted?.id ?? null) : null,
+        ...(request.notice ? { notice: true } : {}),
       });
       const files = last && request.files?.length ? request.files.map((path) => ({ path })) : undefined;
       // The first piece of a reply goes into the live reply opened for that message, if any.
-      const intoLive = i === 0 && quoted && chunk ? await this.replies?.answer(quoted.id, chunk) : undefined;
+      // Mingle's own word is not the answer the live reply waits for.
+      const intoLive =
+        i === 0 && quoted && chunk && !request.notice ? await this.replies?.answer(quoted.id, chunk) : undefined;
       let result: SendResult;
       if (intoLive) {
         result = files

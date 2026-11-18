@@ -155,6 +155,8 @@ export interface Message {
   createdAt: number;
   /** Inbound, while `waiting`: when Mingle delivers it again. */
   retryAt?: number | null;
+  /** Outbound: Mingle's own words in the chat, not the agent's (docs/spec.md 4.7). */
+  notice?: boolean;
 }
 
 export interface Task {
@@ -894,13 +896,13 @@ export class Store {
     return shortId("f", 7);
   }
 
-  insertOutbound(input: { chatId: string; body: string; replyTo: string | null }): Message {
+  insertOutbound(input: { chatId: string; body: string; replyTo: string | null; notice?: boolean }): Message {
     const id = this.mint("messages", "m", 5);
     this.db
       .prepare(
-        `INSERT INTO messages (id, chat_id, direction, body, reply_to, state, created_at) VALUES (?, ?, 'out', ?, ?, 'pending', ?)`,
+        `INSERT INTO messages (id, chat_id, direction, body, reply_to, state, notice, created_at) VALUES (?, ?, 'out', ?, ?, 'pending', ?, ?)`,
       )
-      .run(id, input.chatId, input.body, input.replyTo, this.now());
+      .run(id, input.chatId, input.body, input.replyTo, input.notice ? 1 : 0, this.now());
     return this.message(id) as Message;
   }
 
@@ -1048,7 +1050,7 @@ export class Store {
     const marks = scope.map(() => "?").join(", ");
     const spoke = this.db
       .prepare(
-        `SELECT max(created_at) AS at FROM messages WHERE direction = 'out' AND state IN ('sent', 'uncertain')
+        `SELECT max(created_at) AS at FROM messages WHERE direction = 'out' AND notice = 0 AND state IN ('sent', 'uncertain')
          AND created_at <= ? AND chat_id IN (SELECT id FROM chats WHERE id IN (${marks}) OR parent_id IN (${marks}))`,
       )
       .get(before, ...scope, ...scope) as Row;
@@ -1180,7 +1182,7 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT m.* FROM messages m JOIN chats c ON c.id = m.chat_id JOIN connections n ON n.id = c.connection_id
-         WHERE n.agent_id = ? AND ((m.direction = 'in' AND m.triggers = 1 AND m.state NOT IN ('ignored', 'held')) OR (m.direction = 'out' AND m.state IN ('sent', 'uncertain')))
+         WHERE n.agent_id = ? AND ((m.direction = 'in' AND m.triggers = 1 AND m.state NOT IN ('ignored', 'held')) OR (m.direction = 'out' AND m.notice = 0 AND m.state IN ('sent', 'uncertain')))
          ${exclude.length ? `AND m.id NOT IN (${marks})` : ""}
          ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
       )
@@ -1203,7 +1205,7 @@ export class Store {
   spokeSince(chatId: string, at: number): boolean {
     const row = this.db
       .prepare(
-        "SELECT 1 FROM messages WHERE chat_id = ? AND direction = 'out' AND state = 'sent' AND created_at >= ? LIMIT 1",
+        "SELECT 1 FROM messages WHERE chat_id = ? AND direction = 'out' AND notice = 0 AND state = 'sent' AND created_at >= ? LIMIT 1",
       )
       .get(chatId, at);
     return row !== undefined;
@@ -1265,7 +1267,7 @@ export class Store {
     const row = this.db
       .prepare(
         `SELECT max(CASE WHEN m.direction = 'in' AND m.triggers = 1 THEN m.created_at END) AS in_at,
-                max(CASE WHEN m.direction = 'out' AND m.state = 'sent' THEN m.created_at END) AS out_at
+                max(CASE WHEN m.direction = 'out' AND m.notice = 0 AND m.state = 'sent' THEN m.created_at END) AS out_at
          FROM messages m JOIN chats c ON c.id = m.chat_id JOIN connections n ON n.id = c.connection_id
          WHERE n.agent_id = ?`,
       )
@@ -1583,6 +1585,7 @@ function toMessage(r: Row): Message {
     state: String(r.state) as Message["state"],
     createdAt: Number(r.created_at),
     retryAt: r.retry_at == null ? null : Number(r.retry_at),
+    ...(r.notice === 1 ? { notice: true } : {}),
   };
 }
 

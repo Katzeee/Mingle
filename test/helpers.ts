@@ -53,6 +53,8 @@ export class FakeChannel implements Channel {
    * chat's ID up front (Slack, Discord), or by the person's ID with the chat named on the first send (Feishu).
    */
   opensDirect: "none" | "chat" | "user" = "none";
+  /** Whether the bot can write first to a user by their ID (messageUser), as Feishu and Slack can. */
+  messagesUsers = false;
   /** Department and title the platform reports for each user, where member profiles are on. */
   profiles = new Map<string, string>();
   /** How many times a group's member list was read. */
@@ -118,6 +120,16 @@ export class FakeChannel implements Channel {
               return channel.opensDirect === "chat" ? `dm-${userId}` : `user:${userId}`;
             };
       },
+      ...(this.messagesUsers
+        ? {
+            messageUser: async (userId: string, text: string) => {
+              const platformId = String(this.seq++);
+              const chat = { platformId: `dm-${userId}`, kind: "dm" as const };
+              this.sent.push({ chat, text, platformId });
+              return { chat: chat.platformId, platformId };
+            },
+          }
+        : {}),
       react: async (_chat: ChatRef, id: string, state: ReactionState) => {
         this.reactions.push(`${id}:${state}`);
         if (state === "processing") this.acks.push(id);
@@ -254,6 +266,8 @@ export async function rig(
     coldStart?: string;
     /** The bot's owner as the platform reports it on connecting; without it, the bot waits to be claimed. */
     owner?: string;
+    /** The fake chat app lets the bot write first to a user by their ID (messageUser). */
+    messagesUsers?: boolean;
     /** Who the fake chat app says can reach its bots; "org" unless a test is about access. */
     trust?: Trust;
     remoteTransport?: import("../src/core/remotes.ts").RemoteTransport;
@@ -263,6 +277,7 @@ export async function rig(
   const channel = new FakeChannel();
   channel.liveEnabled = Boolean(options.live);
   channel.onboardOwner = options.owner;
+  channel.messagesUsers = Boolean(options.messagesUsers);
   channel.trust = options.trust ?? "org";
   const turns: Rig["turns"] = [];
   const runtime = scriptedRuntime({
