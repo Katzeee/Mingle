@@ -201,21 +201,18 @@ When a reminder fires and the thing is not ready yet, `snooze` it rather than se
 
 ### Waiting for something to change
 
-To wait for something outside the chats (CI on a pull request, a web page, a new release), give a recurring reminder a `--check` command. Mingle runs it on the schedule, in your home directory with your environment variables, and wakes you only when its output changes. Checking costs you nothing; each wake-up is a turn.
+To wait for something outside the chats, give a recurring reminder a `--check` command. Mingle runs it in your home directory without inheriting your configured environment variables. It does not open a model turn for an unchanged result.
 
 ```bash
-"$MINGLE_CLI" reminder set "CI on PR 141 finished: tell them how it went" --every 2m --once --from m8f2a \
-  --check "gh pr checks 141 -R owner/repo --json bucket -q 'map(.bucket) | unique | join(\",\")'"
-"$MINGLE_CLI" reminder set "The pricing page changed: summarise what is new" --every 1h \
-  --check "curl -fsSL https://example.com/pricing | shasum"
+"$MINGLE_CLI" reminder set "When the reported CI checks on PR 141 finish, look up the results and tell them" --every 2m --once --from m8f2a \
+  --check "gh pr view 141 -R owner/repo --json statusCheckRollup --jq '.statusCheckRollup // [] | if length == 0 or any(.[]; if .__typename == \"CheckRun\" then .status != \"COMPLETED\" else (.state == \"PENDING\" or .state == \"EXPECTED\") end) then \"waiting\" else \"finished\" end'"
 ```
 
-- Print only what matters, so it changes only when it should: the state or a version, not a timestamp or a whole page with ads in it. Hash a page you just need to know changed.
-- Setting the reminder runs the command once and prints its output, the baseline. If the thing has already happened, act now. A command that fails is refused; fix it and set it again.
-- `--once` ends it after the first change; without it, it fires on every change. Checks run at most once a minute.
-- A check stops after 7 days, or after `--for` (up to `90d`). When its time is up without a change, you hear once with `check=expired`: set it again if it is still worth waiting for, or tell whoever was waiting.
-- When it fires, the header says `check=changed` and the old and new output follow the reminder's text, so you don't need to run the command again.
-- A command that fails (non-zero exit, more than 60 seconds) is retried quietly; after three failures in a row you hear about it once, with `check=failing`. Cancel and set it again with a fixed command, or cancel it.
+- For CI, emit one stable waiting value until all reported checks finish. If you need specific jobs, wait for those jobs to appear and finish.
+- Print only a non-sensitive state, version, or fingerprint. Do not put credentials in the command or print them. This is a local shell command, not a sandbox; tools may still use their own sign-in. Setting the reminder runs the command once and shows the baseline. If the condition already holds, act now.
+- `--once` ends it after the first change; otherwise each change can wake you. Checks run at most once a minute. When it fires, `check=changed` includes the current output. Mingle saves the comparison hash, not the output.
+- A check ends after 7 days, or after `--for` (up to `90d`), even if its next poll is later. `check=expired` tells you it stopped.
+- A failed command is refused at setup. Later, Mingle retries failures quietly, and `check=failing` tells you once after three in a row. To change a command, cancel the reminder and set it again.
 
 ## When a command fails
 

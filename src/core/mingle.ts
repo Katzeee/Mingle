@@ -15,7 +15,7 @@ import type {
   Platform,
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
-import { runCommand } from "../platform/command.ts";
+import { checkEnvironment, runCommand } from "../platform/command.ts";
 import type { SecretStore } from "../platform/secrets.ts";
 import {
   type Agent,
@@ -183,8 +183,17 @@ export class Mingle {
   private readonly signInVersions = new Map<string, number>();
   /** Installs and sign-ins of harnesses, run for the console. */
   readonly brains: Brains;
-  /** Checks of reminders that fire on change, by reminder, while they run (docs/spec.md 4.6). */
-  private readonly checking = new Map<string, Promise<void>>();
+  /**
+   * Check commands while they run (docs/spec.md 4.6): one per reminder, keyed by reminder id, and
+   * the one-shot runs `reminder set --check` does first, keyed `probe:<agent>:<n>`. Each carries
+   * its AbortController so a cancel, pause, delete or shutdown can end the command in place.
+   */
+  private readonly checking = new Map<string, { agentId: string; controller: AbortController; run: Promise<void> }>();
+  private probeSeq = 0;
+  /** Set once stop() begins: nothing new starts, and what runs is aborted and drained. */
+  private stopping = false;
+  /** Agents being deleted: like `stopping` for one agent, for the window before its rows are gone. */
+  private readonly deleting = new Set<string>();
 
   readonly options: MingleOptions;
 
@@ -315,7 +324,18 @@ export class Mingle {
     return this.resuming;
   }
 
+  /**
+   * Stop means stop: mark it at once so nothing new starts, and let every running check command
+   * go. Idempotent; the CLI calls it before closing the server so checks begin dying immediately,
+   * then stop() drains what is left.
+   */
+  beginShutdown(): void {
+    this.stopping = true;
+    for (const op of this.checking.values()) op.controller.abort();
+  }
+
   async stop(): Promise<void> {
+    this.beginShutdown();
     // Disconnect management only. Remote daemons keep serving their chat apps.
     this.remotes.close();
     clearInterval(this.reminderTimer);
@@ -334,6 +354,7 @@ export class Mingle {
     this.live.clear();
     await Promise.all([...this.runtimes.values()].map((r) => r.dispose()));
     this.runtimes.clear();
+    await this.checksSettled();
     this.store.close();
   }
 
@@ -592,18 +613,25 @@ export class Mingle {
 
   async deleteAgent(idOrSlug: string, removeHome: boolean): Promise<void> {
     const agent = this.agent(idOrSlug);
-    for (const connection of this.store.connections(agent.id)) await this.removeConnection(connection.id);
-    for (const { name } of this.store.envNames(agent.id)) {
-      await this.options.secrets.delete(envRef(agent.id, name)).catch(() => {});
+    // From here on no check may start for this agent, and what runs is let go.
+    this.deleting.add(agent.id);
+    this.abortCheck(agent.id);
+    try {
+      for (const connection of this.store.connections(agent.id)) await this.removeConnection(connection.id);
+      for (const { name } of this.store.envNames(agent.id)) {
+        await this.options.secrets.delete(envRef(agent.id, name)).catch(() => {});
+      }
+      await this.runtimes.get(agent.id)?.dispose();
+      await this.closing.get(agent.id);
+      this.runtimes.delete(agent.id);
+      this.revokeTokens(agent.id);
+      this.paused.delete(agent.id);
+      this.store.deleteAgent(agent.id);
+      this.removeAvatar(agent.avatar);
+      if (removeHome) rmSync(this.homeDir(agent), { recursive: true, force: true });
+    } finally {
+      this.deleting.delete(agent.id);
     }
-    await this.runtimes.get(agent.id)?.dispose();
-    await this.closing.get(agent.id);
-    this.runtimes.delete(agent.id);
-    this.revokeTokens(agent.id);
-    this.paused.delete(agent.id);
-    this.store.deleteAgent(agent.id);
-    this.removeAvatar(agent.avatar);
-    if (removeHome) rmSync(this.homeDir(agent), { recursive: true, force: true });
   }
 
   async stopAgent(idOrSlug: string): Promise<boolean> {
@@ -711,6 +739,8 @@ export class Mingle {
     if (this.paused.has(agent.id)) return false;
     // From here on, new messages take the paused path in receive().
     this.paused.add(agent.id);
+    // Its check commands stop too; a result landing after this is dropped.
+    this.abortCheck(agent.id);
     // A background job of the old session must not speak for it any more.
     this.revokeTokens(agent.id);
     for (const id of this.replies.openFor(agent.id)) this.replies.settle(id, "paused");
@@ -1860,6 +1890,7 @@ export class Mingle {
   // --------------------------------------------------------------- reminders
 
   fireReminders(now = Date.now()): void {
+    if (this.stopping) return;
     for (const reminder of this.store.dueReminders(now)) {
       try {
         if (reminder.check) this.startCheck(reminder, now);
@@ -1880,61 +1911,109 @@ export class Mingle {
       }
     }
     this.store.markReminderFired(reminder.id, now, next);
-    const source = reminder.sourceMessageId ? this.store.message(reminder.sourceMessageId) : undefined;
-    const agentName = this.store.agent(reminder.agentId)?.name;
-    const quoted = source && renderMessage(this.store, source, agentName ? { agentName } : {});
     const runtime = this.runtimes.get(reminder.agentId);
     if (!runtime) {
       // A paused or deleted agent has no runtime: the reminder fired but goes nowhere.
       this.log(`reminder ${reminder.id} fired but agent ${reminder.agentId} has no runtime`);
       return;
     }
-    runtime.enqueueText(formatReminder(reminder, now, quoted || undefined));
+    runtime.enqueueText(formatReminder(reminder, now, this.reminderQuote(reminder)));
   }
 
   /**
-   * Runs a reminder's check command for an agent: in its home, with Mingle's environment and the
-   * agent's own variables, but no `MINGLE_*` token, so the command cannot speak as the agent.
+   * Runs a reminder's check command for an agent: in its home, with a fixed allowlist of Mingle's
+   * own variables (`checkEnvironment`) — never the agent's secret variables and never arbitrary
+   * `process.env`, so the command cannot speak as the agent or be handed credentials by accident.
    */
-  async runCheck(agentId: string, command: string): Promise<CheckOutcome> {
+  async runCheck(agentId: string, command: string, signal?: AbortSignal): Promise<CheckOutcome> {
     const agent = this.store.agent(agentId);
     if (!agent) throw notFound("agent", agentId);
-    const env: Record<string, string | undefined> = { ...process.env, ...((await this.agentEnv(agentId)) ?? {}) };
-    for (const name of Object.keys(env)) if (name.startsWith("MINGLE_")) delete env[name];
     const result = await runCommand(command, {
       cwd: this.homeDir(agent),
-      env,
+      env: checkEnvironment(),
       timeoutMs: CHECK_TIMEOUT_MS,
       maxOutputBytes: CHECK_MAX_OUTPUT,
+      ...(signal ? { signal } : {}),
     });
     return outcome(result);
   }
 
+  /**
+   * The one-shot run `reminder set --check` does before the reminder exists. Tracked like a
+   * scheduled check: pausing or deleting the agent, or shutting Mingle down, cancels it, and a
+   * cancelled probe always fails, so a reminder is never registered from a run that was let go —
+   * even if the agent was resumed while it ran.
+   */
+  probeCheck(agentId: string, command: string): Promise<CheckOutcome> {
+    if (this.stopping || this.paused.has(agentId) || this.deleting.has(agentId) || !this.store.agent(agentId)) {
+      return Promise.resolve({ ok: false, error: "was cancelled" });
+    }
+    const key = `probe:${agentId}:${++this.probeSeq}`;
+    const controller = new AbortController();
+    const run = this.runCheck(agentId, command, controller.signal)
+      .catch((): CheckOutcome => ({ ok: false, error: "could not run" }))
+      // A pause, delete or shutdown that landed while it ran voids the result: the caller must
+      // not register a reminder from a run that was let go, even across a fast resume.
+      .then((result): CheckOutcome => {
+        if (controller.signal.aborted || this.stopping || this.paused.has(agentId) || this.deleting.has(agentId)) {
+          return { ok: false, error: "was cancelled" };
+        }
+        return result;
+      })
+      .finally(() => this.checking.delete(key));
+    this.checking.set(key, { agentId, controller, run: run.then(() => {}) });
+    return run;
+  }
+
   /** Every check now running has finished. For tests. */
   async checksSettled(): Promise<void> {
-    while (this.checking.size > 0) await Promise.all(this.checking.values());
+    while (this.checking.size > 0) await Promise.all([...this.checking.values()].map((op) => op.run));
+  }
+
+  /**
+   * Lets go of check commands still running: the one for `reminderId`, or all of the agent's —
+   * scheduled checks and set-up probes — when the agent pauses, is deleted or Mingle stops. The
+   * result a cancelled run lands with is dropped in finishCheck / fails the probe.
+   */
+  abortCheck(agentId: string, reminderId?: string): void {
+    for (const [key, op] of this.checking) {
+      if (op.agentId !== agentId) continue;
+      if (reminderId !== undefined && key !== reminderId) continue;
+      op.controller.abort();
+    }
+  }
+
+  /** The message a reminder was set for, quoted the same way a plain fire quotes it. */
+  private reminderQuote(reminder: Reminder): string | undefined {
+    const source = reminder.sourceMessageId ? this.store.message(reminder.sourceMessageId) : undefined;
+    const agentName = this.store.agent(reminder.agentId)?.name;
+    const quoted = source && renderMessage(this.store, source, agentName ? { agentName } : {});
+    return quoted || undefined;
   }
 
   /**
    * A check came due: its next time is written first, then it runs in the background. One still
-   * running from last time is left to finish rather than started twice.
+   * running from last time is left to finish rather than started twice — unless its time is up,
+   * which ends the reminder and lets the running check go.
    */
   private startCheck(reminder: Reminder, now: number): void {
-    if (this.checking.has(reminder.id)) return;
+    if (this.stopping || this.paused.has(reminder.agentId) || this.deleting.has(reminder.agentId)) return;
     const check = reminder.check as NonNullable<Reminder["check"]>;
     if (check.until !== null && now >= check.until) {
       // Its time is up: it ends, and the agent hears once, so whoever was waiting is not left hanging.
+      this.abortCheck(reminder.agentId, reminder.id);
       this.store.markReminderFired(reminder.id, now, null);
       const runtime = this.runtimes.get(reminder.agentId);
       if (!runtime) return;
       runtime.enqueueText(
-        formatReminder(reminder, now, undefined, {
+        formatReminder(reminder, now, this.reminderQuote(reminder), {
           state: "expired",
-          text: expiredText(check.command, check.output, reminder.id),
+          text: expiredText(reminder.id),
         }),
       );
       return;
     }
+    if (this.checking.has(reminder.id)) return;
     let next: number | null = null;
     try {
       next = nextFire(reminder.rule, now);
@@ -1942,33 +2021,43 @@ export class Mingle {
       next = null;
     }
     this.store.markReminderDue(reminder.id, next);
-    const command = reminder.check?.command as string;
-    const run = this.runCheck(reminder.agentId, command)
-      .catch((error): CheckOutcome => ({ ok: false, error: `could not run: ${(error as Error).message}` }))
-      .then((result) => this.finishCheck(reminder.agentId, reminder.id, result, Date.now()))
+    const command = check.command;
+    const controller = new AbortController();
+    const run = this.runCheck(reminder.agentId, command, controller.signal)
+      .catch((): CheckOutcome => ({ ok: false, error: "could not run" }))
+      .then((result) => this.finishCheck(reminder.agentId, reminder.id, result, Date.now(), controller.signal))
       .catch((error) => this.log(`reminder ${reminder.id} check failed: ${(error as Error).message}`))
       .finally(() => this.checking.delete(reminder.id));
-    this.checking.set(reminder.id, run);
+    this.checking.set(reminder.id, { agentId: reminder.agentId, controller, run });
   }
 
   /**
-   * A check finished. The reminder is read again: cancelled meanwhile, the result is dropped. A
-   * changed output fires it; an agent that cannot hear it now keeps the old baseline, so the next
-   * check finds the change again.
+   * A check finished. The reminder is read again: cancelled, paused or expired meanwhile, the
+   * result is dropped. A changed output fires it; an agent that cannot hear it now keeps the old
+   * baseline, so the next check finds the change again.
    */
-  private finishCheck(agentId: string, reminderId: string, result: CheckOutcome, at: number): void {
+  private finishCheck(
+    agentId: string,
+    reminderId: string,
+    result: CheckOutcome,
+    at: number,
+    signal: AbortSignal,
+  ): void {
+    if (signal.aborted || this.paused.has(agentId) || this.stopping || this.deleting.has(agentId)) return;
     const reminder = this.store.reminder(agentId, reminderId);
     if (!reminder?.check) return;
     const check = reminder.check;
+    // Past its deadline between two ticks, a change is no news: the deadline ends it, not this.
+    if (check.until !== null && at >= check.until) return;
     const runtime = this.runtimes.get(agentId);
     if (!result.ok) {
       const failures = this.store.recordCheckFailure(reminder.id, at, result.error);
       this.log(`reminder ${reminder.id} check failed (${failures} in a row)`);
       if (failures === CHECK_FAILURES_TOLD && runtime) {
         runtime.enqueueText(
-          formatReminder(reminder, at, undefined, {
+          formatReminder(reminder, at, this.reminderQuote(reminder), {
             state: "failing",
-            text: failingText(check.command, failures, result.error, reminder.id),
+            text: failingText(failures, result.error, reminder.id),
           }),
         );
       }
@@ -1979,13 +2068,10 @@ export class Mingle {
       return;
     }
     this.store.recordCheck(reminder.id, at, { ...result, fired: true, ended: check.once });
-    const source = reminder.sourceMessageId ? this.store.message(reminder.sourceMessageId) : undefined;
-    const agentName = this.store.agent(agentId)?.name;
-    const quoted = source && renderMessage(this.store, source, agentName ? { agentName } : {});
     runtime.enqueueText(
-      formatReminder(reminder, at, quoted || undefined, {
+      formatReminder(reminder, at, this.reminderQuote(reminder), {
         state: "changed",
-        text: changedText(check.output, result.output),
+        text: changedText(result.output),
       }),
     );
   }
@@ -2000,6 +2086,7 @@ export class Mingle {
     // A one-off that already fired is no longer listed: nothing is left to cancel.
     if (!reminder || reminder.nextFireAt === null || !this.store.deleteReminder(agent.id, reminderId))
       throw notFound("reminder", reminderId);
+    this.abortCheck(agent.id, reminderId);
     this.store.addOwnerNote(
       agent.id,
       `[mingle] The owner cancelled reminder ${reminder.id} (${quoteNote(reminder.body)}) in the console. It will not fire again; don't set it again unless asked.`,

@@ -281,3 +281,42 @@ describe("contacts", () => {
     }
   });
 });
+
+describe("reminder check privacy", () => {
+  it("clears raw check output and error text left by older versions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mingle-schema-"));
+    const path = join(dir, "mingle.db");
+    try {
+      const db = new DatabaseSync(path);
+      db.exec(schema);
+      for (let v = 2; v <= 22; v++) {
+        const file = readdirSync(new URL("../src/store/migrations/", import.meta.url)).find((f) =>
+          f.startsWith(`${String(v).padStart(3, "0")}_`),
+        ) as string;
+        db.exec(readFileSync(new URL(`../src/store/migrations/${file}`, import.meta.url), "utf8"));
+      }
+      db.exec(`
+        PRAGMA user_version = 22;
+        INSERT INTO agents (id, slug, name, harness, created_at, updated_at) VALUES ('a_1', 'alex', 'Alex', 'claude', 0, 0);
+        INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, created_at, check_command, check_hash, check_output, check_error)
+          VALUES ('r1', 'a_1', 'watch CI', 'every:5m', 'UTC', 1, 0, 'gh pr checks 1', 'abc', 'raw output with a token', 'raw error with a token');
+        INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, created_at)
+          VALUES ('r2', 'a_1', 'plain', 'once', 'UTC', 1, 0);
+      `);
+      db.close();
+
+      const store = new Store(path);
+      try {
+        const rows = store.db
+          .prepare("SELECT id, check_output, check_error, check_hash FROM reminders ORDER BY id")
+          .all() as Record<string, unknown>[];
+        expect(rows[0]).toMatchObject({ id: "r1", check_output: null, check_error: null, check_hash: "abc" });
+        expect(rows[1]).toMatchObject({ id: "r2", check_output: null, check_error: null });
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
