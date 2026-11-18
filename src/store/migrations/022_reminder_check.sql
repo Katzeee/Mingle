@@ -7,3 +7,4 @@ ALTER TABLE reminders ADD COLUMN check_output TEXT;
 ALTER TABLE reminders ADD COLUMN check_failures INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE reminders ADD COLUMN check_error TEXT;
 ALTER TABLE reminders ADD COLUMN last_checked_at INTEGER;
+ALTER TABLE reminders ADD COLUMN check_until INTEGER;           -- the check stops then, and the agent hears so once

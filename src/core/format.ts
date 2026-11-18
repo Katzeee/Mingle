@@ -178,7 +178,7 @@ export function formatReminder(
   reminder: Reminder,
   at: number,
   source?: string,
-  check?: { readonly state: "changed" | "failing"; readonly text: string },
+  check?: { readonly state: "changed" | "failing" | "expired"; readonly text: string },
 ): string {
   const parts = [`reminder=${reminder.id}`];
   if (reminder.chatId) parts.push(`chat=${reminder.chatId}`);

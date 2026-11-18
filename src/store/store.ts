@@ -202,6 +202,8 @@ export interface ReminderCheck {
   /** Why the last run failed, while it keeps failing. */
   error: string | null;
   lastCheckedAt: number | null;
+  /** When it stops checking (docs/spec.md 4.6). */
+  until: number | null;
 }
 
 type Row = Record<string, SQLInputValue>;
@@ -1422,7 +1424,7 @@ export class Store {
     input: Omit<Reminder, "id" | "createdAt" | "lastFiredAt" | "sourceMessageId" | "check"> & {
       sourceMessageId?: string | null;
       /** A reminder that fires on change, with the output of its first run as the baseline. */
-      check?: { command: string; once: boolean; hash: string; output: string } | null;
+      check?: { command: string; once: boolean; hash: string; output: string; until: number } | null;
     },
   ): Reminder {
     const id = this.mint("reminders", "r", 3);
@@ -1430,8 +1432,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO reminders (id, agent_id, body, rule, timezone, chat_id, source_message_id, next_fire_at, created_at,
-           check_command, check_once, check_hash, check_output, last_checked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           check_command, check_once, check_hash, check_output, last_checked_at, check_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1448,6 +1450,7 @@ export class Store {
         check?.hash ?? null,
         check?.output ?? null,
         check ? this.now() : null,
+        check?.until ?? null,
       );
     return this.reminder(input.agentId, id) as Reminder;
   }
@@ -1739,6 +1742,7 @@ function toReminder(r: Row): Reminder {
             error: str(r.check_error),
             lastCheckedAt:
               r.last_checked_at === null || r.last_checked_at === undefined ? null : Number(r.last_checked_at),
+            until: r.check_until === null || r.check_until === undefined ? null : Number(r.check_until),
           }
         : null,
   };

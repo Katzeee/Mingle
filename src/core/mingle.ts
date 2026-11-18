@@ -37,6 +37,7 @@ import {
   CHECK_TIMEOUT_MS,
   type CheckOutcome,
   changedText,
+  expiredText,
   failingText,
   outcome,
 } from "./check.ts";
@@ -1920,6 +1921,20 @@ export class Mingle {
    */
   private startCheck(reminder: Reminder, now: number): void {
     if (this.checking.has(reminder.id)) return;
+    const check = reminder.check as NonNullable<Reminder["check"]>;
+    if (check.until !== null && now >= check.until) {
+      // Its time is up: it ends, and the agent hears once, so whoever was waiting is not left hanging.
+      this.store.markReminderFired(reminder.id, now, null);
+      const runtime = this.runtimes.get(reminder.agentId);
+      if (!runtime) return;
+      runtime.enqueueText(
+        formatReminder(reminder, now, undefined, {
+          state: "expired",
+          text: expiredText(check.command, check.output, reminder.id),
+        }),
+      );
+      return;
+    }
     let next: number | null = null;
     try {
       next = nextFire(reminder.rule, now);

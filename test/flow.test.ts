@@ -816,6 +816,9 @@ describe("agent CLI", () => {
       outputs.noEvery = (await set("x", "--in", "5m", "--check", "node state.js")).stderr;
       outputs.often = (await set("x", "--every", "0m", "--check", "node state.js")).stderr;
       outputs.onceAlone = (await set("x", "--every", "5m", "--once")).stderr;
+      outputs.forBad = (await set("x", "--every", "5m", "--check", "node state.js", "--for", "100d")).stderr;
+      outputs.forAlone = (await set("x", "--every", "5m", "--for", "3d")).stderr;
+      await set("Short wait", "--every", "5m", "--check", "node state.js", "--for", "15m");
       outputs.list = (await runCli(env, ["reminder", "list"])).stdout;
       await runCli(env, ["message", "reply", id as string], "I'll tell you when CI is done.");
     });
@@ -834,15 +837,23 @@ console.log("ci: " + s);`,
     await until(() => !mingle.runtime(agentId)?.busy);
 
     // Setting it runs the check once and shows the baseline; a broken command is refused.
-    expect(outputs.once).toMatch(/^set r\w+, next check at .+; it fires when the output changes from:\nci: pending\n$/);
+    expect(outputs.once).toMatch(
+      /^set r\w+, next check at .+, checking until .+; it fires when the output changes from:\nci: pending\n$/,
+    );
     expect(outputs.broken).toMatch(/^error: check_failed\nnext: the check exited with 1: .+it must exit 0\n$/s);
     expect(outputs.noEvery).toMatch(/^error: check_needs_every/);
     expect(outputs.often).toMatch(/^error: check_too_often/);
     expect(outputs.onceAlone).toMatch(/^error: check_required/);
-    expect(outputs.list).toMatch(/Tell them CI finished {2}\(from m\w+\)\n {4}check \(once\): node state\.js/);
-    const [once, every] = mingle.store.reminders(agentId);
+    expect(outputs.forBad).toMatch(/^error: check_for_invalid/);
+    expect(outputs.forAlone).toMatch(/^error: check_required/);
+    expect(outputs.list).toMatch(/Tell them CI finished {2}\(from m\w+\)\n {4}check \(once\) until .+: node state\.js/);
+    const byBody = (body: string) => mingle.store.reminders(agentId).find((r) => r.body === body);
+    const once = byBody("Tell them CI finished");
+    const every = byBody("Say what changed");
+    // Seven days unless told otherwise.
+    expect(Math.abs((every?.check?.until ?? 0) - (every?.createdAt ?? 0) - 7 * 86_400_000)).toBeLessThan(60_000);
     expect(once?.check).toMatchObject({ command: "node state.js", once: true, output: "ci: pending", failures: 0 });
-    expect(mingle.store.reminders(agentId)).toHaveLength(2);
+    expect(mingle.store.reminders(agentId)).toHaveLength(3);
 
     // Nothing changed: checked, nobody woken.
     const start = Date.now();
@@ -860,9 +871,11 @@ console.log("ci: " + s);`,
     const heard = () => woken.join("\n\n");
     await until(() => heard().includes("Say what changed"));
     expect(heard()).toMatch(
-      /^\[reminder=r\w+ chat=c\w+ time=.+ check=changed\]\nTell them CI finished\nCheck output before:\nci: pending\nCheck output now:\nci: pass\n> \[msg=/,
+      /\[reminder=r\w+ chat=c\w+ time=.+ check=changed\]\nTell them CI finished\nCheck output before:\nci: pending\nCheck output now:\nci: pass\n> \[msg=/,
     );
     expect(heard()).toMatch(/\[reminder=r\w+ time=.+ check=changed\]\nSay what changed\nCheck output before:/);
+    // The 15-minute one ran out without a change: it ends, and the agent hears so once.
+    expect(heard()).toMatch(/check=expired\]\nShort wait\nStopped checking: its time is up/);
     expect(mingle.store.reminders(agentId).map((r) => r.id)).toEqual([every?.id]);
     expect(mingle.store.reminder(agentId, every?.id as string)?.check?.output).toBe("ci: pass");
 

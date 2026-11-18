@@ -661,7 +661,8 @@ const en = {
   "agent.noTasks": "No tasks.",
   "agent.noTasksBody": "Tasks the agent tracks for you will appear here.",
   "agent.noReminders": "No reminders.",
-  "agent.noRemindersBody": "Reminders the agent sets for you will appear here.",
+  "agent.noRemindersBody":
+    "Reminders the agent sets for you will appear here. It can also keep an eye on CI, a web page or a new release, and speaks up only when something changes.",
   "agent.reminderLastFired": "Last fired {time}",
   "agent.reminderNextCheck": "Next check {time}",
   "agent.reminderCheck": "Check command:",
@@ -1405,7 +1406,7 @@ const zh: Record<MessageKey, string> = {
   "agent.noTasks": "没有任务。",
   "agent.noTasksBody": "Agent 为你跟进的任务会显示在这里。",
   "agent.noReminders": "没有提醒。",
-  "agent.noRemindersBody": "Agent 为你设置的提醒会显示在这里。",
+  "agent.noRemindersBody": "Agent 为你设置的提醒会显示在这里。它也能替你盯着 CI、网页或新版本，有变化才开口。",
   "agent.reminderLastFired": "上次触发 {time}",
   "agent.reminderNextCheck": "下次检查 {time}",
   "agent.reminderCheck": "检查命令：",

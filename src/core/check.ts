@@ -14,6 +14,9 @@ export const CHECK_OUTPUT_KEPT = 4000;
 /** Failed runs in a row before the agent hears about it, once. */
 export const CHECK_FAILURES_TOLD = 3;
 export const CHECK_MIN_INTERVAL_MS = 60_000;
+/** How long a check runs when `--for` is not given, and the most it may be given. */
+export const CHECK_DEFAULT_FOR_MS = 7 * 86_400_000;
+export const CHECK_MAX_FOR_MS = 90 * 86_400_000;
 const SHOWN = 1500;
 const STDERR_LINES = 5;
 const MAX_COMMAND = 4000;
@@ -55,6 +58,15 @@ function shown(output: string | null): string {
 /** What follows the reminder's text when its output changed. */
 export function changedText(before: string | null, now: string): string {
   return `Check output before:\n${shown(before)}\nCheck output now:\n${shown(now)}`;
+}
+
+/** What follows the reminder's text when it stopped checking because its time was up. */
+export function expiredText(command: string, output: string | null, id: string): string {
+  return [
+    `Stopped checking: its time is up, and the output never changed. Last output:\n${shown(output)}`,
+    `Command: ${command}`,
+    `If it is still worth waiting for, set it again with a longer --for; otherwise tell whoever asked, if they are still waiting. (${id} is gone.)`,
+  ].join("\n");
 }
 
 /** What follows the reminder's text when the command keeps failing. */

@@ -213,6 +213,7 @@ To wait for something outside the chats (CI on a pull request, a web page, a new
 - Print only what matters, so it changes only when it should: the state or a version, not a timestamp or a whole page with ads in it. Hash a page you just need to know changed.
 - Setting the reminder runs the command once and prints its output, the baseline. If the thing has already happened, act now. A command that fails is refused; fix it and set it again.
 - `--once` ends it after the first change; without it, it fires on every change. Checks run at most once a minute.
+- A check stops after 7 days, or after `--for` (up to `90d`). When its time is up without a change, you hear once with `check=expired`: set it again if it is still worth waiting for, or tell whoever was waiting.
 - When it fires, the header says `check=changed` and the old and new output follow the reminder's text, so you don't need to run the command again.
 - A command that fails (non-zero exit, more than 60 seconds) is retried quietly; after three failures in a row you hear about it once, with `check=failing`. Cancel and set it again with a fixed command, or cancel it.
 
