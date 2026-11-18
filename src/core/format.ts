@@ -174,11 +174,17 @@ const SOURCE_QUOTE_CHARS = 500;
  * A reminder as it reaches the agent. One set for a message quotes it, header included, so the
  * agent can `message reply` to it (docs/spec.md 4.6).
  */
-export function formatReminder(reminder: Reminder, at: number, source?: string): string {
+export function formatReminder(
+  reminder: Reminder,
+  at: number,
+  source?: string,
+  check?: { readonly state: "changed" | "failing" | "expired"; readonly text: string },
+): string {
   const parts = [`reminder=${reminder.id}`];
   if (reminder.chatId) parts.push(`chat=${reminder.chatId}`);
   parts.push(`time=${localTime(at)}`);
-  const text = `[${parts.join(" ")}]\n${reminder.body}`;
+  if (check) parts.push(`check=${check.state}`);
+  const text = `[${parts.join(" ")}]\n${reminder.body}${check ? `\n${check.text}` : ""}`;
   if (!source) return text;
   return `${text}\n${quoteLines(clip(source, SOURCE_QUOTE_CHARS))}`;
 }

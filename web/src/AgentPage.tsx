@@ -983,14 +983,34 @@ function Work({
                 onDone={() => onDropped("reminders", r.id)}
                 detail={
                   <>
-                    {r.nextFireAt ? shortDateTime(r.nextFireAt, locale) : ""}
+                    {r.nextFireAt
+                      ? r.check
+                        ? t("agent.reminderNextCheck", { time: shortDateTime(r.nextFireAt, locale) })
+                        : shortDateTime(r.nextFireAt, locale)
+                      : ""}
                     {r.lastFiredAt ? (
                       <span className="text-ink3">
                         {" · "}
                         {t("agent.reminderLastFired", { time: shortDateTime(r.lastFiredAt, locale) })}
                       </span>
                     ) : null}
+                    {r.check ? (
+                      <span className="selectable mt-0.5 block truncate font-mono text-ink3" title={r.check.command}>
+                        <span className="sr-only">{t("agent.reminderCheck")} </span>
+                        {r.check.command}
+                      </span>
+                    ) : null}
                   </>
+                }
+                aside={
+                  r.check && r.check.failures >= CHECK_FAILING ? (
+                    <span
+                      className="shrink-0 rounded-full border border-red-line bg-red-tint px-2 py-0.5 text-caption text-red"
+                      title={r.check.error ?? undefined}
+                    >
+                      {t("agent.reminderCheckFailing")}
+                    </span>
+                  ) : undefined
                 }
               />
             ))}
@@ -1000,6 +1020,9 @@ function Work({
     </>
   );
 }
+
+/** Failed checks in a row before a reminder shows it, as many as it takes to tell the agent (docs/spec.md 4.6). */
+const CHECK_FAILING = 3;
 
 /**
  * A task or reminder. The agent owns them; the owner's one action (close, cancel) stays out of the

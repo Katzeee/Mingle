@@ -513,7 +513,7 @@ Key facts:
 - On GitHub it uses an account of its own and answers @mentions in issues, pull requests and review threads from repository owners, members and collaborators.
 - On a Mac, it talks with you in iMessage in your chat with yourself, on your own Apple ID.
 - One agent keeps one long-lived session and one memory across every chat app. There are no session commands; the owner can send /stop.
-- It keeps tasks, reminders and an address book (one person's accounts across apps can be linked), reads group conversations as background, shows progress (a reaction, then a live reply), sends and receives files, and reports back where it was asked.
+- It keeps tasks, reminders (a reminder can carry a shell check that Mingle runs locally, waking the agent only when its output changes: CI, a web page, a release) and an address book (one person's accounts across apps can be linked), reads group conversations as background, shows progress (a reaction, then a live reply), sends and receives files, and reports back where it was asked.
 - The owner is whoever scanned the code, or whoever sends the bot the 6-digit claim code the console shows. On public apps (Telegram, Discord, QQ), a new person or group waits for the owner's approval before the agent acts for them.
 - Managed from a desktop app (macOS, Windows, Linux; menu bar or tray, auto-update), a local web console on 127.0.0.1, or the \`mingle\` command.
 - Mingle connects chat apps through their official bot APIs; iMessage, which has none, runs locally on the owner's Apple ID. No cloud bridge.
@@ -530,7 +530,7 @@ Build from source (Node.js 24, pnpm): \`git clone ${REPO}.git && cd Mingle && pn
 - \`mingle connect <agent> telegram\`: bot token on standard input
 - \`mingle handoff <agent>\`: hand the agent what another conversation knows, on standard input
 - \`mingle log\`: the end of Mingle's log, even when it is not running
-- Inside a session, agents use \`mingle message reply|send|read|search\`, \`mingle chat list|info\`, \`mingle contact list|info|name|link|note\`, \`mingle file get\`, \`mingle task create|list|update\`, \`mingle reminder set|list|snooze|cancel\`, and \`mingle manual\` for their full guide.
+- Inside a session, agents use \`mingle message reply|send|read|search\`, \`mingle chat list|info\`, \`mingle contact list|info|name|link|note\`, \`mingle file get\`, \`mingle task create|list|update\`, \`mingle reminder set|list|snooze|cancel\` (\`set --every 5m --check <command>\` to wait for a change), and \`mingle manual\` for their full guide.
 - Add \`--json\` for machine-readable output.
 
 ## Docs

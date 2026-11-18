@@ -6,9 +6,11 @@ import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toInbound } from "../src/channels/telegram/telegram.ts";
+import { changedText, checkCommand, outcome } from "../src/core/check.ts";
 import { excerpt, formatMessage, formatReminder } from "../src/core/format.ts";
 import { split } from "../src/core/outbox.ts";
 import { nextFire, parseDuration } from "../src/core/schedule.ts";
+import { runCommand } from "../src/platform/command.ts";
 import { applyShellEnvironment } from "../src/platform/shell-env.ts";
 import { Store } from "../src/store/store.ts";
 import { type LocalePreference, localePreference, resolveLocale } from "../web/src/locale.ts";
@@ -174,6 +176,7 @@ describe("formatReminder", () => {
     nextFireAt: null,
     lastFiredAt: null,
     createdAt: 0,
+    check: null,
   };
 
   it("quotes the source message line by line under the reminder", () => {
@@ -194,6 +197,77 @@ describe("formatReminder", () => {
 
   it("is just the reminder without a source", () => {
     expect(formatReminder(reminder, 0)).toMatch(/^\[reminder=r2 chat=c3 time=.+\]\nCheck the forecast$/);
+  });
+
+  it("marks a check in the header and puts what it found before the quote", () => {
+    const text = formatReminder(reminder, 0, "[msg=m4]\nis CI done?", {
+      state: "changed",
+      text: changedText("pending", "pass"),
+    });
+    expect(text.split("\n")).toEqual([
+      expect.stringMatching(/^\[reminder=r2 chat=c3 time=.+ check=changed\]$/),
+      "Check the forecast",
+      "Check output before:",
+      "pending",
+      "Check output now:",
+      "pass",
+      "> [msg=m4]",
+      "> is CI done?",
+    ]);
+  });
+});
+
+describe("reminder checks", () => {
+  it("compares the trimmed output and keeps only its start", () => {
+    const a = outcome({ code: 0, stdout: "pass\n", stderr: "" });
+    const b = outcome({ code: 0, stdout: "  pass", stderr: "" });
+    expect(a.ok && b.ok && a.hash === b.hash).toBe(true);
+    const long = outcome({ code: 0, stdout: "x".repeat(10_000), stderr: "" });
+    expect(long.ok && long.output.length).toBe(4000);
+    const other = outcome({ code: 0, stdout: `${"x".repeat(9_999)}y`, stderr: "" });
+    expect(long.ok && other.ok && long.hash !== other.hash).toBe(true);
+  });
+
+  it("says why a run failed, with the end of standard error", () => {
+    expect(outcome({ code: 2, stdout: "", stderr: "a\nb\nc\nd\ne\nf\ngh: not found\n" })).toEqual({
+      ok: false,
+      error: "exited with 2: c\nd\ne\nf\ngh: not found",
+    });
+    expect(outcome({ code: null, stdout: "", stderr: "", killed: "timeout" })).toEqual({
+      ok: false,
+      error: "timed out after 60s",
+    });
+    expect(outcome({ code: null, stdout: "", stderr: "", killed: "output_too_large" })).toMatchObject({ ok: false });
+  });
+
+  it("refuses an empty or huge command", () => {
+    expect(() => checkCommand("  ")).toThrow(/check_required|shell command/);
+    expect(() => checkCommand("x".repeat(5000))).toThrow(/4000/);
+    expect(checkCommand(" gh pr checks 1 ")).toBe("gh pr checks 1");
+  });
+
+  it("runs a shell command and kills it on a timeout", async () => {
+    const ok = await runCommand('node -e "process.stdout.write(String(6*7))"', {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1024,
+    });
+    expect(ok).toEqual({ code: 0, stdout: "42", stderr: "" });
+    const slow = await runCommand('node -e "setTimeout(() => {}, 20000)"', {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 300,
+      maxOutputBytes: 1024,
+    });
+    expect(slow.killed).toBe("timeout");
+    const loud = await runCommand("node -e \"process.stdout.write('x'.repeat(5000))\"", {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1024,
+    });
+    expect(loud.killed).toBe("output_too_large");
   });
 });
 

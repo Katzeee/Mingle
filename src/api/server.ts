@@ -7,6 +7,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import QRCode from "qrcode";
 import type { CredentialField, OnboardingMethod, PermissionId, Platform, Trust } from "../channels/channel.ts";
+import { CHECK_DEFAULT_FOR_MS, CHECK_MAX_FOR_MS, CHECK_MIN_INTERVAL_MS, checkCommand } from "../core/check.ts";
 import { sendTarget } from "../core/direct.ts";
 import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
@@ -360,6 +361,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
       every?: string;
       chat?: string;
       from?: string;
+      check?: string;
+      once?: boolean;
+      for?: string;
     }>();
     if (!body.text?.trim())
       throw new MingleError(
@@ -380,6 +384,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
       }
       chatId = source.chatId;
     }
+    if (body.for !== undefined && body.check === undefined)
+      throw new MingleError("check_required", "--for goes with --check: it says how long to keep checking");
+    if (body.once && body.check === undefined)
+      throw new MingleError("check_required", "--once goes with --check: it ends the reminder after the first change");
+    if (body.check !== undefined && !body.every)
+      throw new MingleError("check_needs_every", "a check runs on a schedule: pass --every 5m with --check");
     const now = Date.now();
     let rule = "once";
     let next: number;
@@ -396,7 +406,25 @@ export function createApi(mingle: Mingle): Hono<Env> {
     } else {
       throw new MingleError("when_required", "pass one of --in 30m, --at <time> or --every daily@09:00");
     }
+    // A check runs once now: a broken command fails here, and the agent sees where things stand.
+    let check: { command: string; once: boolean; hash: string; output: string; until: number } | null = null;
+    if (body.check !== undefined) {
+      const command = checkCommand(body.check);
+      if (rule.startsWith("every:") && nextFire(rule, now) - now < CHECK_MIN_INTERVAL_MS)
+        throw new MingleError("check_too_often", "check at most once a minute: --every 1m or longer");
+      const runFor = body.for === undefined ? CHECK_DEFAULT_FOR_MS : parseDuration(body.for);
+      if (runFor > CHECK_MAX_FOR_MS || runFor <= 0)
+        throw new MingleError("check_for_invalid", "keep checking for at most 90d: --for 3d, --for 30d");
+      const result = await mingle.runCheck(agent.id, command);
+      if (!result.ok)
+        throw new MingleError(
+          "check_failed",
+          `the check ${result.error}. Fix the command and set the reminder again; it must exit 0`,
+        );
+      check = { command, once: body.once === true, hash: result.hash, output: result.output, until: now + runFor };
+    }
     const reminder = store.createReminder({
+      check,
       agentId: agent.id,
       body: body.text.trim(),
       rule,

@@ -15,6 +15,7 @@ import type {
   Platform,
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
+import { runCommand } from "../platform/command.ts";
 import type { SecretStore } from "../platform/secrets.ts";
 import {
   type Agent,
@@ -30,6 +31,16 @@ import {
 import { VERSION } from "../version.ts";
 import { CLAIM_ATTEMPTS, CLAIM_TTL_MS, claimAttempt, claimCode, gate } from "./access.ts";
 import { Brains } from "./brains.ts";
+import {
+  CHECK_FAILURES_TOLD,
+  CHECK_MAX_OUTPUT,
+  CHECK_TIMEOUT_MS,
+  type CheckOutcome,
+  changedText,
+  expiredText,
+  failingText,
+  outcome,
+} from "./check.ts";
 import { coldRebuildFor } from "./cold.ts";
 import { diagnosisPrompt } from "./diagnose.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
@@ -172,6 +183,8 @@ export class Mingle {
   private readonly signInVersions = new Map<string, number>();
   /** Installs and sign-ins of harnesses, run for the console. */
   readonly brains: Brains;
+  /** Checks of reminders that fire on change, by reminder, while they run (docs/spec.md 4.6). */
+  private readonly checking = new Map<string, Promise<void>>();
 
   readonly options: MingleOptions;
 
@@ -1849,7 +1862,8 @@ export class Mingle {
   fireReminders(now = Date.now()): void {
     for (const reminder of this.store.dueReminders(now)) {
       try {
-        this.fireReminder(reminder, now);
+        if (reminder.check) this.startCheck(reminder, now);
+        else this.fireReminder(reminder, now);
       } catch (error) {
         this.log(`reminder ${reminder.id} failed to fire: ${(error as Error).message}`);
       }
@@ -1876,6 +1890,104 @@ export class Mingle {
       return;
     }
     runtime.enqueueText(formatReminder(reminder, now, quoted || undefined));
+  }
+
+  /**
+   * Runs a reminder's check command for an agent: in its home, with Mingle's environment and the
+   * agent's own variables, but no `MINGLE_*` token, so the command cannot speak as the agent.
+   */
+  async runCheck(agentId: string, command: string): Promise<CheckOutcome> {
+    const agent = this.store.agent(agentId);
+    if (!agent) throw notFound("agent", agentId);
+    const env: Record<string, string | undefined> = { ...process.env, ...((await this.agentEnv(agentId)) ?? {}) };
+    for (const name of Object.keys(env)) if (name.startsWith("MINGLE_")) delete env[name];
+    const result = await runCommand(command, {
+      cwd: this.homeDir(agent),
+      env,
+      timeoutMs: CHECK_TIMEOUT_MS,
+      maxOutputBytes: CHECK_MAX_OUTPUT,
+    });
+    return outcome(result);
+  }
+
+  /** Every check now running has finished. For tests. */
+  async checksSettled(): Promise<void> {
+    while (this.checking.size > 0) await Promise.all(this.checking.values());
+  }
+
+  /**
+   * A check came due: its next time is written first, then it runs in the background. One still
+   * running from last time is left to finish rather than started twice.
+   */
+  private startCheck(reminder: Reminder, now: number): void {
+    if (this.checking.has(reminder.id)) return;
+    const check = reminder.check as NonNullable<Reminder["check"]>;
+    if (check.until !== null && now >= check.until) {
+      // Its time is up: it ends, and the agent hears once, so whoever was waiting is not left hanging.
+      this.store.markReminderFired(reminder.id, now, null);
+      const runtime = this.runtimes.get(reminder.agentId);
+      if (!runtime) return;
+      runtime.enqueueText(
+        formatReminder(reminder, now, undefined, {
+          state: "expired",
+          text: expiredText(check.command, check.output, reminder.id),
+        }),
+      );
+      return;
+    }
+    let next: number | null = null;
+    try {
+      next = nextFire(reminder.rule, now);
+    } catch {
+      next = null;
+    }
+    this.store.markReminderDue(reminder.id, next);
+    const command = reminder.check?.command as string;
+    const run = this.runCheck(reminder.agentId, command)
+      .catch((error): CheckOutcome => ({ ok: false, error: `could not run: ${(error as Error).message}` }))
+      .then((result) => this.finishCheck(reminder.agentId, reminder.id, result, Date.now()))
+      .catch((error) => this.log(`reminder ${reminder.id} check failed: ${(error as Error).message}`))
+      .finally(() => this.checking.delete(reminder.id));
+    this.checking.set(reminder.id, run);
+  }
+
+  /**
+   * A check finished. The reminder is read again: cancelled meanwhile, the result is dropped. A
+   * changed output fires it; an agent that cannot hear it now keeps the old baseline, so the next
+   * check finds the change again.
+   */
+  private finishCheck(agentId: string, reminderId: string, result: CheckOutcome, at: number): void {
+    const reminder = this.store.reminder(agentId, reminderId);
+    if (!reminder?.check) return;
+    const check = reminder.check;
+    const runtime = this.runtimes.get(agentId);
+    if (!result.ok) {
+      const failures = this.store.recordCheckFailure(reminder.id, at, result.error);
+      this.log(`reminder ${reminder.id} check failed (${failures} in a row)`);
+      if (failures === CHECK_FAILURES_TOLD && runtime) {
+        runtime.enqueueText(
+          formatReminder(reminder, at, undefined, {
+            state: "failing",
+            text: failingText(check.command, failures, result.error, reminder.id),
+          }),
+        );
+      }
+      return;
+    }
+    if (result.hash === check.hash || !runtime) {
+      this.store.recordCheck(reminder.id, at, { ...result, fired: false, ended: false });
+      return;
+    }
+    this.store.recordCheck(reminder.id, at, { ...result, fired: true, ended: check.once });
+    const source = reminder.sourceMessageId ? this.store.message(reminder.sourceMessageId) : undefined;
+    const agentName = this.store.agent(agentId)?.name;
+    const quoted = source && renderMessage(this.store, source, agentName ? { agentName } : {});
+    runtime.enqueueText(
+      formatReminder(reminder, at, quoted || undefined, {
+        state: "changed",
+        text: changedText(check.output, result.output),
+      }),
+    );
   }
 
   /**

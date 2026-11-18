@@ -43,6 +43,9 @@ const OPTIONS = {
   status: { type: "string" },
   at: { type: "string" },
   every: { type: "string" },
+  check: { type: "string" },
+  once: { type: "boolean" },
+  for: { type: "string" },
   by: { type: "string" },
   chat: { type: "string" },
   name: { type: "string" },
@@ -453,29 +456,55 @@ async function agentCommand(group: string, action: string | undefined, args: str
       const text = need(
         args.join(" "),
         "text_required",
-        'usage: mingle reminder set "text" --in 6h | --at <time> | --every daily@09:00',
+        'usage: mingle reminder set "text" --in 6h | --at <time> | --every daily@09:00 [--check <command> [--once] [--for 7d]]',
       );
-      const reminder = await call()<{ id: string; nextFireAt: number }>("POST", "/v1/agent/reminders", {
+      const reminder = await call()<{
+        id: string;
+        nextFireAt: number;
+        check: { output: string | null; until: number | null } | null;
+      }>("POST", "/v1/agent/reminders", {
         text,
         in: flags.in,
         at: flags.at,
         every: flags.every,
         chat: flags.chat,
         from: flags.from,
+        check: flags.check,
+        once: flags.once,
+        for: flags.for,
       });
-      print(reminder, () => `set ${reminder.id}, next at ${time(reminder.nextFireAt)}`);
+      print(reminder, () =>
+        reminder.check
+          ? `set ${reminder.id}, next check at ${time(reminder.nextFireAt)}, checking until ${time(reminder.check.until ?? 0)}; it fires when the output changes from:\n${reminder.check.output || "(empty)"}`
+          : `set ${reminder.id}, next at ${time(reminder.nextFireAt)}`,
+      );
       return true;
     }
     case "reminder list": {
       const reminders = await call()<
-        { id: string; body: string; rule: string; nextFireAt: number; sourceMessageId: string | null }[]
+        {
+          id: string;
+          body: string;
+          rule: string;
+          nextFireAt: number;
+          sourceMessageId: string | null;
+          check: {
+            command: string;
+            once: boolean;
+            failures: number;
+            error: string | null;
+            until: number | null;
+          } | null;
+        }[]
       >("GET", "/v1/agent/reminders");
+      const checkLine = (c: NonNullable<(typeof reminders)[number]["check"]>) =>
+        `\n    check${c.once ? " (once)" : ""} until ${time(c.until ?? 0)}: ${c.command}${c.failures ? `\n    failing ${c.failures}x: ${c.error}` : ""}`;
       print(reminders, () =>
         reminders.length
           ? reminders
               .map(
                 (r) =>
-                  `${r.id}  ${time(r.nextFireAt)}  ${r.rule}  ${r.body}${r.sourceMessageId ? `  (from ${r.sourceMessageId})` : ""}`,
+                  `${r.id}  ${time(r.nextFireAt)}  ${r.rule}  ${r.body}${r.sourceMessageId ? `  (from ${r.sourceMessageId})` : ""}${r.check ? checkLine(r.check) : ""}`,
               )
               .join("\n")
           : "no reminders",
