@@ -3,6 +3,13 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.3.2
+
+- Ask your agent to watch a pull request's checks, a page, or a new release. Mingle runs the check on your machine without using model quota for each poll. A change wakes the agent, and a check that's no longer needed can be cancelled from the console.
+- Checks stop when cancelled and respect their deadline even when snoozed. Check commands no longer inherit the agent's configured credentials, and raw check output is no longer kept in reminder history.
+- Long-running chat replies finish more reliably. Feishu keeps updating the original card where possible; when a platform's live reply window closes, Mingle can send the answer as a new message.
+- If a harness refuses to resume a saved session, Mingle can start a fresh session instead of getting stuck on the same error.
+
 ## 0.3.1
 
 - An agent can hand a conversation to another agent in a group: when its answer names someone as `@name` — a person, a bot, or the platform name — Mingle writes the platform's real mention on Feishu, Slack, Discord, Telegram and GitHub, so the other side is actually woken. Mentioning two agents together now gets them talking to each other. After `reply`/`send`, the agent sees who was mentioned and which @words matched nobody, and two agents mentioned together learn each other's name.
