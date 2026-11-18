@@ -193,10 +193,8 @@ export interface ReminderCheck {
   command: string;
   /** Ends after the first change. */
   once: boolean;
-  /** SHA-256 of the trimmed output it compares against. */
+  /** SHA-256 of the trimmed output it compares against; the output itself is never stored. */
   hash: string | null;
-  /** The start of that output, for the agent and the console. */
-  output: string | null;
   /** Failed runs in a row; 0 after a run that worked. */
   failures: number;
   /** Why the last run failed, while it keeps failing. */
@@ -1423,8 +1421,8 @@ export class Store {
   createReminder(
     input: Omit<Reminder, "id" | "createdAt" | "lastFiredAt" | "sourceMessageId" | "check"> & {
       sourceMessageId?: string | null;
-      /** A reminder that fires on change, with the output of its first run as the baseline. */
-      check?: { command: string; once: boolean; hash: string; output: string; until: number } | null;
+      /** A reminder that fires on change, with the hash of its first run as the baseline. */
+      check?: { command: string; once: boolean; hash: string; until: number } | null;
     },
   ): Reminder {
     const id = this.mint("reminders", "r", 3);
@@ -1432,8 +1430,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO reminders (id, agent_id, body, rule, timezone, chat_id, source_message_id, next_fire_at, created_at,
-           check_command, check_once, check_hash, check_output, last_checked_at, check_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           check_command, check_once, check_hash, last_checked_at, check_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1448,7 +1446,6 @@ export class Store {
         check?.command ?? null,
         check?.once ? 1 : 0,
         check?.hash ?? null,
-        check?.output ?? null,
         check ? this.now() : null,
         check?.until ?? null,
       );
@@ -1470,14 +1467,18 @@ export class Store {
     return rows.map(toReminder);
   }
 
-  /** Reminders that are due, except a paused agent's: they wait and fire once it resumes. */
+  /**
+   * Reminders that are due, except a paused agent's: they wait and fire once it resumes. A check
+   * whose time ran out is due at its deadline even when its next poll is later, so it ends on time.
+   */
   dueReminders(at: number): Reminder[] {
     const rows = this.db
       .prepare(
         `SELECT r.* FROM reminders r JOIN agents a ON a.id = r.agent_id
-         WHERE r.next_fire_at IS NOT NULL AND r.next_fire_at <= ? AND a.status != 'paused' ORDER BY r.next_fire_at`,
+         WHERE r.next_fire_at IS NOT NULL AND (r.next_fire_at <= ? OR (r.check_command IS NOT NULL AND r.check_until <= ?))
+           AND a.status != 'paused' ORDER BY r.next_fire_at`,
       )
-      .all(at) as Row[];
+      .all(at, at) as Row[];
     return rows.map(toReminder);
   }
 
@@ -1492,18 +1493,18 @@ export class Store {
   }
 
   /**
-   * A check ran and worked. When its output changed, the new output becomes the baseline and the
-   * reminder fired at `at`; a `once` check then ends.
+   * A check ran and worked. When its output changed, the new hash becomes the baseline and the
+   * reminder fired at `at`; a `once` check then ends. The output itself is never stored.
    */
-  recordCheck(id: string, at: number, result: { hash: string; output: string; fired: boolean; ended: boolean }): void {
+  recordCheck(id: string, at: number, result: { hash: string; fired: boolean; ended: boolean }): void {
     if (result.fired) {
       this.db
         .prepare(
-          `UPDATE reminders SET check_hash = ?, check_output = ?, check_failures = 0, check_error = NULL,
+          `UPDATE reminders SET check_hash = ?, check_failures = 0, check_error = NULL,
              last_checked_at = ?, last_fired_at = ?, next_fire_at = CASE WHEN ? THEN NULL ELSE next_fire_at END
            WHERE id = ?`,
         )
-        .run(result.hash, result.output, at, at, result.ended ? 1 : 0, id);
+        .run(result.hash, at, at, result.ended ? 1 : 0, id);
     } else {
       this.db
         .prepare("UPDATE reminders SET check_failures = 0, check_error = NULL, last_checked_at = ? WHERE id = ?")
@@ -1737,7 +1738,6 @@ function toReminder(r: Row): Reminder {
             command: r.check_command,
             once: Number(r.check_once) === 1,
             hash: str(r.check_hash),
-            output: str(r.check_output),
             failures: Number(r.check_failures ?? 0),
             error: str(r.check_error),
             lastCheckedAt:

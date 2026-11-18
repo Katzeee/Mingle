@@ -1,11 +1,11 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { scriptedRuntime } from "@botiverse/oar/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Harness, HarnessSession } from "../src/harness/harness.ts";
 import { oarHarness } from "../src/harness/harness.ts";
 import { memorySecrets, type SecretStore } from "../src/platform/secrets.ts";
-import { FakeChannel, messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
+import { FakeChannel, messageIds, type Rig, rig, runCli, runCliNode, until } from "./helpers.ts";
 
 /**
  * End to end: fake chat app → Mingle → OAR scripted harness → real `mingle` CLI
@@ -675,7 +675,8 @@ describe("agent CLI", () => {
     });
     const { channel, mingle } = current;
     channel.receive({ text: "is the ridge route open?" });
-    await until(() => channel.sent.length === 1);
+    // The serial CLI calls above can take most of the default wait on a loaded host.
+    await until(() => channel.sent.length === 1, 25_000);
 
     expect(outputs.chats).toMatch(/^c\w+\s+telegram\s+group\s+Weekend hikes/);
     expect(outputs.read).toContain("is the ridge route open?");
@@ -811,14 +812,27 @@ describe("agent CLI", () => {
           id as string,
         )
       ).stdout;
-      outputs.every = (await set("Say what changed", "--every", "5m", "--check", "node state.js")).stdout;
+      // Through `node <entry>` without a shell: the multiword --check value stays one argument.
+      outputs.every = (
+        await runCliNode(env, [
+          "reminder",
+          "set",
+          "Say what changed",
+          "--every",
+          "5m",
+          "--check",
+          "node state.js",
+          "--from",
+          id as string,
+        ])
+      ).stdout;
       outputs.broken = (await set("x", "--every", "5m", "--check", "node missing.js")).stderr;
       outputs.noEvery = (await set("x", "--in", "5m", "--check", "node state.js")).stderr;
       outputs.often = (await set("x", "--every", "0m", "--check", "node state.js")).stderr;
       outputs.onceAlone = (await set("x", "--every", "5m", "--once")).stderr;
       outputs.forBad = (await set("x", "--every", "5m", "--check", "node state.js", "--for", "100d")).stderr;
       outputs.forAlone = (await set("x", "--every", "5m", "--for", "3d")).stderr;
-      await set("Short wait", "--every", "5m", "--check", "node state.js", "--for", "15m");
+      await set("Short wait", "--every", "5m", "--check", "node state.js", "--for", "15m", "--from", id as string);
       outputs.list = (await runCli(env, ["reminder", "list"])).stdout;
       await runCli(env, ["message", "reply", id as string], "I'll tell you when CI is done.");
     });
@@ -840,7 +854,12 @@ console.log("ci: " + s);`,
     expect(outputs.once).toMatch(
       /^set r\w+, next check at .+, checking until .+; it fires when the output changes from:\nci: pending\n$/,
     );
-    expect(outputs.broken).toMatch(/^error: check_failed\nnext: the check exited with 1: .+it must exit 0\n$/s);
+    expect(outputs.broken).toMatch(
+      /^error: check_failed\nnext: the check exited with 1\. Fix the command and set the reminder again; it must exit 0\n$/s,
+    );
+    expect(outputs.every).toMatch(
+      /^set r\w+, next check at .+; it fires when the output changes from:\nci: pending\n$/,
+    );
     expect(outputs.noEvery).toMatch(/^error: check_needs_every/);
     expect(outputs.often).toMatch(/^error: check_too_often/);
     expect(outputs.onceAlone).toMatch(/^error: check_required/);
@@ -852,8 +871,22 @@ console.log("ci: " + s);`,
     const every = byBody("Say what changed");
     // Seven days unless told otherwise.
     expect(Math.abs((every?.check?.until ?? 0) - (every?.createdAt ?? 0) - 7 * 86_400_000)).toBeLessThan(60_000);
-    expect(once?.check).toMatchObject({ command: "node state.js", once: true, output: "ci: pending", failures: 0 });
+    expect(once?.check).toMatchObject({ command: "node state.js", once: true, failures: 0 });
+    // Raw output is never kept: the model has no output field, the column stays empty.
+    expect(once?.check).not.toHaveProperty("output");
+    expect(
+      (
+        mingle.store.db.prepare("SELECT check_output FROM reminders WHERE id = ?").get(once?.id as string) as Record<
+          string,
+          unknown
+        >
+      ).check_output,
+    ).toBeNull();
     expect(mingle.store.reminders(agentId)).toHaveLength(3);
+
+    // Snoozed past its deadline: the check still ends when its time is up, not at the next poll.
+    const shortWait = byBody("Short wait") as NonNullable<ReturnType<typeof byBody>>;
+    expect((await runCli(env, ["reminder", "snooze", shortWait.id, "--by", "30m"])).code).toBe(0);
 
     // Nothing changed: checked, nobody woken.
     const start = Date.now();
@@ -863,21 +896,29 @@ console.log("ci: " + s);`,
     expect(mingle.store.reminder(agentId, once?.id as string)?.check?.lastCheckedAt).toBeGreaterThan(start - 1);
     expect(mingle.store.reminder(agentId, once?.id as string)?.lastFiredAt).toBeNull();
 
-    // Changed: both fire with before and after; the --once one ends, quoting its message.
+    // Its deadline is up while the snoozed poll is still ahead: it ends, told once with the quote.
+    mingle.fireReminders((shortWait.check?.until ?? 0) + 1);
+    await mingle.checksSettled();
+    const heard = () => woken.join("\n\n");
+    await until(() => heard().includes("check=expired"));
+    expect(heard()).toMatch(
+      /\[reminder=r\w+ chat=c\w+ time=.+ check=expired\]\nShort wait\nStopped checking: its time is up\..*> \[msg=/s,
+    );
+    expect(mingle.store.reminder(agentId, shortWait.id)?.nextFireAt).toBeNull();
+
+    // Changed: both fire with the current output; the --once one ends, quoting its message.
     writeFileSync(join(home, "state.txt"), "pass");
     mingle.fireReminders(start + 20 * 60_000);
     await mingle.checksSettled();
-    // Two inputs waiting together reach the agent as one turn.
-    const heard = () => woken.join("\n\n");
-    await until(() => heard().includes("Say what changed"));
+    // Both check results reach the agent, coalesced or not.
+    await until(() => heard().includes("Tell them CI finished") && heard().includes("Say what changed"));
     expect(heard()).toMatch(
-      /\[reminder=r\w+ chat=c\w+ time=.+ check=changed\]\nTell them CI finished\nCheck output before:\nci: pending\nCheck output now:\nci: pass\n> \[msg=/,
+      /\[reminder=r\w+ chat=c\w+ time=.+ check=changed\]\nTell them CI finished\nCheck output now:\nci: pass\n> \[msg=/,
     );
-    expect(heard()).toMatch(/\[reminder=r\w+ time=.+ check=changed\]\nSay what changed\nCheck output before:/);
-    // The 15-minute one ran out without a change: it ends, and the agent hears so once.
-    expect(heard()).toMatch(/check=expired\]\nShort wait\nStopped checking: its time is up/);
+    expect(heard()).toMatch(
+      /\[reminder=r\w+ chat=c\w+ time=.+ check=changed\]\nSay what changed\nCheck output now:\nci: pass\n> \[msg=/,
+    );
     expect(mingle.store.reminders(agentId).map((r) => r.id)).toEqual([every?.id]);
-    expect(mingle.store.reminder(agentId, every?.id as string)?.check?.output).toBe("ci: pass");
 
     // Failing: quiet until the third time in a row, told once, then quiet again.
     writeFileSync(join(home, "state.txt"), "broken");
@@ -889,12 +930,14 @@ console.log("ci: " + s);`,
     await until(() => heard().includes("check=failing"));
     const told = woken.at(-1) as string;
     expect(told).toMatch(/check=failing\]\nSay what changed\nThe check has failed 3 times in a row/);
-    expect(told).toContain("Last error: exited with 1: gh: not logged in");
+    // Standard error is dropped: the reason is the exit code alone, and the message is quoted.
+    expect(told).toContain("Last error: exited with 1\n");
+    expect(told).toContain("> [msg=");
     expect(heard().split("check=failing")).toHaveLength(2);
     const turns = woken.length;
     expect(mingle.store.reminder(agentId, every?.id as string)?.check).toMatchObject({
       failures: 4,
-      output: "ci: pass",
+      error: "exited with 1",
     });
 
     // Working again clears the count; cancelling drops a check still in flight.
@@ -903,6 +946,45 @@ console.log("ci: " + s);`,
     mingle.store.deleteReminder(agentId, every?.id as string);
     await mingle.checksSettled();
     expect(woken).toHaveLength(turns);
+
+    // Cancelling a check that is still running kills the command itself, not just the wake-up.
+    writeFileSync(
+      join(home, "slow.js"),
+      `const fs = require("fs");
+if (fs.existsSync("probe-done.txt")) {
+  fs.writeFileSync("slow-started.txt", "1");
+  setTimeout(() => fs.writeFileSync("survived.txt", "x"), 3000);
+  setTimeout(() => {}, 30000);
+} else {
+  fs.writeFileSync("probe-done.txt", "1");
+  console.log("slow: armed");
+}`,
+    );
+    const set = (...args: string[]) => runCli(env, ["reminder", "set", ...args]);
+    await set("Slow watch", "--every", "5m", "--check", "node slow.js");
+    const slow = mingle.store.reminders(agentId).find((r) => r.body === "Slow watch");
+    mingle.fireReminders(start + 80 * 60_000);
+    // The scheduled run is really up before the cancel lands; then its side effect never may.
+    await until(() => existsSync(join(home, "slow-started.txt")));
+    expect((await runCli(env, ["reminder", "cancel", slow?.id as string])).code).toBe(0);
+    await mingle.checksSettled();
+    await sleep(3600);
+    expect(existsSync(join(home, "survived.txt"))).toBe(false);
+    expect(woken).toHaveLength(turns);
+
+    // A set-up probe cancelled by a pause never registers, even across a fast resume.
+    writeFileSync(
+      join(home, "slow2.js"),
+      `setTimeout(() => require("fs").writeFileSync("probe-survived.txt", "x"), 1500);
+setTimeout(() => {}, 30000);`,
+    );
+    const probe = mingle.probeCheck(agentId, "node slow2.js");
+    await sleep(100);
+    await mingle.pauseAgent(agentId);
+    expect(await probe).toMatchObject({ ok: false, error: "was cancelled" });
+    await mingle.resumeAgent(agentId);
+    await sleep(2200);
+    expect(existsSync(join(home, "probe-survived.txt"))).toBe(false);
   });
 
   it("refuses to run without an agent session", async () => {

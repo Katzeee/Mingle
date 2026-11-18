@@ -461,7 +461,9 @@ async function agentCommand(group: string, action: string | undefined, args: str
       const reminder = await call()<{
         id: string;
         nextFireAt: number;
-        check: { output: string | null; until: number | null } | null;
+        check: { until: number | null } | null;
+        /** The first run's output, sent back this once; only its hash is kept. */
+        checkOutput?: string | null;
       }>("POST", "/v1/agent/reminders", {
         text,
         in: flags.in,
@@ -475,7 +477,7 @@ async function agentCommand(group: string, action: string | undefined, args: str
       });
       print(reminder, () =>
         reminder.check
-          ? `set ${reminder.id}, next check at ${time(reminder.nextFireAt)}, checking until ${time(reminder.check.until ?? 0)}; it fires when the output changes from:\n${reminder.check.output || "(empty)"}`
+          ? `set ${reminder.id}, next check at ${time(reminder.nextFireAt)}, checking until ${time(reminder.check.until ?? 0)}; it fires when the output changes from:\n${reminder.checkOutput || "(empty)"}`
           : `set ${reminder.id}, next at ${time(reminder.nextFireAt)}`,
       );
       return true;
@@ -872,6 +874,8 @@ async function start(flags: Flags): Promise<void> {
     rmSync(paths.runtime, { force: true });
     // Never hang on the way out: whoever sent the signal is waiting.
     setTimeout(() => process.exit(0), 10_000).unref();
+    // Running check commands start dying now, not after the server has drained.
+    mingle.beginShutdown();
     // Stop taking requests before the store closes under them.
     await server.close();
     await mingle.stop();

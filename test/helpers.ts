@@ -200,24 +200,41 @@ export class FakeChannel implements Channel {
   }
 }
 
-/** Run the real `mingle` CLI the way an agent would, with the session's environment. */
+/** cmd.exe joins argv back into one line, so a multiword argument must arrive quoted. */
+function cmdQuote(arg: string): string {
+  return /[\s&|<>^"]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+}
+
+function run(file: string, args: string[], env: Record<string, string>, stdin: string, shell: boolean) {
+  return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = execFile(file, args, { env: { ...process.env, ...env }, shell }, (error, stdout, stderr) => {
+      resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stdout, stderr });
+    });
+    child.stdin?.end(stdin);
+  });
+}
+
+/**
+ * Run the real `mingle` CLI the way an agent would, with the session's environment. Windows runs a
+ * .cmd only through a shell, as a harness does; Node then concatenates argv without quoting, so
+ * multiword arguments are quoted for cmd to keep each one whole.
+ */
 export function runCli(
   env: Record<string, string>,
   args: string[],
   stdin = "",
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      env.MINGLE_CLI as string,
-      args,
-      // Windows runs a .cmd only through a shell, as a harness does.
-      { env: { ...process.env, ...env }, shell: process.platform === "win32" },
-      (error, stdout, stderr) => {
-        resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stdout, stderr });
-      },
-    );
-    child.stdin?.end(stdin);
-  });
+  const windows = process.platform === "win32";
+  return run(env.MINGLE_CLI as string, windows ? args.map(cmdQuote) : args, env, stdin, windows);
+}
+
+/** Run the CLI entry with `node` and no shell: argv reaches it word for word, on every platform. */
+export function runCliNode(
+  env: Record<string, string>,
+  args: string[],
+  stdin = "",
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return run(process.execPath, [CLI_ENTRY, ...args], env, stdin, false);
 }
 
 export async function until<T>(check: () => T | undefined | false, timeoutMs = 10_000): Promise<T> {

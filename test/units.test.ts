@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
-import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -10,7 +10,7 @@ import { changedText, checkCommand, outcome } from "../src/core/check.ts";
 import { excerpt, formatMessage, formatReminder } from "../src/core/format.ts";
 import { split } from "../src/core/outbox.ts";
 import { nextFire, parseDuration } from "../src/core/schedule.ts";
-import { runCommand } from "../src/platform/command.ts";
+import { checkEnvironment, runCommand } from "../src/platform/command.ts";
 import { applyShellEnvironment } from "../src/platform/shell-env.ts";
 import { Store } from "../src/store/store.ts";
 import { type LocalePreference, localePreference, resolveLocale } from "../web/src/locale.ts";
@@ -202,13 +202,11 @@ describe("formatReminder", () => {
   it("marks a check in the header and puts what it found before the quote", () => {
     const text = formatReminder(reminder, 0, "[msg=m4]\nis CI done?", {
       state: "changed",
-      text: changedText("pending", "pass"),
+      text: changedText("pass"),
     });
     expect(text.split("\n")).toEqual([
       expect.stringMatching(/^\[reminder=r2 chat=c3 time=.+ check=changed\]$/),
       "Check the forecast",
-      "Check output before:",
-      "pending",
       "Check output now:",
       "pass",
       "> [msg=m4]",
@@ -219,31 +217,74 @@ describe("formatReminder", () => {
 
 describe("reminder checks", () => {
   it("compares the trimmed output and keeps only its start", () => {
-    const a = outcome({ code: 0, stdout: "pass\n", stderr: "" });
-    const b = outcome({ code: 0, stdout: "  pass", stderr: "" });
+    const a = outcome({ code: 0, stdout: "pass\n" });
+    const b = outcome({ code: 0, stdout: "  pass" });
     expect(a.ok && b.ok && a.hash === b.hash).toBe(true);
-    const long = outcome({ code: 0, stdout: "x".repeat(10_000), stderr: "" });
+    const long = outcome({ code: 0, stdout: "x".repeat(10_000) });
     expect(long.ok && long.output.length).toBe(4000);
-    const other = outcome({ code: 0, stdout: `${"x".repeat(9_999)}y`, stderr: "" });
+    const other = outcome({ code: 0, stdout: `${"x".repeat(9_999)}y` });
     expect(long.ok && other.ok && long.hash !== other.hash).toBe(true);
   });
 
-  it("says why a run failed, with the end of standard error", () => {
-    expect(outcome({ code: 2, stdout: "", stderr: "a\nb\nc\nd\ne\nf\ngh: not found\n" })).toEqual({
-      ok: false,
-      error: "exited with 2: c\nd\ne\nf\ngh: not found",
-    });
-    expect(outcome({ code: null, stdout: "", stderr: "", killed: "timeout" })).toEqual({
+  it("says why a run failed with a fixed string, never the command's error output", () => {
+    expect(outcome({ code: 2, stdout: "" })).toEqual({ ok: false, error: "exited with 2" });
+    expect(outcome({ code: null, stdout: "", killed: "timeout" })).toEqual({
       ok: false,
       error: "timed out after 60s",
     });
-    expect(outcome({ code: null, stdout: "", stderr: "", killed: "output_too_large" })).toMatchObject({ ok: false });
+    expect(outcome({ code: null, stdout: "", killed: "output_too_large" })).toMatchObject({ ok: false });
+    expect(outcome({ code: null, stdout: "", killed: "cancelled" })).toEqual({
+      ok: false,
+      error: "was cancelled",
+    });
+    expect(outcome({ code: null, stdout: "", killed: "spawn_failed" })).toEqual({
+      ok: false,
+      error: "could not run",
+    });
   });
 
   it("refuses an empty or huge command", () => {
     expect(() => checkCommand("  ")).toThrow(/check_required|shell command/);
     expect(() => checkCommand("x".repeat(5000))).toThrow(/4000/);
     expect(checkCommand(" gh pr checks 1 ")).toBe("gh pr checks 1");
+  });
+
+  it("gives a check only the allowlisted variables, Windows names case-insensitively", () => {
+    const env = checkEnvironment(
+      {
+        PATH: "/bin",
+        HOME: "/home/a",
+        USER: "a",
+        LOGNAME: "a",
+        SHELL: "/bin/sh",
+        LANG: "en_US.UTF-8",
+        LC_ALL: "en_US.UTF-8",
+        LC_TIME: "C",
+        TZ: "UTC",
+        TMPDIR: "/tmp",
+        HTTPS_PROXY: "http://user:secret@proxy:1",
+        MY_API_KEY: "secret",
+        MINGLE_TOKEN: "secret",
+        RANDOM_THING: "x",
+      },
+      "linux",
+    );
+    expect(env.PATH).toBe("/bin");
+    expect(env.HOME).toBe("/home/a");
+    expect(env.LC_ALL).toBe("en_US.UTF-8");
+    expect(Object.keys(env).sort()).toEqual(
+      ["HOME", "LANG", "LC_ALL", "LC_TIME", "LOGNAME", "PATH", "SHELL", "TMPDIR", "TZ", "USER"].sort(),
+    );
+    const win = checkEnvironment(
+      { Path: "C:\\bin", systemroot: "C:\\Windows", USERPROFILE: "C:\\Users\\a", ComSpec: "cmd", MY_TOKEN: "s" },
+      "win32",
+    );
+    expect(win).toEqual({
+      Path: "C:\\bin",
+      systemroot: "C:\\Windows",
+      USERPROFILE: "C:\\Users\\a",
+      ComSpec: "cmd",
+    });
   });
 
   it("runs a shell command and kills it on a timeout", async () => {
@@ -253,7 +294,7 @@ describe("reminder checks", () => {
       timeoutMs: 10_000,
       maxOutputBytes: 1024,
     });
-    expect(ok).toEqual({ code: 0, stdout: "42", stderr: "" });
+    expect(ok).toEqual({ code: 0, stdout: "42" });
     const slow = await runCommand('node -e "setTimeout(() => {}, 20000)"', {
       cwd: process.cwd(),
       env: process.env,
@@ -268,6 +309,142 @@ describe("reminder checks", () => {
       maxOutputBytes: 1024,
     });
     expect(loud.killed).toBe("output_too_large");
+  });
+
+  it("keeps nothing of standard error and reports a spawn failure generically", async () => {
+    const complaining = await runCommand("node -e \"console.error('leak: hunter2'); process.exit(3)\"", {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1024,
+    });
+    expect(complaining).toEqual({ code: 3, stdout: "" });
+    const dir = mkdtempSync(join(tmpdir(), "mingle-cmd-"));
+    try {
+      const gone = join(dir, "gone");
+      const failed = await runCommand("true", {
+        cwd: gone,
+        env: process.env,
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024,
+      });
+      expect(failed.killed).toBeTruthy();
+      expect(JSON.stringify(failed)).not.toContain("ENOENT");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the whole shell tree on timeout, cancellation or abort", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mingle-cmd-"));
+    try {
+      // `node tree.cjs` spawns a real grandchild (no shell dialect), then waits on it. The
+      // grandchild proves it started, would prove it survived the kill, holds the inherited
+      // stdout open, and always exits on its own so a failed test orphans nothing for long.
+      writeFileSync(
+        join(dir, "tree.cjs"),
+        `const { spawn } = require("node:child_process");
+const { join } = require("node:path");
+const grandchild = spawn(process.execPath, [join(__dirname, "grandchild.cjs"), process.argv[2] ?? "2500"], {
+  stdio: ["ignore", "inherit", "ignore"],
+});
+grandchild.on("exit", () => process.exit(0));
+setTimeout(() => process.exit(0), 60_000).unref();
+`,
+      );
+      writeFileSync(
+        join(dir, "grandchild.cjs"),
+        `const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+writeFileSync(join(__dirname, "started.txt"), "1");
+setTimeout(() => writeFileSync(join(__dirname, "survived.txt"), "x"), Number(process.argv[2]));
+setTimeout(() => process.exit(0), 60_000);
+`,
+      );
+      const started = join(dir, "started.txt");
+      const survived = join(dir, "survived.txt");
+      const waitStarted = async () => {
+        for (let i = 0; i < 200 && !existsSync(started); i++) await new Promise((r) => setTimeout(r, 100));
+        // Only a started grandchild makes "no survived marker" mean the kill worked.
+        expect(existsSync(started)).toBe(true);
+        return Date.now();
+      };
+      const launch = (timeoutMs: number, surviveMs: number, signal?: AbortSignal) =>
+        runCommand(`node tree.cjs ${surviveMs}`, {
+          cwd: dir,
+          env: process.env,
+          timeoutMs,
+          maxOutputBytes: 1024,
+          ...(signal ? { signal } : {}),
+        });
+      const untilPast = async (from: number, ms: number) =>
+        new Promise((r) => setTimeout(r, Math.max(0, from + ms - Date.now())));
+
+      // Kill at 4s while the marker would land at 5s after start: never may.
+      const at = Date.now();
+      const timed = launch(4000, 5000);
+      const startedAt = await waitStarted();
+      expect((await timed).killed).toBe("timeout");
+      // The descendant holds the pipe: bounded release, not a hang and not an instant leak.
+      expect(Date.now() - at).toBeLessThan(20_000);
+      await untilPast(startedAt, 5500);
+      expect(existsSync(survived)).toBe(false);
+
+      rmSync(started, { force: true });
+      const controller = new AbortController();
+      const cancelled = launch(30_000, 2000, controller.signal);
+      const abortedAt = await waitStarted();
+      controller.abort();
+      expect((await cancelled).killed).toBe("cancelled");
+      await untilPast(abortedAt, 2500);
+      expect(existsSync(survived)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("folds a CI statusCheckRollup into one waiting or finished value", async () => {
+    const manual = readFileSync(new URL("../src/cli/manual.md", import.meta.url), "utf8");
+    const expression = (/--jq '((?:[^'\\]|\\.)*)'/.exec(manual)?.[1] ?? "").replace(/\\"/g, '"');
+    expect(expression).toBe(
+      '.statusCheckRollup // [] | if length == 0 or any(.[]; if .__typename == "CheckRun" then .status != "COMPLETED" else (.state == "PENDING" or .state == "EXPECTED") end) then "waiting" else "finished" end',
+    );
+    const hasJq = (() => {
+      try {
+        execFileSync("jq", ["--version"]);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      }
+    })();
+    // No jq on this runner (Windows CI): the verbatim-expression assertion above still holds.
+    if (!hasJq) return;
+    const evaluate = (entries: { __typename: string; status?: string; state?: string }[]): string =>
+      execFileSync(
+        "jq",
+        ["-n", "--argjson", "r", JSON.stringify({ statusCheckRollup: entries }), `$r | ${expression}`],
+        { encoding: "utf8" },
+      ).trim();
+    expect(evaluate([])).toBe('"waiting"');
+    expect(evaluate([{ __typename: "CheckRun", status: "QUEUED" }])).toBe('"waiting"');
+    expect(evaluate([{ __typename: "CheckContext", state: "PENDING" }])).toBe('"waiting"');
+    expect(evaluate([{ __typename: "CheckContext", state: "EXPECTED" }])).toBe('"waiting"');
+    // Mixed: one finished job and one still pending is still waiting.
+    expect(
+      evaluate([
+        { __typename: "CheckRun", status: "COMPLETED" },
+        { __typename: "CheckRun", status: "IN_PROGRESS" },
+      ]),
+    ).toBe('"waiting"');
+    expect(evaluate([{ __typename: "CheckRun", status: "COMPLETED" }])).toBe('"finished"');
+    expect(evaluate([{ __typename: "CheckContext", state: "FAILURE" }])).toBe('"finished"');
+    expect(
+      evaluate([
+        { __typename: "CheckRun", status: "COMPLETED" },
+        { __typename: "CheckContext", state: "SUCCESS" },
+      ]),
+    ).toBe('"finished"');
   });
 });
 

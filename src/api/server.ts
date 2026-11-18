@@ -407,7 +407,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
       throw new MingleError("when_required", "pass one of --in 30m, --at <time> or --every daily@09:00");
     }
     // A check runs once now: a broken command fails here, and the agent sees where things stand.
-    let check: { command: string; once: boolean; hash: string; output: string; until: number } | null = null;
+    let check: { command: string; once: boolean; hash: string; until: number } | null = null;
+    // The first run's output goes back in this response only; only its hash is kept.
+    let checkOutput: string | null = null;
     if (body.check !== undefined) {
       const command = checkCommand(body.check);
       if (rule.startsWith("every:") && nextFire(rule, now) - now < CHECK_MIN_INTERVAL_MS)
@@ -415,13 +417,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
       const runFor = body.for === undefined ? CHECK_DEFAULT_FOR_MS : parseDuration(body.for);
       if (runFor > CHECK_MAX_FOR_MS || runFor <= 0)
         throw new MingleError("check_for_invalid", "keep checking for at most 90d: --for 3d, --for 30d");
-      const result = await mingle.runCheck(agent.id, command);
+      const result = await mingle.probeCheck(agent.id, command);
       if (!result.ok)
         throw new MingleError(
           "check_failed",
           `the check ${result.error}. Fix the command and set the reminder again; it must exit 0`,
         );
-      check = { command, once: body.once === true, hash: result.hash, output: result.output, until: now + runFor };
+      check = { command, once: body.once === true, hash: result.hash, until: now + runFor };
+      checkOutput = result.output;
     }
     const reminder = store.createReminder({
       check,
@@ -433,7 +436,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       sourceMessageId: body.from ?? null,
       nextFireAt: next,
     });
-    return c.json(reminder);
+    return c.json(check ? { ...reminder, checkOutput } : reminder);
   });
 
   // "Not yet, look again in 2h": the next fire moves to `by` from now; a recurring reminder then keeps its rule.
@@ -450,7 +453,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.get("/v1/agent/reminders", (c) => c.json(store.reminders(c.get("agent").id)));
 
   app.delete("/v1/agent/reminders/:id", (c) => {
-    if (!store.deleteReminder(c.get("agent").id, c.req.param("id"))) throw notFound("reminder", c.req.param("id"));
+    const agent = c.get("agent");
+    if (!store.deleteReminder(agent.id, c.req.param("id"))) throw notFound("reminder", c.req.param("id"));
+    mingle.abortCheck(agent.id, c.req.param("id"));
     return c.json({ ok: true });
   });
 
