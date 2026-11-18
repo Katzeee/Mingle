@@ -664,7 +664,13 @@ export class AgentRuntime {
     if (!message || !chat) return "";
     // In a group, how much was said there without the agent, so it can read back when it matters.
     const unseen = chat.kind === "dm" ? 0 : store.unseen(chat.id, message.createdAt);
-    const rendered = renderMessage(store, message, { unseen });
+    // A reply shows what it answers: "已授权" alone does not say to what (MING-103).
+    const parent = message.replyTo ? store.message(message.replyTo) : undefined;
+    const quoted = parent && {
+      from: parent.direction === "out" ? "you" : (parent.senderName ?? "someone"),
+      body: parent.body,
+    };
+    const rendered = renderMessage(store, message, { unseen, ...(quoted ? { quoted } : {}) });
     if (!rendered) return "";
     const text = `${this.introduce(message.senderId, chat.connectionId)}${rendered}`;
     if (!this.retried.delete(messageId)) return text;
