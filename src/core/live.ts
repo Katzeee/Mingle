@@ -262,6 +262,11 @@ interface Entry {
   lastRender: number;
   pending: NodeJS.Timeout | undefined;
   tick: NodeJS.Timeout | undefined;
+  /**
+   * The one adapter call in flight (opening the live reply plus a progress write, or the handover
+   * finish). While it runs, later renders are dropped; answer/settle drain it before finishing.
+   */
+  inFlight: Promise<void> | undefined;
   closed: boolean;
 }
 
@@ -302,6 +307,7 @@ export class LiveReplies {
       lastRender: 0,
       pending: undefined,
       tick: undefined,
+      inFlight: undefined,
       closed: false,
     };
     if (connection.startLive) {
@@ -346,6 +352,9 @@ export class LiveReplies {
     if (!entry || entry.closed) return undefined;
     this.close(entry, messageId);
     void entry.connection.react(entry.chat, entry.platformMessageId, "done").catch(() => {});
+    // A progress write may still be in flight (a render, or the handover's "still working" finish):
+    // it lands first, then this reads whatever entry.live points at now.
+    await entry.inFlight;
     const live = await entry.live;
     if (!live) return undefined;
     try {
@@ -385,7 +394,8 @@ export class LiveReplies {
               : outcome === "waiting" && why
                 ? waitingText(entry.lang, why, this.now())
                 : failureText(entry.lang, why, this.now());
-    void entry.live
+    void Promise.resolve(entry.inFlight)
+      .then(() => entry.live)
       .then(async (live) => {
         const result = live ? await live.finish(`*${note}*`).catch(() => undefined) : undefined;
         // No live reply, or it could not be finished (QQ's stream window, a refused frame):
@@ -423,20 +433,26 @@ export class LiveReplies {
   }
 
   private schedule(entry: Entry): void {
-    if (entry.closed || entry.pending) return;
+    // A slow adapter can hold one write for seconds; while it runs, renders due in between are
+    // dropped rather than queued, so a burst of progress cannot pile up behind the connection.
+    // Activity still lands on the entry: the next render carries it.
+    if (entry.closed || entry.pending || entry.inFlight) return;
     const wait = Math.max(0, entry.lastRender + RENDER_EVERY_MS - this.now());
     entry.pending = setTimeout(() => {
       entry.pending = undefined;
-      if (entry.closed) return;
+      if (entry.closed || entry.inFlight) return;
       entry.lastRender = this.now();
       const content = this.render(entry);
-      void entry.live
+      entry.inFlight = entry.live
         .then((live) => {
           if (entry.closed) return;
           if (live?.until === undefined || this.now() < live.until) return live?.update(content);
           return this.handOver(entry, live);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          entry.inFlight = undefined;
+        });
     }, wait);
   }
 

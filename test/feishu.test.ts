@@ -47,6 +47,12 @@ function fakeLark() {
     [];
   /** Feishu error codes the next element content updates fail with, one per update. */
   const failUpdates: number[] = [];
+  /** Feishu error codes the next full card updates fail with, one per update. */
+  const failFinal: number[] = [];
+  /** Feishu error codes the next settings calls fail with, one per call. */
+  const failSettings: number[] = [];
+  /** How many card.settings calls were made (streaming renew/close). */
+  let settingsCalls = 0;
   const cardAt = (cardId: string) => cards[Number(cardId.slice("card_".length))];
   const memberCalls: { chatId: string; pageToken: string | undefined }[] = [];
   const contactGets: string[] = [];
@@ -103,8 +109,35 @@ function fakeLark() {
               const card = cardAt(path.card_id);
               const { config } = JSON.parse(data.settings);
               card?.sequences.push(data.sequence);
+              settingsCalls++;
+              const fail = failSettings.shift() ?? 0;
+              if (fail)
+                throw Object.assign(new Error("Request failed with status code 400"), {
+                  response: { data: { code: fail } },
+                });
               if (card) card.streaming = config.streaming_mode;
               if (card && config.summary) card.summary = config.summary.content;
+              return { code: 0, data: {} };
+            },
+            // A full card update replaces the JSON outright; it does not need streaming on.
+            async update({
+              path,
+              data,
+            }: {
+              path: { card_id: string };
+              data: { card: { type: string; data: string }; sequence: number };
+            }) {
+              const card = cardAt(path.card_id);
+              card?.sequences.push(data.sequence);
+              const code = failFinal.shift() ?? 0;
+              if (code)
+                throw Object.assign(new Error("Request failed with status code 400"), { response: { data: { code } } });
+              const spec = JSON.parse(data.card.data);
+              if (card) {
+                card.streaming = spec.config.streaming_mode;
+                if (spec.config.summary) card.summary = spec.config.summary.content;
+                card.contents.push(spec.body.elements[0].content);
+              }
               return { code: 0, data: {} };
             },
           },
@@ -192,6 +225,9 @@ function fakeLark() {
     reactions,
     cards,
     failUpdates,
+    failFinal,
+    failSettings,
+    settingsCalls: () => settingsCalls,
     emit: (name: string, arg: unknown) => handlers.get(name)?.(arg),
     failNextSend: (code: string) => {
       failNext = code;
@@ -693,7 +729,7 @@ describe("feishu reactions and live cards", () => {
       streaming: false,
       summary: "**周六**晴",
     });
-    expect(lark.cards[0]?.sequences).toEqual([1, 2, 3]);
+    expect(lark.cards[0]?.sequences).toEqual([1, 2]);
     await connection.close();
   });
 
@@ -743,11 +779,82 @@ describe("feishu reactions and live cards", () => {
     }
   });
 
+  it("writes the answer with one full card update even when streaming is already off", async () => {
+    const { lark, connection, live } = await liveCard();
+    // Feishu already turned streaming off; the final update must not reopen or close it.
+    const card = lark.cards[0];
+    if (card) card.streaming = false;
+    const before = lark.settingsCalls();
+    expect(await live?.finish("好了")).toMatchObject({ kind: "sent" });
+    expect(lark.cards[0]?.contents.at(-1)).toBe("好了");
+    expect(lark.settingsCalls()).toBe(before);
+    await connection.close();
+  });
+
   it("reports the answer as not sent when the card refuses it, so it goes out as a message", async () => {
     const { lark, connection, live } = await liveCard();
-    lark.failUpdates.push(200750);
+    lark.failFinal.push(200860); // Answer content rejected (e.g. too large for the card).
     expect(await live?.finish("好了")).toMatchObject({ kind: "failed" });
     expect(lark.cards[0]?.contents).toEqual(["…"]);
+    // The card is still closed as best effort so it does not keep a typing cursor.
+    expect(lark.cards[0]?.streaming).toBe(false);
+
+    // An entity already past its 14 days refuses the update and the close alike: the finish
+    // still reports failure without the cleanup throwing, so the answer goes out as a message.
+    const second = await connection.startLive?.({ platformId: "oc_1", kind: "dm" }, { replyTo: "om_2", initial: "…" });
+    lark.failFinal.push(200750);
+    lark.failSettings.push(200750);
+    expect(await second?.finish("晚了")).toMatchObject({ kind: "failed" });
+    await connection.close();
+  });
+
+  it("bounds the calls a live card depends on, and nothing else", async () => {
+    let http: LarkChannelOptions["httpInstance"];
+    const channel = feishuChannel({
+      api: fakeApi({ activated: () => true }),
+      createChannel: (options) => {
+        http = options.httpInstance;
+        return fakeLark().channel;
+      },
+    });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: () => {}, onState: () => {}, onMembership: () => {} },
+    );
+    expect(http).toBeDefined();
+    const request = vi.spyOn(sdk.defaultHttpInstance, "request").mockResolvedValue({ code: 0, data: {} });
+    const post = vi.spyOn(sdk.defaultHttpInstance, "post").mockResolvedValue({ code: 0, data: {} });
+    try {
+      // The SDK resolves every call to an absolute URL before request().
+      await http?.request({ url: "https://open.feishu.cn/open-apis/cardkit/v1/cards/card_1", method: "PUT" });
+      expect(request.mock.lastCall?.[0]).toMatchObject({ timeout: 15_000 });
+      await http?.request({
+        url: "https://open.feishu.cn/open-apis/im/v1/messages/om_1/reply",
+        method: "POST",
+      });
+      expect(request.mock.lastCall?.[0]).toMatchObject({ timeout: 15_000 });
+      await http?.request({
+        url: "https://open.larksuite.com/open-apis/im/v1/messages/om_1/reply",
+        method: "POST",
+      });
+      expect(request.mock.lastCall?.[0]).toMatchObject({ timeout: 15_000 });
+      // An explicit timeout always wins.
+      await http?.request({
+        url: "https://open.feishu.cn/open-apis/cardkit/v1/cards/card_1",
+        method: "PUT",
+        timeout: 1,
+      });
+      expect(request.mock.lastCall?.[0]).toMatchObject({ timeout: 1 });
+      // Unrelated calls keep the SDK's unbounded behavior.
+      await http?.request({ url: "https://open.feishu.cn/open-apis/im/v1/files/f1", method: "POST" });
+      expect(request.mock.lastCall?.[0]?.timeout).toBeUndefined();
+      await http?.post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {});
+      expect(post.mock.lastCall?.[2]).toMatchObject({ timeout: 15_000 });
+      await http?.post("https://open.feishu.cn/open-apis/im/v1/messages", {});
+      expect(post.mock.lastCall?.[2]?.timeout).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
     await connection.close();
   });
 });

@@ -557,4 +557,170 @@ describe("live replies the platform stops taking", () => {
       vi.useRealTimers();
     }
   });
+
+  it("drops renders while a slow update is in flight, and the answer waits for it", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const updates: string[] = [];
+      const finishes: string[] = [];
+      let release = () => {};
+      const hold = new Promise<void>((r) => {
+        release = r;
+      });
+      const connection = {
+        react: async () => {},
+        startLive: async () => ({
+          update: async (markdown: string) => {
+            updates.push(markdown);
+            await hold;
+          },
+          finish: async (markdown: string) => {
+            finishes.push(markdown);
+            return { kind: "sent" as const, platformId: "live" };
+          },
+        }),
+      } as unknown as ChannelConnection;
+      const replies = new LiveReplies(
+        () => {},
+        () => now,
+      );
+      replies.open({
+        messageId: "m1",
+        agentId: "a1",
+        platform: "slack",
+        chat: { platformId: "C1", kind: "dm" },
+        platformMessageId: "msg1",
+        senderId: "u1",
+        connection,
+      });
+      // The first render starts a slow update; ticks and activity behind it are dropped.
+      replies.activity("a1", "tool", "Bash");
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(updates).toHaveLength(1);
+      now = 30_000;
+      replies.activity("a1", "tool", "Read");
+      await vi.advanceTimersByTimeAsync(15_000);
+      replies.activity("a1", "tool", "Grep");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(updates).toHaveLength(1);
+      // answer() returns only once the held update lands.
+      const answered = replies.answer("m1", "答案");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finishes).toHaveLength(0);
+      release();
+      expect(await answered).toMatchObject({ kind: "sent" });
+      expect(finishes).toEqual(["答案"]);
+      // No late progress overwrites the answer: the dropped renders never went out.
+      expect(updates).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles only after the in-flight update lands", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const finishes: string[] = [];
+      let release = () => {};
+      const hold = new Promise<void>((r) => {
+        release = r;
+      });
+      const connection = {
+        react: async () => {},
+        startLive: async () => ({
+          update: async () => {
+            await hold;
+          },
+          finish: async (markdown: string) => {
+            finishes.push(markdown);
+            return { kind: "sent" as const, platformId: "live" };
+          },
+        }),
+      } as unknown as ChannelConnection;
+      const replies = new LiveReplies(
+        () => {},
+        () => now,
+      );
+      replies.open({
+        messageId: "m1",
+        agentId: "a1",
+        platform: "wecom",
+        chat: { platformId: "zhangsan", kind: "dm" },
+        platformMessageId: "msg1",
+        senderId: "zhangsan",
+        connection,
+      });
+      replies.activity("a1", "thinking");
+      await vi.advanceTimersByTimeAsync(1_100);
+      now = 20_000;
+      replies.settle("m1", "stopped");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finishes).toHaveLength(0);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(finishes).toEqual(["*已叫停。*"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the answer fall back only after a held hand-over lands, without a second finish", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const finishes: string[] = [];
+      let release = () => {};
+      const hold = new Promise<void>((r) => {
+        release = r;
+      });
+      const live = {
+        until: 10_000,
+        update: async () => {},
+        finish: async (markdown: string) => {
+          finishes.push(markdown);
+          await hold;
+          return { kind: "sent" as const, platformId: "live" };
+        },
+      };
+      const connection = {
+        react: async () => {},
+        startLive: async () => live,
+      } as unknown as ChannelConnection;
+      const replies = new LiveReplies(
+        () => {},
+        () => now,
+      );
+      replies.open({
+        messageId: "m1",
+        agentId: "a1",
+        platform: "wecom",
+        chat: { platformId: "zhangsan", kind: "dm" },
+        platformMessageId: "msg1",
+        senderId: "zhangsan",
+        connection,
+      });
+      // Past the reply's window the next render hands over, and its finish is held.
+      now = 11_000;
+      replies.activity("a1", "thinking");
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(finishes).toEqual(["*还在处理，完成后另发一条消息回复。*"]);
+      const answered = replies.answer("m1", "答案");
+      let resolved = false;
+      void answered.then(() => {
+        resolved = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The answer is still waiting on the hand-over; it must not finish the reply again.
+      expect(resolved).toBe(false);
+      expect(finishes).toHaveLength(1);
+      release();
+      expect(await answered).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finishes).toEqual(["*还在处理，完成后另发一条消息回复。*"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
