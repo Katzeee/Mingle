@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.3.1
+
+- An agent can hand a conversation to another agent in a group: when its answer names someone as `@name` — a person, a bot, or the platform name — Mingle writes the platform's real mention on Feishu, Slack, Discord, Telegram and GitHub, so the other side is actually woken. Mentioning two agents together now gets them talking to each other. After `reply`/`send`, the agent sees who was mentioned and which @words matched nobody, and two agents mentioned together learn each other's name.
+- A group can listen to everything: a "Hear every message here" switch on the conversation in the activity makes the bot take in all messages where the chat app sends them (Feishu, Slack, Discord, Telegram). What people say is gathered into one input after a stretch of quiet — no live reply and nothing marked unanswered; the agent speaks up only when it has something to add, and an @ still reaches it at once.
+- Threads keep listening without an @: once the agent has spoken in a Discord thread, what people say next wakes it, as Slack threads already did.
+- A reply now says what it answers: the agent sees `> name: …` above the reply text (clipped to 200 characters), so a bare "approved" makes sense without reading back.
+- Mingle's own lines — a new bot's greeting to its owner, the "let me check with my owner" answer to a stranger, claim confirmations — are kept with their chat and shown in the activity instead of going unrecorded.
+
 ## 0.3.0
 
 - An agent no longer stays "working" forever on a command that never ends. When a turn reports nothing at all — no thinking, text, tool call, subagent or background-task update, and no `mingle` command from the agent — for twenty minutes while a message is waiting on it, Mingle stops the turn on its own rather than counting it an owner stop: the harness gets thirty seconds to end it before its process is replaced and the conversation continues in a new one. Messages sent while it was stuck are then answered in a fresh turn, or shown as "No reply yet", instead of disappearing into the stuck turn — the status no longer sits on a tool name and the owner no longer has to reset the agent by hand.
