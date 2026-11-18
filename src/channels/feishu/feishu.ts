@@ -154,6 +154,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
 
   return {
     platform: "feishu",
+    groupMessages: true,
     // Only people in the organization can message the bot or add it to a group.
     trust: "org",
     // Scanning again with an app's credentials updates that app's permissions (registerApp appId).

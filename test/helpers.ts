@@ -28,6 +28,8 @@ export const CLI_ENTRY = fileURLToPath(new URL("../src/cli/main.ts", import.meta
 /** A chat app that lives in memory. Tests push inbound messages and inspect what was sent. */
 export class FakeChannel implements Channel {
   readonly platform = "telegram" as const;
+  /** Sends the bot every group message, as Telegram does with privacy mode off. */
+  readonly groupMessages = true as const;
   readonly onboarding = { kind: "credentials" as const, fields: [] };
   /** Most tests are about anything but access: everyone gets through unless a test asks otherwise. */
   trust: Trust = "org";
@@ -271,6 +273,8 @@ export async function rig(
     /** Who the fake chat app says can reach its bots; "org" unless a test is about access. */
     trust?: Trust;
     remoteTransport?: import("../src/core/remotes.ts").RemoteTransport;
+    /** Pacing of a group that hears everything (`MingleOptions.hearing`). */
+    hearing?: { quietMs: number; maxWaitMs: number; gapMs: number };
   } = {},
 ): Promise<Rig> {
   const home = mkdtempSync(join(tmpdir(), "mingle-test-"));
@@ -318,6 +322,7 @@ export async function rig(
     reminderTickMs: 60_000,
     retryDelaysMs: [10],
     reconnectDelaysMs: [30],
+    ...(options.hearing ? { hearing: options.hearing } : {}),
     // MINGLE_E2E_LOG=1 prints what Mingle logs, to see why a real harness did not answer.
     ...(process.env.MINGLE_E2E_LOG ? { log: (line: string) => console.log(`[mingle] ${line}`) } : {}),
     ...(options.log ? { log: options.log } : {}),

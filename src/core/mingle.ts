@@ -34,7 +34,7 @@ import { coldRebuildFor } from "./cold.ts";
 import { diagnosisPrompt } from "./diagnose.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
 import { MingleError, notFound } from "./errors.ts";
-import { formatReminder, renderMessage } from "./format.ts";
+import { formatHeard, formatReminder, renderMessage } from "./format.ts";
 import { checkHandoff, handoffPrompt } from "./handoff.ts";
 import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
@@ -101,12 +101,25 @@ export interface MingleOptions {
   readonly retryDelaysMs?: readonly number[];
   /** Waits between automatic reconnect attempts of a bot that went offline. */
   readonly reconnectDelaysMs?: readonly number[];
+  /** How a group that hears everything paces what it hands the agent; the `HEAR_*` defaults otherwise. */
+  readonly hearing?: { readonly quietMs: number; readonly maxWaitMs: number; readonly gapMs: number };
   readonly log?: (line: string) => void;
 }
 
 /** Variables that give an agent a sign-in of its own, so it does not share the computer's usage limit. */
 /** How long a group's member list stays fresh before an active group is read again. */
 const ROSTER_TTL_MS = 6 * 60 * 60_000;
+
+/**
+ * A group that hears everything (docs/spec.md 4.2): what people say there reaches the agent a
+ * stretch at a time, once the group has been quiet for `HEAR_QUIET_MS`, or `HEAR_MAX_WAIT_MS` into a
+ * conversation that does not pause; never sooner than `HEAR_GAP_MS` after the last stretch from
+ * that chat, and at most `HEAR_MESSAGES` messages a stretch (the rest is a `message read` away).
+ */
+export const HEAR_QUIET_MS = 20_000;
+export const HEAR_MAX_WAIT_MS = 60_000;
+export const HEAR_GAP_MS = 120_000;
+const HEAR_MESSAGES = 30;
 
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
 
@@ -139,6 +152,13 @@ export class Mingle {
   private readonly claimMisses = new Map<string, number>();
   /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
   private readonly botHops = new BotHops();
+  /**
+   * Chats that hear everything with a stretch waiting to reach the agent: from which message on,
+   * since when it waits, and the timer. In memory: after a restart the next message starts anew.
+   */
+  private readonly hearing = new Map<string, { agentId: string; from: number; since: number; timer: NodeJS.Timeout }>();
+  /** When each chat last handed the agent a stretch it heard. */
+  private readonly heardAt = new Map<string, number>();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -1335,8 +1355,12 @@ export class Mingle {
       : trigger({
           dm: chat.kind === "dm",
           bot,
-          // A reply to something the agent said is addressed to it, even where the platform does not say so.
-          addressed: inbound.addressedToBot || quoted?.direction === "out",
+          // A reply to something the agent said is addressed to it, even where the platform does not say so;
+          // so is what people say next in a thread that is one conversation, once the agent spoke there.
+          addressed:
+            inbound.addressedToBot ||
+            quoted?.direction === "out" ||
+            (inbound.chat.followUp === true && this.store.lastSpokeAt(chat.id) !== undefined),
           mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
           hops: this.botHops.hops(chat.id),
         });
@@ -1384,6 +1408,9 @@ export class Mingle {
         .send(connection.agentId, { chatId: chat.id, text: botBrakeNote(connection.platform, name), notice: true })
         .catch((error) => this.log(`bot brake note failed: ${(error as Error).message}`));
     }
+    if (decision === "background" && !bot && (parent ?? chat).listen) {
+      this.overhear(connection, chat, parent ?? chat, contact, owner, message);
+    }
     if (!triggers || verdict === "drop") return; // Background, or someone the owner refused.
     if (verdict === "ask") {
       this.asked(connection, chat, group, contact, message);
@@ -1429,6 +1456,8 @@ export class Mingle {
         );
       return;
     }
+    // Addressed now: the stretch it was about to hear comes with this message's `unseen` instead.
+    this.unhear(chat.id);
     if (live) {
       this.replies.open({
         messageId: message.id,
@@ -1441,6 +1470,103 @@ export class Mingle {
       });
     }
     this.runtimes.get(connection.agentId)?.enqueueMessage(message.id);
+  }
+
+  /**
+   * A person spoke in a group that hears everything, not to the agent (docs/spec.md 4.2). Only
+   * someone who could put it to work there starts a stretch: the group let in, the person not turned
+   * away. Each new message pushes the stretch back until the group goes quiet, up to a limit.
+   */
+  private overhear(
+    connection: Connection,
+    chat: Chat,
+    group: Chat,
+    contact: Contact,
+    owner: boolean,
+    message: Message,
+  ): void {
+    if (this.paused.has(connection.agentId)) return;
+    const verdict = gate({
+      trust: this.channel(connection.platform).trust ?? "public",
+      askAll: this.store.agent(connection.agentId)?.askAll ?? false,
+      isOwner: owner,
+      chatKind: chat.kind,
+      contact: contact.access ?? this.linkedAccess(contact),
+      group: group.access,
+    });
+    if (verdict !== "deliver") return;
+    const pace = this.options.hearing ?? { quietMs: HEAR_QUIET_MS, maxWaitMs: HEAR_MAX_WAIT_MS, gapMs: HEAR_GAP_MS };
+    const now = Date.now();
+    const waiting = this.hearing.get(chat.id);
+    if (waiting) clearTimeout(waiting.timer);
+    const since = waiting?.since ?? now;
+    const due = Math.max(
+      Math.min(now + pace.quietMs, since + pace.maxWaitMs),
+      (this.heardAt.get(chat.id) ?? 0) + pace.gapMs,
+    );
+    const timer = setTimeout(() => this.hear(chat.id), Math.max(0, due - now));
+    timer.unref?.();
+    this.hearing.set(chat.id, {
+      agentId: connection.agentId,
+      from: waiting?.from ?? message.createdAt,
+      since,
+      timer,
+    });
+  }
+
+  /** Drop the stretch a chat was waiting to hand over. */
+  private unhear(chatId: string): void {
+    const waiting = this.hearing.get(chatId);
+    if (!waiting) return;
+    clearTimeout(waiting.timer);
+    this.hearing.delete(chatId);
+  }
+
+  /**
+   * Hand the agent what was said in the chat since it last spoke there, as input it may answer or
+   * leave be: no live reply, no reminder to answer, nothing for the owner (docs/spec.md 4.2).
+   */
+  private hear(chatId: string): void {
+    const waiting = this.hearing.get(chatId);
+    this.hearing.delete(chatId);
+    if (!waiting) return;
+    const chat = this.store.chat(chatId);
+    const group = chat?.parentId ? this.store.chat(chat.parentId) : chat;
+    const runtime = this.runtimes.get(waiting.agentId);
+    // Turned off, paused or gone meanwhile: nothing to hear.
+    if (!chat || !group?.listen || !runtime || this.paused.has(waiting.agentId)) return;
+    const spoke = this.store.lastSpokeAt(chat.id);
+    const from = spoke === undefined ? waiting.from : Math.max(waiting.from, spoke + 1);
+    const messages = this.store.background(chat.id, from, HEAR_MESSAGES);
+    // The agent spoke after all of it, or only bots are left: nothing new from a person.
+    const person = messages.some(
+      (m) => !(m.senderId && this.store.contactByPlatformId(chat.connectionId, m.senderId)?.isBot),
+    );
+    if (!person) return;
+    this.heardAt.set(chat.id, Date.now());
+    runtime.enqueueText(formatHeard(this.store, chat, messages));
+  }
+
+  /**
+   * The owner sets a group to hear everything, or only what is addressed to the agent (docs/spec.md
+   * 4.2). Only where the chat app sends the bot every message in its groups. Turning it on lets the
+   * group in, as the owner using the agent there would.
+   */
+  setListen(idOrSlug: string, chatId: string, listen: boolean): void {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    const connection = this.store.connection(chat.connectionId);
+    if (listen && !(connection && this.channel(connection.platform).groupMessages)) {
+      throw new MingleError("listen_unsupported", "this chat app only sends the bot what @-mentions it", 409);
+    }
+    if (listen && chat.access === null) this.setAccess(agent.id, { chat: chat.id }, "allowed");
+    this.store.setChatListen(chat.id, listen);
+    if (!listen) {
+      this.unhear(chat.id);
+      for (const thread of this.store.agentChats(agent.id)) if (thread.parentId === chat.id) this.unhear(thread.id);
+    }
+    this.log(`${agent.name}: owner set ${chat.id} to hear ${listen ? "everything" : "what is addressed to it"}`);
   }
 
   /**
