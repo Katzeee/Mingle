@@ -8,6 +8,10 @@
  * - An adapter never throws for "the platform cannot do this": it degrades and says so.
  */
 
+import type { Mention } from "./mention.ts";
+
+export type { Mention } from "./mention.ts";
+
 export type Platform =
   | "wechat"
   | "wecom"
@@ -39,6 +43,11 @@ export interface Capabilities {
   readonly fileUpload: boolean;
   readonly fileDownload: boolean;
   readonly listMembers: boolean;
+  /**
+   * Turns `@name` into a real mention, from `OutboundMessage.mentions` (docs/spec.md 4.2). Absent:
+   * the name goes out as plain text, which notifies nobody and wakes no bot.
+   */
+  readonly mentions?: true;
   /** Largest text body one message can carry; longer bodies are split by the core. */
   readonly maxTextLength: number;
 }
@@ -221,6 +230,11 @@ export interface InboundMessage {
    * message addressed to the bot as a mention.
    */
   readonly mentioned?: boolean;
+  /**
+   * The others the text @-mentions, as the platform reports them. The core adds them to the address
+   * book, so the agent can mention them back by name, other bots included.
+   */
+  readonly mentions?: readonly Sender[];
   readonly sentAt: number;
   /**
    * Read from the chat's history when the bot joined, not delivered as it was sent. The core keeps
@@ -236,6 +250,11 @@ export interface OutboundMessage {
   /** Platform id of the message to quote. Ignored, and reported, where unsupported. */
   readonly replyTo?: string;
   readonly files?: readonly { readonly path: string; readonly name?: string }[];
+  /**
+   * People the text @-mentions by name. Where `Capabilities.mentions`, the adapter writes each spot
+   * `mentionSpots` finds as a real mention; elsewhere the text goes out as written.
+   */
+  readonly mentions?: readonly Mention[];
 }
 
 export type SendResult =
@@ -270,7 +289,13 @@ export function withTextSent(result: SendResult, textPlatformId: string): SendRe
   return textPlatformId && result.kind === "failed" ? { ...result, textSent: { platformId: textPlatformId } } : result;
 }
 
-export type Degradation = "quote_dropped" | "files_dropped" | "markdown_flattened" | "text_split";
+export type Degradation =
+  | "quote_dropped"
+  | "files_dropped"
+  | "markdown_flattened"
+  | "text_split"
+  /** `@name`s went out as plain text: the chat app has no mention a bot can write. */
+  | "mentions_plain";
 
 // ------------------------------------------------------------------- adapter
 
@@ -295,8 +320,8 @@ export interface LiveOptions {
 export interface LiveReply {
   /** Replace the progress content. Markdown. Best effort. */
   update(markdown: string): Promise<void>;
-  /** Replace the content with the final answer and close the reply. */
-  finish(markdown: string): Promise<SendResult>;
+  /** Replace the content with the final answer and close the reply. `mentions` as in `OutboundMessage`. */
+  finish(markdown: string, mentions?: readonly Mention[]): Promise<SendResult>;
 }
 
 /** One adapter instance per platform. Stateless across bots. */

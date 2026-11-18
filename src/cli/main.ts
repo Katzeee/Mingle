@@ -222,6 +222,8 @@ interface SendReport {
   messages: { id: string }[];
   state: "sent" | "uncertain";
   degraded: string[];
+  mentioned?: { contact: string; name: string }[];
+  unmatched?: string[];
 }
 
 function sendText(report: SendReport): string {
@@ -236,8 +238,16 @@ function sendText(report: SendReport): string {
     files_dropped: "files were not sent",
     markdown_flattened: "formatting is shown as plain text here",
     text_split: "the text was long and went out as several messages",
+    mentions_plain: "this chat app has no mentions a bot can make; the names went out as plain text and notify no one",
   };
+  if (report.mentioned?.length)
+    lines.push(`mentioned ${report.mentioned.map((m) => `@${m.name} (${m.contact})`).join(", ")}`);
   for (const d of report.degraded) if (notes[d]) lines.push(`note: ${notes[d]}`);
+  if (report.unmatched?.length)
+    lines.push(
+      `note: ${report.unmatched.join(", ")} matched no one in this chat and went out as plain text, so nobody was notified. ` +
+        `To mention someone, write @ and their name exactly as "mingle contact list" shows it`,
+    );
   return lines.join("\n");
 }
 

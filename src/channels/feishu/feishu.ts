@@ -21,6 +21,7 @@ import type {
   SendResult,
 } from "../channel.ts";
 import { withTextSent } from "../channel.ts";
+import { type Mention, renderMentions } from "../mention.ts";
 
 /**
  * Feishu (and Lark) through the official SDK: QR app registration, then a
@@ -84,6 +85,7 @@ const CAPABILITIES: Capabilities = {
   fileUpload: true,
   fileDownload: true,
   listMembers: true,
+  mentions: true,
   maxTextLength: 8000,
 };
 
@@ -453,7 +455,13 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           try {
             let last = "";
             if (message.text)
-              last = textId = (await channel.send(message.chat.platformId, { markdown: message.text }, opts)).messageId;
+              last = textId = (
+                await channel.send(
+                  message.chat.platformId,
+                  { markdown: postMentions(message.text, message.mentions) },
+                  opts,
+                )
+              ).messageId;
             for (const file of message.files ?? []) {
               const source = await readFile(file.path);
               const name = file.name ?? basename(file.path);
@@ -523,14 +531,18 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             update: async (markdown) => {
               await controller?.setContent(markdown).catch(() => {});
             },
-            finish: async (markdown) => {
+            finish: async (markdown, mentions) => {
               // Feishu stops accepting updates to a streaming card after about ten minutes.
               if (Date.now() - startedAt > STREAM_LIMIT_MS) {
                 release();
                 await stream.catch(() => {});
                 return { kind: "failed", code: "unknown", retryable: false };
               }
-              await controller?.setContent(`${mention}${markdown}`);
+              // The asker is mentioned up front, unless the answer already names them.
+              const lead = mentions?.some((m) => m.id === options.mention) ? "" : mention;
+              await controller?.setContent(
+                `${lead}${renderMentions(markdown, mentions, (m) => `<at id=${m.id}></at>`)}`,
+              );
               release();
               const result = await stream;
               return { kind: "sent", platformId: result.messageId };
@@ -669,6 +681,10 @@ export function toInbound(
     ...(r.type === "image" ? { mime: "image/png" } : {}),
   }));
 
+  const others = message.mentions
+    .filter((m) => m.openId && !m.isBot && m.openId !== bot.id)
+    .map((m) => ({ id: m.openId as string, name: m.name ?? "", isBot: false }));
+
   return {
     platformId: message.messageId,
     chat: {
@@ -683,8 +699,14 @@ export function toInbound(
     ...(message.replyToMessageId ? { replyTo: message.replyToMessageId } : {}),
     addressedToBot: dm || message.mentionedBot,
     mentioned: message.mentionedBot,
+    ...(others.length ? { mentions: others } : {}),
     sentAt: message.createTime,
   };
+}
+
+/** `@name` as a post's `md` element writes a mention. */
+function postMentions(markdown: string, mentions: readonly Mention[] | undefined): string {
+  return renderMentions(markdown, mentions, (m) => `<at user_id="${m.id}">${m.name}</at>`);
 }
 
 function sendFailure(error: unknown): SendResult {

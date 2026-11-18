@@ -1,5 +1,6 @@
 import type { ChannelConnection, ChatRef, Degradation, SendResult } from "../channels/channel.ts";
-import type { Message, Store } from "../store/store.ts";
+import { codeRanges, type Mention, mentionSpots } from "../channels/mention.ts";
+import type { Contact, Message, Store } from "../store/store.ts";
 import { MingleError, notFound } from "./errors.ts";
 import type { LiveReplies } from "./live.ts";
 
@@ -17,6 +18,10 @@ export interface SendReport {
   readonly messages: readonly Message[];
   readonly state: "sent" | "uncertain";
   readonly degraded: readonly Degradation[];
+  /** The people the text @-mentions, by contact ID and the name as written. */
+  readonly mentioned: readonly { readonly contact: string; readonly name: string }[];
+  /** `@words` that are nobody here: they went out as plain text. */
+  readonly unmatched: readonly string[];
 }
 
 /** Everything an agent sends goes through here: lookup, splitting, retries, and marking messages answered. */
@@ -62,10 +67,24 @@ export class Outbox {
       throw new MingleError("empty_message", "pass the message body on standard input, or attach a file with --file");
     }
 
+    // `@name` in a group is a mention of whoever has that name there (docs/spec.md 4.2).
+    const found =
+      chat.kind !== "dm" && !request.notice && text.includes("@")
+        ? resolveMentions(text, store.mentionCandidates(chat))
+        : { mentions: [], mentioned: [], unmatched: [] };
+    const mentions = found.mentions.length ? { mentions: found.mentions } : {};
     const chunks = split(text, live.capabilities().maxTextLength);
     let ref: ChatRef = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
     const sent: Message[] = [];
     const degraded = new Set<Degradation>(chunks.length > 1 ? ["text_split"] : []);
+    if (found.mentions.length && !live.capabilities().mentions) degraded.add("mentions_plain");
+    const report = (state: SendReport["state"]): SendReport => ({
+      messages: sent,
+      state,
+      degraded: [...degraded],
+      mentioned: found.mentioned,
+      unmatched: found.unmatched,
+    });
     for (const [i, chunk] of chunks.entries()) {
       const last = i === chunks.length - 1;
       const record = store.insertOutbound({
@@ -78,7 +97,9 @@ export class Outbox {
       // The first piece of a reply goes into the live reply opened for that message, if any.
       // Mingle's own word is not the answer the live reply waits for.
       const intoLive =
-        i === 0 && quoted && chunk && !request.notice ? await this.replies?.answer(quoted.id, chunk) : undefined;
+        i === 0 && quoted && chunk && !request.notice
+          ? await this.replies?.answer(quoted.id, chunk, found.mentions)
+          : undefined;
       let result: SendResult;
       if (intoLive) {
         result = files
@@ -95,6 +116,7 @@ export class Outbox {
         result = await this.attempt(live, {
           chat: ref,
           text: chunk,
+          ...mentions,
           ...(i === 0 && quoted?.platformId ? { replyTo: quoted.platformId } : {}),
           ...(files ? { files } : {}),
         });
@@ -113,7 +135,7 @@ export class Outbox {
         store.setOutboundResult(record.id, "uncertain", null);
         sent.push(store.message(record.id) as Message);
         if (!request.notice) this.markAnswered(chat.id, quoted);
-        return { messages: sent, state: "uncertain", degraded: [...degraded] };
+        return report("uncertain");
       }
       const why = result.detail ? ` (${connection.platform}: ${result.detail})` : "";
       if (result.textSent) {
@@ -131,7 +153,7 @@ export class Outbox {
       throw new MingleError(`send_${result.code}`, `${failureNext(result.code, "message")}${why}`, 502);
     }
     if (!request.notice) this.markAnswered(chat.id, quoted);
-    return { messages: sent, state: "sent", degraded: [...degraded] };
+    return report("sent");
   }
 
   private async attempt(
@@ -182,6 +204,64 @@ function failureNext(code: string, what: "message" | "file"): string {
     default:
       return what === "file" ? "the chat app refused it" : "the message was not sent; try again shortly";
   }
+}
+
+/** Group-wide mentions that name no one person. */
+const EVERYONE = new Set(["all", "everyone", "here", "channel", "所有人", "全体成员"]);
+
+/**
+ * Which `@name`s in the text are people on this bot. A name two people share goes to the one who
+ * spoke in this chat; if that does not settle it, it stays plain text rather than wake the wrong one.
+ * The person's name, the name given to them and the chat app's own name all count, since the agent
+ * sees the first in message headers and the last where others mention them.
+ */
+export function resolveMentions(
+  text: string,
+  candidates: readonly (Contact & { spoke: boolean })[],
+): { mentions: Mention[]; mentioned: { contact: string; name: string }[]; unmatched: string[] } {
+  const byName = new Map<string, Map<string, Contact & { spoke: boolean }>>();
+  for (const contact of candidates) {
+    for (const raw of [contact.personName, contact.alias, contact.name]) {
+      const name = raw?.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      const holders = byName.get(key) ?? new Map();
+      holders.set(contact.platformId, contact);
+      byName.set(key, holders);
+    }
+  }
+  const options: (Mention & { contact: string })[] = [];
+  for (const [key, holders] of byName) {
+    let who = [...holders.values()];
+    if (who.length > 1) who = who.filter((c) => c.spoke);
+    const one = who.length === 1 ? who[0] : undefined;
+    if (!one) continue;
+    const name = [one.personName, one.alias, one.name].map((n) => n?.trim()).find((n) => n?.toLowerCase() === key);
+    if (name) options.push({ id: one.platformId, name, contact: one.id });
+  }
+  const spots = mentionSpots(text, options);
+  const mentions = new Map<string, Mention>();
+  const mentioned = new Map<string, { contact: string; name: string }>();
+  for (const { mention } of spots) {
+    const option = mention as Mention & { contact: string };
+    mentions.set(`${option.id}\n${option.name}`, { id: option.id, name: option.name });
+    if (!mentioned.has(option.contact)) mentioned.set(option.contact, { contact: option.contact, name: option.name });
+  }
+  // What else looks like a mention, so the agent knows it reached no one.
+  const unmatched = new Set<string>();
+  const taken = (i: number) => spots.some((s) => i >= s.start && i < s.end);
+  const code = codeRanges(text);
+  for (const m of text.matchAll(/(^|[^A-Za-z0-9._%+-])@([^\s@,，。、!！?？:：;；()（）[\]{}<>"'`]{1,32})/g)) {
+    const at = m.index + (m[1] as string).length;
+    const word = m[2] as string;
+    if (taken(at) || EVERYONE.has(word.toLowerCase()) || code.some(([from, to]) => at >= from && at < to)) continue;
+    unmatched.add(`@${word}`);
+  }
+  return {
+    mentions: [...mentions.values()],
+    mentioned: [...mentioned.values()],
+    unmatched: [...unmatched].slice(0, 5),
+  };
 }
 
 /** Split on paragraph, then line, then hard boundaries so each piece fits. */

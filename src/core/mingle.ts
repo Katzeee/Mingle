@@ -1297,6 +1297,19 @@ export class Mingle {
     return false;
   }
 
+  /**
+   * Whoever a message @-mentions goes in the address book with the name the chat app shows, so the
+   * agent can mention them back: "@Alex @Bob, talk it over" is how two agents meet (docs/spec.md 4.2).
+   */
+  private learnMentioned(connectionId: string, ownerId: string | null, inbound: InboundMessage): void {
+    const live = this.live.get(connectionId);
+    for (const other of inbound.mentions ?? []) {
+      if (!other.id || other.id === live?.bot.id || other.id === live?.bot.senderId) continue;
+      const contact = this.store.touchContact(connectionId, other.id, other.name);
+      if (other.isBot && !contact.isBot && other.id !== ownerId) this.store.setContactBot(contact.id, true);
+    }
+  }
+
   /** One inbound message from a chat app (docs/spec.md 4.2, 4.3, 7.1). */
   receive(connectionId: string, inbound: InboundMessage): void {
     const connection = this.store.connection(connectionId);
@@ -1323,6 +1336,7 @@ export class Mingle {
     if (!connection.ownerId && chat.kind === "dm" && !knownBot && this.claim(connection, chat, contact, inbound))
       return;
     const ownerId = connection.ownerId;
+    this.learnMentioned(connectionId, ownerId, inbound);
     const owner = inbound.sender.id === ownerId;
     if (knownBot && !owner && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
     // The owner is a person, whatever was marked.
