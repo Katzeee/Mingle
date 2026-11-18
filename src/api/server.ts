@@ -773,6 +773,12 @@ export function createApi(mingle: Mingle): Hono<Env> {
         chat: { id: v.chat.id, kind: v.chat.kind, name: v.chat.name },
         parent: v.parent ? { id: v.parent.id, kind: v.parent.kind, name: v.parent.name } : null,
         platform: v.platform,
+        // A group: whether it hears everything (docs/spec.md 4.2). Null where that cannot be set:
+        // not a group, or a chat app that only sends the bot what @s it.
+        listen:
+          v.chat.kind === "group" && mingle.hasChannel(v.platform) && mingle.channel(v.platform).groupMessages
+            ? v.chat.listen
+            : null,
         latestAt: v.latestAt,
         earlier: v.earlier,
         cursor: v.cursor,
@@ -902,6 +908,18 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.post("/v1/admin/agents/:id/chats/:chatId/access", async (c) => {
     const settled = mingle.setAccess(c.req.param("id"), { chat: c.req.param("chatId") }, await accessBody(c));
     return c.json({ settled });
+  });
+
+  /**
+   * The owner sets a group to hear everything, or only what is addressed to the agent (docs/spec.md
+   * 4.2): `{ "listen": true }` or `{ "listen": false }`.
+   */
+  app.put("/v1/admin/agents/:id/chats/:chatId/listen", async (c) => {
+    const { listen } = await c.req.json<{ listen?: unknown }>();
+    if (typeof listen !== "boolean")
+      throw new MingleError("listen_invalid", 'send { "listen": true } or { "listen": false }');
+    mingle.setListen(c.req.param("id"), c.req.param("chatId"), listen);
+    return c.json({ listen });
   });
 
   /** The people and groups the owner (or the default) let in or turned away, to change their mind. */

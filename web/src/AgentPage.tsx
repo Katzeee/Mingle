@@ -1898,6 +1898,52 @@ function personLabel(t: Translate, m: Activity | undefined): string {
   );
 }
 
+/**
+ * Whether the agent hears everything said in this group, or only what is addressed to it
+ * (docs/spec.md 4.2). Shown where the chat app sends the bot every message in its groups.
+ */
+function ListenSwitch({ agent, conversation }: { agent: AgentView; conversation: Conversation }) {
+  const { t } = useI18n();
+  const [on, setOn] = useState(Boolean(conversation.listen));
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // A poll that brings another answer (the owner changed it elsewhere) wins once nothing is saving.
+  useEffect(() => {
+    if (!saving) setOn(Boolean(conversation.listen));
+  }, [conversation.listen, saving]);
+  return (
+    <div className="mb-1 flex flex-col gap-1 border-b border-line pb-2.5">
+      <label className="flex min-w-0 cursor-pointer items-start gap-3">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-small font-medium">{t("listen.title")}</span>
+          <span className="text-caption text-ink2">{t(on ? "listen.on" : "listen.off", { name: agent.name })}</span>
+        </span>
+        <input
+          type="checkbox"
+          className="mt-0.5 size-4 shrink-0 accent-[var(--accent-btn)]"
+          checked={on}
+          disabled={saving}
+          onChange={async (e) => {
+            const next = e.target.checked;
+            setOn(next);
+            setSaving(true);
+            setFailure(null);
+            try {
+              await api.setListen(agent.id, conversation.chat.id, next);
+            } catch (error) {
+              setOn(!next);
+              setFailure(errorText(t, error));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
+      </label>
+      {failure ? <p className="text-caption text-red">{failure}</p> : null}
+    </div>
+  );
+}
+
 /** An open conversation, read top-down as it was said; earlier messages on request. */
 function ConversationMessages({
   agent,
@@ -1942,6 +1988,7 @@ function ConversationMessages({
   };
   return (
     <div className={`flex flex-col pr-4 pb-3 ${thread ? "pl-8" : "pl-12"}`}>
+      {conversation.listen !== null ? <ListenSwitch agent={agent} conversation={conversation} /> : null}
       {earlier > 0 && cursor !== null ? (
         <button
           type="button"

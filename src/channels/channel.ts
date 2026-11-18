@@ -196,6 +196,12 @@ export interface ChatRef {
    * that were not addressed to the bot. The agent reads them there (docs/spec.md 4.2).
    */
   readonly parent?: { readonly platformId: string; readonly name?: string };
+  /**
+   * A thread that is one conversation (a Discord thread), not a lasting place of its own (a Telegram
+   * forum topic, a GitHub issue): once the agent has spoken in it, what people say there next is
+   * addressed to it, as in a conversation, without an @ each time (docs/spec.md 4.2).
+   */
+  readonly followUp?: true;
 }
 
 export interface Sender {
@@ -342,6 +348,12 @@ export interface Channel {
   readonly reauthorize?: boolean;
   /** Where the owner adds a connected bot to a server or group, for platforms where that is a separate step. */
   inviteUrl?(bot: BotIdentity): string;
+  /**
+   * Its bots can be sent every message in their groups, not only those that @ them (where the
+   * platform asks for one, given the `group_messages` permission), so a group can be set to hear
+   * everything (docs/spec.md 4.2). Absent where the platform only delivers what @s the bot.
+   */
+  readonly groupMessages?: true;
   /** Who can reach its bots. Absent means `public`: the safe side for a platform not described here. */
   readonly trust?: Trust;
   /** False where nobody can message the bot directly (GitHub), so nobody claims it that way. */

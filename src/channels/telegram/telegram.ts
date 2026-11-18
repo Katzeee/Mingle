@@ -145,6 +145,7 @@ export function telegramChannel(options: TelegramOptions = {}): Channel {
 
   return {
     platform: "telegram",
+    groupMessages: true,
     // A deep link sends `/start <code>` from the person's own account with one tap.
     claimUrl(bot: BotIdentity, code: string) {
       return `https://t.me/${encodeURIComponent(bot.name.replace(/^@/, ""))}?start=${code}`;

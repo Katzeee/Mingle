@@ -238,6 +238,8 @@ export interface Conversation {
   /** The channel a thread belongs to. */
   parent: { id: string; kind: "dm" | "group" | "thread"; name: string | null } | null;
   platform: Platform;
+  /** A group: whether it hears everything said there. Null where that cannot be set (docs/spec.md 4.2). */
+  listen: boolean | null;
   latestAt: number;
   /** Older messages not shown; read them with `cursor` as `before`. */
   earlier: number;
@@ -438,6 +440,8 @@ export const api = {
       `/v1/admin/agents/${id}/${kind === "contact" ? "contacts" : "chats"}/${targetId}/access`,
       { access },
     ),
+  setListen: (id: string, chatId: string, listen: boolean) =>
+    call<{ listen: boolean }>("PUT", `/v1/admin/agents/${id}/chats/${chatId}/listen`, { listen }),
   access: (id: string) => call<AccessEntry[]>("GET", `/v1/admin/agents/${id}/access`),
   setAskAll: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/ask-all`, { on }),
   contacts: (id: string) => call<ContactEntry[]>("GET", `/v1/admin/agents/${id}/contacts`),

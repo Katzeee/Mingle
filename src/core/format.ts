@@ -142,6 +142,31 @@ export function renderMessage(
   return formatMessage(message, chat, connection.platform, { ownerId: connection.ownerId, contact, ...opts });
 }
 
+/** Characters of each message in a heard stretch; the rest is one `message read` away. */
+const HEARD_CHARS = 1200;
+
+/**
+ * What was said in a group that hears everything, as it reaches the agent (docs/spec.md 4.2): the
+ * stretch since it last spoke there, none of it addressed to it. It may answer, or say nothing.
+ */
+export function formatHeard(store: Store, chat: Chat, messages: readonly Message[]): string {
+  const lines = messages
+    .map((m) => {
+      const chars = [...m.body];
+      const body =
+        chars.length > HEARD_CHARS
+          ? `${chars.slice(0, HEARD_CHARS).join("").trimEnd()}… (rest: message read ${chat.id} --around ${m.id})`
+          : m.body;
+      return renderMessage(store, { ...m, body });
+    })
+    .filter(Boolean);
+  const count = lines.length === 1 ? "1 message" : `${lines.length} messages`;
+  return [
+    `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you. Your owner set this group to let you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so.`,
+    ...lines,
+  ].join("\n\n");
+}
+
 /** Characters of a source message quoted in a reminder; the rest is one `message read` away. */
 const SOURCE_QUOTE_CHARS = 500;
 

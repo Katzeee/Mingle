@@ -128,6 +128,8 @@ export interface Chat {
   parentId: string | null;
   /** Groups only: whether the owner let this group in. */
   access: Access;
+  /** Groups only: the owner set it to hear every message, not only those addressed to the agent (docs/spec.md 4.2). */
+  listen: boolean;
   /** Direct chats only: the other person's ID on the platform, when known. */
   peerId: string | null;
 }
@@ -653,6 +655,10 @@ export class Store {
     this.db.prepare("UPDATE chats SET access = ?, updated_at = ? WHERE id = ?").run(access, this.now(), id);
   }
 
+  setChatListen(id: string, listen: boolean): void {
+    this.db.prepare("UPDATE chats SET listen = ?, updated_at = ? WHERE id = ?").run(listen ? 1 : 0, this.now(), id);
+  }
+
   /**
    * The people and groups whose access is decided, for the owner to change their mind: everyone but
    * the bots' owners, who can always talk to the agent. Most recently changed first.
@@ -1053,6 +1059,31 @@ export class Store {
       )
       .all(chatId, anchor.at, anchor.at, anchor.rowid, limit) as Row[];
     return rows.map(toMessage);
+  }
+
+  /** When the agent last spoke in this chat itself (Mingle's own notices do not count), if it has. */
+  lastSpokeAt(chatId: string): number | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT max(created_at) AS at FROM messages WHERE chat_id = ? AND direction = 'out' AND notice = 0
+         AND state IN ('sent', 'uncertain')`,
+      )
+      .get(chatId) as Row;
+    return row.at == null ? undefined : Number(row.at);
+  }
+
+  /**
+   * The latest messages in this chat that did not reach the agent, from `from` on, oldest first, at
+   * most `limit` (docs/spec.md 4.2, a group that hears everything).
+   */
+  background(chatId: string, from: number, limit: number): Message[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages WHERE chat_id = ? AND direction = 'in' AND triggers = 0 AND created_at >= ?
+         ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(chatId, from, limit) as Row[];
+    return rows.map(toMessage).reverse();
   }
 
   /**
@@ -1583,6 +1614,7 @@ function toChat(r: Row): Chat {
     name: str(r.name),
     parentId: str(r.parent_id),
     access: access(r.access),
+    listen: Number(r.listen ?? 0) === 1,
     peerId: str(r.peer_id),
   };
 }

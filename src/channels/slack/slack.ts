@@ -191,6 +191,7 @@ export function slackChannel(options: SlackOptions = {}): Channel {
 
   return {
     platform: "slack",
+    groupMessages: true,
     // Only people in the organization can message the bot or add it to a group.
     trust: "org",
     onboarding: {

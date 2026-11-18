@@ -81,6 +81,7 @@ describe("formatMessage", () => {
         name: "Weekend hikes",
         parentId: null,
         access: null,
+        listen: false,
         peerId: null,
       },
       "feishu",
@@ -117,6 +118,7 @@ describe("message header contacts", () => {
     name: null,
     parentId: null,
     access: null,
+    listen: false,
     peerId: null,
   };
   const contact = {

@@ -40,11 +40,7 @@ describe("messaging a person directly", { timeout: 60_000 }, () => {
 
   it("lists group members with contact IDs and opens a direct chat on the first send", async () => {
     const out: Record<string, string> = {};
-    const {
-      rig: r,
-      inputs,
-      finished,
-    } = await scene("chat", async (cli, group) => {
+    const { rig: r, finished } = await scene("chat", async (cli, group) => {
       out.info = (await cli(["chat", "info", group])).stdout;
       const id = /(u\w+)\s+"Ying Shanshan"/.exec(out.info)?.[1] as string;
       out.first = (await cli(["message", "send", "--to", id], "Hi Shanshan, which repo holds the operators?")).stdout;
@@ -63,9 +59,11 @@ describe("messaging a person directly", { timeout: 60_000 }, () => {
     ]);
     expect(out.second).toBe("");
 
-    // Her answer lands in that chat.
+    // Her answer lands in that chat — as a new turn, or steered into the one still finishing.
     r.channel.receive({ chat: { platformId: "dm-u2", kind: "dm" }, sender: MEMBERS[1] as never, text: "kb-operators" });
-    const answer = await until(() => inputs.find((i) => i.includes("kb-operators")));
+    const answer = await until(() =>
+      r.turns.flatMap((t) => [t.input, ...t.steered]).find((i) => i.includes("kb-operators")),
+    );
     const chats = r.mingle.store.agentChats(r.agentId).filter((c) => c.kind === "dm");
     expect(chats).toHaveLength(1);
     expect(answer).toContain(`chat=${chats[0]?.id}`);
@@ -73,11 +71,7 @@ describe("messaging a person directly", { timeout: 60_000 }, () => {
 
   it("learns the chat's own ID from the first send where the chat is named only then", async () => {
     const out: Record<string, string> = {};
-    const {
-      rig: r,
-      inputs,
-      finished,
-    } = await scene("user", async (cli, group) => {
+    const { rig: r, finished } = await scene("user", async (cli, group) => {
       const info = (await cli(["chat", "info", group])).stdout;
       const id = /(u\w+)\s+"Ying Shanshan"/.exec(info)?.[1] as string;
       await cli(["message", "send", "--to", id], "Hi Shanshan.");
@@ -88,7 +82,7 @@ describe("messaging a person directly", { timeout: 60_000 }, () => {
     expect(r.channel.sent.map((m) => m.chat.platformId)).toEqual(["user:u2", "dm-u2"]);
     expect(out.second).toBe("");
     r.channel.receive({ chat: { platformId: "dm-u2", kind: "dm" }, sender: MEMBERS[1] as never, text: "kb-operators" });
-    await until(() => inputs.find((i) => i.includes("kb-operators")));
+    await until(() => r.turns.flatMap((t) => [t.input, ...t.steered]).find((i) => i.includes("kb-operators")));
     expect(r.mingle.store.agentChats(r.agentId).filter((c) => c.kind === "dm")).toHaveLength(1);
   });
 

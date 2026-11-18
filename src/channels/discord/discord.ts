@@ -197,6 +197,7 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
 
   return {
     platform: "discord",
+    groupMessages: true,
     onboarding: {
       kind: "credentials",
       setupUrl: "https://discord.com/developers/applications",
@@ -259,7 +260,13 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
           if (fetched) learnChannel({ ...fetched, guild_id: fetched.guild_id ?? message.guild_id });
           known = channels.get(message.channel_id) ?? { kind: "group" };
         }
-        return { platformId: message.channel_id, kind: known.kind, ...(known.name ? { name: known.name } : {}) };
+        return {
+          platformId: message.channel_id,
+          kind: known.kind,
+          ...(known.name ? { name: known.name } : {}),
+          // A thread is one conversation: once the agent spoke in it, people go on without an @.
+          ...(known.kind === "thread" ? { followUp: true as const } : {}),
+        };
       };
 
       // ------------------------------------------------------------ gateway

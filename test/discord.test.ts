@@ -226,7 +226,7 @@ describe("discord connection", () => {
     await until(() => received.length === 3, 1000);
     const byId = Object.fromEntries(received.map((m) => [m.platformId, m.chat]));
     expect(byId.M1).toEqual({ platformId: "C1", kind: "group", name: "Hikers #general" });
-    expect(byId.M2).toEqual({ platformId: "T9", kind: "thread", name: "Hikers #plans" });
+    expect(byId.M2).toEqual({ platformId: "T9", kind: "thread", name: "Hikers #plans", followUp: true });
     expect(byId.M3).toEqual({ platformId: "D1", kind: "dm" });
 
     // Discord asks for a reconnect: resume on the resume URL with the last sequence.
