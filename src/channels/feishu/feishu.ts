@@ -96,6 +96,8 @@ const CAPABILITIES: Capabilities = {
  */
 const STREAM_RENEW_MS = 8 * 60_000;
 const STREAM_CLOSED = new Set([300309, 200850]);
+/** The SDK's axios instance has no default timeout; bound the calls a live card depends on. */
+const REQUEST_TIMEOUT_MS = 15_000;
 const CARD_ELEMENT = "stream_md";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
@@ -346,6 +348,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           cache: new lark.DefaultCache(),
           // The event's sender_type marks other bots' messages (docs/spec.md 4.2 "怎么认出机器人").
           includeRawEvent: true,
+          httpInstance: boundedHttp(lark.defaultHttpInstance as unknown as LarkHttp),
         });
         channel = instance;
         instance.on("message", async (message) => {
@@ -517,13 +520,11 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
               const lead = mentions?.some((m) => m.id === options.mention) ? "" : mention;
               const text = `${lead}${renderMentions(markdown, mentions, (m) => `<at id=${m.id}></at>`)}`;
               try {
-                await card.push(text);
+                await card.finish(text);
               } catch {
-                // The outbox then sends the answer as a message of its own.
-                await card.close().catch(() => {});
+                // The card refused the answer; the outbox sends it as a message of its own.
                 return { kind: "failed", code: "unknown", retryable: false };
               }
-              await card.close(text).catch(() => {});
               return { kind: "sent", platformId: card.messageId };
             },
           };
@@ -690,6 +691,38 @@ function postMentions(markdown: string, mentions: readonly Mention[] | undefined
 
 type LarkClient = LarkChannelLike["rawClient"];
 
+type LarkHttp = NonNullable<lark.LarkChannelOptions["httpInstance"]>;
+
+/**
+ * The SDK's axios instance is created without a timeout, so a hung request (a stalled CardKit
+ * write, a dead token refresh) would wait forever — and for a live card, block the answer behind
+ * it. Only the calls the card depends on are bounded: every CardKit operation, the reply that
+ * sends the card, and the tenant-token refresh those need first. Everything else (file up- and
+ * downloads, message lists, contacts) keeps the SDK's unbounded behavior, and an explicit
+ * timeout in the request options always wins. The default instance's interceptors and response
+ * shape are preserved by delegating to its own methods.
+ */
+function boundedHttp(base: LarkHttp): LarkHttp {
+  const bound = (url: string) =>
+    // The SDK resolves options.url to an absolute URL (https://open.feishu.cn/...) before request().
+    url.includes("/open-apis/cardkit/v1/cards") || /\/open-apis\/im\/v1\/messages\/[^/]+\/reply$/.test(url);
+  return {
+    ...base,
+    request: <T = unknown, R = T, D = unknown>(options: lark.HttpRequestOptions<D>): Promise<R> =>
+      base.request<T, R, D>(
+        bound(String(options?.url ?? "")) ? { ...options, timeout: options?.timeout ?? REQUEST_TIMEOUT_MS } : options,
+      ),
+    post: <T = unknown, R = T, D = unknown>(url: string, data?: D, options?: lark.HttpRequestOptions<D>): Promise<R> =>
+      base.post<T, R, D>(
+        url,
+        data,
+        String(url).endsWith("/open-apis/auth/v3/tenant_access_token/internal")
+          ? { ...options, timeout: options?.timeout ?? REQUEST_TIMEOUT_MS }
+          : options,
+      ),
+  };
+}
+
 /**
  * A streaming card (CardKit) replying to a message: one markdown element whose content is
  * replaced on each push, in order. Unlike the SDK's `stream()`, a failed push does not end the
@@ -698,22 +731,7 @@ type LarkClient = LarkChannelLike["rawClient"];
  */
 async function openCard(client: LarkClient, replyTo: string, initial: string) {
   const created = await client.cardkit.v1.card.create({
-    data: {
-      type: "card_json",
-      data: JSON.stringify({
-        schema: "2.0",
-        config: {
-          streaming_mode: true,
-          summary: { content: "..." },
-          streaming_config: {
-            print_frequency_ms: { default: 70 },
-            print_step: { default: 1 },
-            print_strategy: "fast",
-          },
-        },
-        body: { elements: [{ tag: "markdown", element_id: CARD_ELEMENT, content: initial }] },
-      }),
-    },
+    data: { type: "card_json", data: cardJson(initial) },
   });
   const cardId = ok(created).data?.card_id;
   if (!cardId) throw new Error("Feishu created no card");
@@ -766,20 +784,59 @@ async function openCard(client: LarkClient, replyTo: string, initial: string) {
           await write(content);
         }
       }),
-    /** Ends streaming (no more typing cursor) and sets the chat-list preview. */
-    close: (content?: string) =>
-      serial(() => {
-        if (content === undefined) return settings({ streaming_mode: false });
+    /**
+     * Replaces the whole card with the answer: one full update whose JSON has streaming off, so
+     * it lands whether or not streaming is still open (the card entity is editable for 14 days).
+     * Only on rejection does it close streaming as best effort and report failure.
+     */
+    finish: (content: string) =>
+      serial(async () => {
         const flat = content
           .replace(/<at id=[^>]*><\/at>/g, "")
           .replace(/\s+/g, " ")
           .trim();
-        return settings({
-          streaming_mode: false,
-          summary: { content: flat.length > 50 ? `${flat.slice(0, 49)}…` : flat },
-        });
+        const seq = ++sequence;
+        try {
+          ok(
+            await client.cardkit.v1.card.update({
+              path: { card_id: cardId },
+              data: {
+                card: { type: "card_json", data: cardJson(content, flat.length > 50 ? `${flat.slice(0, 49)}…` : flat) },
+                sequence: seq,
+                uuid: `u_${cardId}_${seq}`,
+              },
+            }),
+          );
+        } catch (error) {
+          await settings({ streaming_mode: false }).catch(() => {});
+          throw error;
+        }
       }),
   };
+}
+
+/**
+ * The card's JSON 2.0 document. Streaming config applies while progress is shown; the final
+ * document (marked by a summary, even an empty one) turns streaming off and carries the summary
+ * the chat list previews instead.
+ */
+function cardJson(content: string, summary?: string): string {
+  return JSON.stringify({
+    schema: "2.0",
+    config:
+      summary !== undefined
+        ? { streaming_mode: false, summary: { content: summary || "…" } }
+        : {
+            streaming_mode: true,
+            summary: { content: "..." },
+            streaming_config: {
+              print_frequency_ms: { default: 70 },
+              print_step: { default: 1 },
+              print_strategy: "fast",
+            },
+          },
+    body: { elements: [{ tag: "markdown", element_id: CARD_ELEMENT, content }] },
+  });
 }
 
 /** A raw client response: a non-zero Feishu code is an error. */
