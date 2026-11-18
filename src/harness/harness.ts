@@ -316,6 +316,39 @@ function incompatibility(runtime: Runtime, install: AvailableInstallation): Harn
   return undefined;
 }
 
+/**
+ * Resume `id`, or open a fresh session when the saved one cannot come back. A refusal at resume
+ * is about that saved session, not about the harness: a harness that refuses to resume one
+ * conversation (Pi with unregistered pending tools, DSH with a session saved elsewhere) still
+ * opens new ones, and retrying the same resume would fail on every message forever. Grok refuses
+ * an appended prompt on every resume, keeping the one saved with the session: resume without it.
+ */
+async function resumeOrReplace(
+  runtime: Runtime,
+  install: AvailableInstallation,
+  base: Parameters<Runtime["session"]>[1],
+  id: string,
+): Promise<{ session: Session; resumed: boolean; keptGuide: boolean }> {
+  try {
+    return { session: await runtime.session(install, { ...base, resume: id }), resumed: true, keptGuide: false };
+  } catch (error) {
+    if (error instanceof UnsupportedOptionError && error.option === "appendSystemPrompt" && base.appendSystemPrompt) {
+      const { appendSystemPrompt: _, ...rest } = base;
+      try {
+        return { session: await runtime.session(install, { ...rest, resume: id }), resumed: true, keptGuide: true };
+      } catch (retry) {
+        if (!replaceable(retry)) throw retry;
+      }
+    } else if (!replaceable(error)) throw error;
+  }
+  return { session: await runtime.session(install, base), resumed: false, keptGuide: false };
+}
+
+/** The saved session is gone, or the harness will not resume it as asked: a new one takes its place. */
+function replaceable(error: unknown): boolean {
+  return error instanceof UnsupportedOptionError || (error as Error).name === "SessionNotFoundError";
+}
+
 function requireCompatible(runtime: Runtime, install: AvailableInstallation): void {
   const issue = incompatibility(runtime, install);
   if (issue) throw new MingleError(issue.code, issue.reason);
@@ -726,25 +759,25 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
       };
       let session: Session;
       let resumed = false;
+      /** The resumed session keeps the guide it was opened with: none is appended this time. */
+      let keptGuide = false;
       try {
         if (options.resume) {
-          try {
-            session = await runtime.session(install, { ...base, resume: options.resume });
-            resumed = true;
-          } catch (error) {
-            if ((error as Error).name !== "SessionNotFoundError") throw error;
-            session = await runtime.session(install, base);
-          }
+          const opened = await resumeOrReplace(runtime, install, base, options.resume);
+          session = opened.session;
+          resumed = opened.resumed;
+          keptGuide = opened.keptGuide;
         } else {
           session = await runtime.session(install, base);
         }
       } catch (error) {
         // A refusal the declarations did not cover (like OpenCode's version split):
-        // report it as incompatibility, not as a raw harness error.
+        // report it as incompatibility, not as a raw harness error. The harness's own reason
+        // goes into the message so the log says which setting it refused.
         if (error instanceof UnsupportedOptionError) {
           throw new MingleError(
             "harness_incompatible",
-            "This harness cannot apply the settings Mingle needs. Choose another harness.",
+            `This harness cannot apply the settings Mingle needs (${error.option}: ${error.message}). Choose another harness.`,
           );
         }
         throw error;
@@ -856,8 +889,8 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         }
       });
 
-      // A resumed session has the guide in its history already.
-      let primer = canAppend || resumed ? "" : `${instructions.trim()}\n\n---\n\n`;
+      // A resumed session has the guide in its history, or keeps the one it was opened with.
+      let primer = canAppend || resumed || keptGuide ? "" : `${instructions.trim()}\n\n---\n\n`;
       return {
         id: session.id,
         resumed,

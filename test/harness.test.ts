@@ -471,8 +471,64 @@ describe("undeclared open-time refusals", () => {
     const runtime = failing(new UnsupportedOptionError("appendSystemPrompt", "fixture refusal"));
     await expect(open("flaky", runtime)).rejects.toMatchObject({
       code: "harness_incompatible",
-      next: "This harness cannot apply the settings Mingle needs. Choose another harness.",
+      next: "This harness cannot apply the settings Mingle needs (appendSystemPrompt: fixture refusal). Choose another harness.",
     });
+  });
+
+  it("opens a new session when the harness will not resume the saved one", async () => {
+    // Pi with unregistered pending tools, DSH with a session saved elsewhere: the refusal is about
+    // that conversation. Retrying the same resume would fail on every message forever.
+    const sessionSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new UnsupportedOptionError("resume", "fixture: cannot resume this one"))
+      .mockResolvedValueOnce(fakeSession("s-new"));
+    const runtime = { ...scriptedRuntime({ id: "flaky", turn: () => {} }), session: sessionSpy } as Runtime;
+    const session = await open("flaky", runtime, "s-old");
+    expect(session).toMatchObject({ id: "s-new", resumed: false });
+    expect(sessionSpy.mock.calls[0]?.[1]).toMatchObject({ resume: "s-old", appendSystemPrompt: PROMPT });
+    expect(sessionSpy.mock.calls[1]?.[1]).not.toHaveProperty("resume");
+    expect(sessionSpy.mock.calls[1]?.[1]).toMatchObject({ appendSystemPrompt: PROMPT });
+  });
+
+  it("still reports incompatibility when a new session is refused too", async () => {
+    const runtime = failing(new UnsupportedOptionError("model", "fixture refusal"));
+    await expect(open("flaky", runtime, "s-old")).rejects.toMatchObject({ code: "harness_incompatible" });
+    expect(runtime.session).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes Grok without an appended prompt, which it keeps from the saved session", async () => {
+    // The real Grok runtime refuses appendSystemPrompt on every resume (OAR 0.97): after any
+    // restart, every Grok agent stopped with harness_incompatible.
+    const grok = defaultRuntimes.require("grok");
+    const install = { kind: "available", via: "executable", command: "/nonexistent/grok", version: "1.0.52" } as const;
+    await expect(
+      grok.session(install, { cwd: cwd(), appendSystemPrompt: PROMPT, resume: "s-old" }),
+    ).rejects.toMatchObject({ name: "UnsupportedOptionError", option: "appendSystemPrompt" });
+
+    const delivered: string[] = [];
+    const sessionSpy = vi.fn(async (_install: unknown, options: { appendSystemPrompt?: string; resume?: string }) => {
+      if (options.resume && options.appendSystemPrompt !== undefined)
+        throw new UnsupportedOptionError(
+          "appendSystemPrompt",
+          "Grok does not reapply appendSystemPrompt alone on resume",
+        );
+      return {
+        ...fakeSession(options.resume ?? "s-new"),
+        deliver: async (text: string) => {
+          delivered.push(text);
+          return { landed: "prompted" };
+        },
+      } as unknown as Session;
+    });
+    const runtime = { ...grok, installation: async () => install, session: sessionSpy } as unknown as Runtime;
+    const session = await open("grok", runtime, "s-old");
+    expect(session).toMatchObject({ id: "s-old", resumed: true });
+    expect(sessionSpy).toHaveBeenCalledTimes(2);
+    expect(sessionSpy.mock.calls[1]?.[1]).not.toHaveProperty("appendSystemPrompt");
+    expect(sessionSpy.mock.calls[1]?.[1]).toMatchObject({ resume: "s-old", env: ENV });
+    // The saved session has its guide: it is not repeated in the message.
+    await session.deliver("hello", "i1");
+    expect(delivered).toEqual(["hello"]);
   });
 
   it("keeps an ordinary failure as itself, not mislabeled unsupported", async () => {

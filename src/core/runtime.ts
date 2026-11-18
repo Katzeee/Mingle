@@ -203,6 +203,12 @@ export class AgentRuntime {
   private actions: Action[] = [];
   /** The turn now running met a cold session: measured when it ends (docs/spec.md 12). */
   private coldTurn: { mode: "resume" | "rebuild"; tokens: number | null; idleMs: number } | undefined;
+  /**
+   * The conversation the agent had could not be resumed and a new session replaced it: the next
+   * input carries a built context (docs/spec.md 4.1), as a cold start would, so the agent picks up
+   * where it was instead of starting from nothing.
+   */
+  private replaced = false;
   /** The sign-in the open session runs on; events report under it, whatever config changes to. */
   private sessionSignIn: string;
   /** Bumped when a session is replaced or disposed: a retired session's events are dropped. */
@@ -425,7 +431,9 @@ export class AgentRuntime {
         session = await this.reopenFresh(cold.tokens);
       } else {
         session = await this.ensureSession();
+        if (this.replaced) context = this.coldContext(messageIdsInBatch);
       }
+      this.replaced = false;
     } catch (error) {
       this.coldTurn = undefined;
       this.lose(batch, error);
@@ -817,8 +825,9 @@ export class AgentRuntime {
       await session.dispose();
       throw new Error("agent runtime disposed");
     }
-    if (agent.sessionId && !session.resumed) {
-      this.deps.log?.(`${this.agentId}: session ${agent.sessionId} was gone; opened ${session.id}`);
+    if (agent.sessionId && !session.resumed && !fresh) {
+      this.replaced = true;
+      this.deps.log?.(`${this.agentId}: session ${agent.sessionId} could not be resumed; opened ${session.id}`);
     } else {
       this.deps.log?.(`${this.agentId}: session ${session.id} ${session.resumed ? "resumed" : "opened"}`);
     }

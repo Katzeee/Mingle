@@ -109,6 +109,7 @@ erDiagram
 - 应用重启后用 OAR 的 `resume` 恢复同一会话。
 - 上下文接近上限时由 harness 自身压缩；压缩前提示 Agent 更新 `MEMORY.md`。
 - 会话损坏或更换 harness 时新建会话，Agent 靠 `MEMORY.md` 和消息记录恢复。会话可丢，Agent 不丢。
+- `resume` 恢复不了原会话时（会话不存在，或 harness 拒绝恢复这一个会话，比如 Pi 的记录里有未注册的待执行工具、DSH 的会话存在别的目录）新建会话代替它，下一条输入带上和冷启动相同的构建上下文（`MEMORY.md`、最近消息和动作），而不是每条消息都重试同一次注定失败的恢复。只有新会话也打不开时才报 `harness_incompatible`，日志里写明 harness 拒绝的是哪个设置。Grok 每次 `resume` 都拒绝追加的系统提示词，但会沿用会话保存的那份：恢复时不再追加。
 
 **冷启动（借鉴 Raft 的 Constructed Initial Context，默认关闭，实测见 12.1、12.2）。** 会话长时间空闲后，harness 的提示缓存已经过期，下一轮要把整段历史重新写进缓存。会话很大时这一轮最贵。冷启动不再续用这个会话，而是新开一个，第一条输入由 Mingle 组装：
 
