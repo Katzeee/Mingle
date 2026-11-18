@@ -32,6 +32,7 @@ const TEXT = {
     seconds: (n: number) => `${n} 秒`,
     minutes: (m: number, s: number) => `${m} 分 ${s} 秒`,
     answeredBelow: "已回复，见下方消息。",
+    continuing: "还在处理，完成后另发一条消息回复。",
     unanswered: "暂未回复。",
     stopped: "已叫停。",
     paused: "已暂停，这条消息不会再回复。",
@@ -78,6 +79,7 @@ const TEXT = {
     seconds: (n: number) => `${n}s`,
     minutes: (m: number, s: number) => `${m}m ${s}s`,
     answeredBelow: "Answered below.",
+    continuing: "Still working on it. The answer will come as a new message.",
     unanswered: "No reply yet.",
     stopped: "Stopped.",
     paused: "Paused. This message won't get a reply.",
@@ -428,8 +430,24 @@ export class LiveReplies {
       if (entry.closed) return;
       entry.lastRender = this.now();
       const content = this.render(entry);
-      void entry.live.then((live) => live?.update(content)).catch(() => {});
+      void entry.live
+        .then((live) => {
+          if (entry.closed) return;
+          if (live?.until === undefined || this.now() < live.until) return live?.update(content);
+          return this.handOver(entry, live);
+        })
+        .catch(() => {});
     }, wait);
+  }
+
+  /**
+   * The platform is about to stop taking updates to the live reply: close it with a note while it
+   * still can, and let the answer go out as a message of its own.
+   */
+  private async handOver(entry: Entry, live: LiveReply): Promise<void> {
+    entry.live = Promise.resolve(undefined);
+    clearInterval(entry.tick);
+    await live.finish(`*${TEXT[entry.lang].continuing}*`);
   }
 
   /** The progress shown while the agent works. */

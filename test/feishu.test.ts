@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LarkChannelOptions, NormalizedMessage } from "@larksuiteoapi/node-sdk";
 import * as sdk from "@larksuiteoapi/node-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelEvents, ConnectionState, InboundMessage, OnboardingEvent } from "../src/channels/channel.ts";
 import {
   BOT_MESSAGES_SCOPES,
@@ -42,7 +42,12 @@ function fakeLark() {
   const handlers = new Map<string, (arg: unknown) => unknown>();
   const sent: { to: string; input: unknown; opts: unknown }[] = [];
   const reactions: string[] = [];
-  const streams: { to: string; opts: unknown; contents: string[] }[] = [];
+  /** Streaming cards, as the CardKit calls left them. */
+  const cards: { replyTo: string; contents: string[]; streaming: boolean; summary?: string; sequences: number[] }[] =
+    [];
+  /** Feishu error codes the next element content updates fail with, one per update. */
+  const failUpdates: number[] = [];
+  const cardAt = (cardId: string) => cards[Number(cardId.slice("card_".length))];
   const memberCalls: { chatId: string; pageToken: string | undefined }[] = [];
   const contactGets: string[] = [];
   let connected = false;
@@ -76,25 +81,55 @@ function fakeLark() {
     async removeReaction(_id: string, reactionId: string) {
       reactions.push(`-${reactionId}`);
     },
-    async stream(to: string, input: { markdown: (c: unknown) => Promise<void> }, opts: unknown) {
-      const record = { to, opts, contents: [] as string[] };
-      streams.push(record);
-      await input.markdown({
-        messageId: "om_card",
-        append: async () => {},
-        setContent: async (full: string) => {
-          record.contents.push(full);
-        },
-      });
-      return { messageId: "om_card" };
-    },
     async getChatInfo(chatId: string) {
       return { chatId, name: "周末徒步", chatType: "group" };
     },
     rawClient: {
+      cardkit: {
+        v1: {
+          card: {
+            async create({ data }: { data: { data: string } }) {
+              const spec = JSON.parse(data.data);
+              cards.push({ replyTo: "", contents: [spec.body.elements[0].content], streaming: true, sequences: [] });
+              return { code: 0, data: { card_id: `card_${cards.length - 1}` } };
+            },
+            async settings({
+              path,
+              data,
+            }: {
+              path: { card_id: string };
+              data: { settings: string; sequence: number };
+            }) {
+              const card = cardAt(path.card_id);
+              const { config } = JSON.parse(data.settings);
+              card?.sequences.push(data.sequence);
+              if (card) card.streaming = config.streaming_mode;
+              if (card && config.summary) card.summary = config.summary.content;
+              return { code: 0, data: {} };
+            },
+          },
+          cardElement: {
+            async content({ path, data }: { path: { card_id: string }; data: { content: string; sequence: number } }) {
+              const card = cardAt(path.card_id);
+              card?.sequences.push(data.sequence);
+              const code = failUpdates.shift() ?? (card?.streaming ? 0 : 300309);
+              // Feishu answers these with HTTP 400; the SDK's client throws with the body attached.
+              if (code)
+                throw Object.assign(new Error("Request failed with status code 400"), { response: { data: { code } } });
+              card?.contents.push(data.content);
+              return { code: 0, data: {} };
+            },
+          },
+        },
+      },
       im: {
         v1: {
           message: {
+            async reply({ path, data }: { path: { message_id: string }; data: { content: string } }) {
+              const card = cardAt(JSON.parse(data.content).data.card_id);
+              if (card) card.replyTo = path.message_id;
+              return { code: 0, data: { message_id: "om_card" } };
+            },
             async list(request: unknown) {
               listed.push(request);
               if (!history) throw Object.assign(new Error("no permission"), { code: 230027 });
@@ -155,7 +190,8 @@ function fakeLark() {
     contactGets,
     isConnected: () => connected,
     reactions,
-    streams,
+    cards,
+    failUpdates,
     emit: (name: string, arg: unknown) => handlers.get(name)?.(arg),
     failNextSend: (code: string) => {
       failNext = code;
@@ -649,13 +685,69 @@ describe("feishu reactions and live cards", () => {
     await live?.update("**正在处理** · 3 秒\n\n· 运行命令");
     const result = await live?.finish("**周六**晴");
     expect(result).toEqual({ kind: "sent", platformId: "om_card" });
-    expect(lark.streams).toHaveLength(1);
-    expect(lark.streams[0]?.opts).toEqual({ replyTo: "om_1" });
-    expect(lark.streams[0]?.contents).toEqual([
-      "**正在思考** · 0 秒",
-      "**正在处理** · 3 秒\n\n· 运行命令",
-      "<at id=ou_asker></at> **周六**晴",
-    ]);
+    expect(lark.cards).toHaveLength(1);
+    expect(lark.cards[0]).toMatchObject({
+      replyTo: "om_1",
+      contents: ["**正在思考** · 0 秒", "**正在处理** · 3 秒\n\n· 运行命令", "<at id=ou_asker></at> **周六**晴"],
+      // Closed: no typing cursor, and the chat list previews the answer.
+      streaming: false,
+      summary: "**周六**晴",
+    });
+    expect(lark.cards[0]?.sequences).toEqual([1, 2, 3]);
+    await connection.close();
+  });
+
+  const liveCard = async () => {
+    const lark = fakeLark();
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: () => {}, onState: () => {}, onMembership: () => {} },
+    );
+    const live = await connection.startLive?.({ platformId: "oc_1", kind: "dm" }, { replyTo: "om_1", initial: "…" });
+    return { lark, connection, live };
+  };
+
+  it("still writes the answer into the card after a progress update failed", async () => {
+    const { lark, connection, live } = await liveCard();
+    lark.failUpdates.push(230020);
+    await live?.update("**正在处理** · 3 秒");
+    await live?.update("**正在处理** · 4 秒");
+    expect(await live?.finish("好了")).toEqual({ kind: "sent", platformId: "om_card" });
+    expect(lark.cards[0]?.contents).toEqual(["…", "**正在处理** · 4 秒", "好了"]);
+    await connection.close();
+  });
+
+  it("turns streaming back on when Feishu closed it, and keeps it on past ten minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { lark, connection, live } = await liveCard();
+      // Feishu closed streaming on its own (the ten minutes ran out early, or a restart).
+      lark.failUpdates.push(300309);
+      await live?.update("**正在处理** · 9 分 0 秒");
+      expect(lark.cards[0]?.contents.at(-1)).toBe("**正在处理** · 9 分 0 秒");
+      // Long before Feishu's limit comes round again, the card renews streaming itself.
+      vi.setSystemTime(Date.now() + 8 * 60_000 + 1);
+      const settingsBefore = lark.cards[0]?.sequences.length ?? 0;
+      await live?.update("**正在处理** · 17 分 0 秒");
+      expect(lark.cards[0]?.sequences.length).toBe(settingsBefore + 2);
+      expect(await live?.finish("一小时后的答案")).toMatchObject({ kind: "sent" });
+      expect(lark.cards[0]?.contents.at(-1)).toBe("一小时后的答案");
+      // Every operation on the card carried a larger sequence than the one before.
+      const seq = lark.cards[0]?.sequences ?? [];
+      expect(seq).toEqual([...seq].sort((a, b) => a - b));
+      expect(new Set(seq).size).toBe(seq.length);
+      await connection.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the answer as not sent when the card refuses it, so it goes out as a message", async () => {
+    const { lark, connection, live } = await liveCard();
+    lark.failUpdates.push(200750);
+    expect(await live?.finish("好了")).toMatchObject({ kind: "failed" });
+    expect(lark.cards[0]?.contents).toEqual(["…"]);
     await connection.close();
   });
 });
@@ -806,12 +898,12 @@ describe("feishu mentions (MING-107)", () => {
 
     const live = await connection.startLive?.(chat, { replyTo: "om_1", mention: "ou_asker", initial: "…" });
     await live?.finish("@Mingle产品经理想听你一句", mentions);
-    expect(lark.streams[0]?.contents.at(-1)).toBe("<at id=ou_asker></at> <at id=ou_pm></at>想听你一句");
+    expect(lark.cards[0]?.contents.at(-1)).toBe("<at id=ou_asker></at> <at id=ou_pm></at>想听你一句");
 
     // The asker named in the answer is mentioned once, where the answer names them.
     const again = await connection.startLive?.(chat, { replyTo: "om_2", mention: "ou_asker", initial: "…" });
     await again?.finish("好的 @张三", [{ id: "ou_asker", name: "张三" }]);
-    expect(lark.streams[1]?.contents.at(-1)).toBe("好的 <at id=ou_asker></at>");
+    expect(lark.cards[1]?.contents.at(-1)).toBe("好的 <at id=ou_asker></at>");
     await connection.close();
   });
 

@@ -89,8 +89,14 @@ const CAPABILITIES: Capabilities = {
   maxTextLength: 8000,
 };
 
-/** Streaming cards stop taking updates after about ten minutes; stay under it. */
-const STREAM_LIMIT_MS = 9 * 60_000;
+/**
+ * Feishu turns a card's streaming mode off ten minutes after it was last turned on (error 300309
+ * or 200850 after that). A reply open longer turns it on again before then, and once more if an
+ * update finds it closed. The card itself stays editable for 14 days.
+ */
+const STREAM_RENEW_MS = 8 * 60_000;
+const STREAM_CLOSED = new Set([300309, 200850]);
+const CARD_ELEMENT = "stream_md";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
@@ -141,7 +147,6 @@ export type LarkChannelLike = Pick<
   | "disconnect"
   | "on"
   | "send"
-  | "stream"
   | "addReaction"
   | "removeReaction"
   | "getChatInfo"
@@ -499,54 +504,27 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           if (id && state === "processing") reactions.set(platformMessageId, id);
         },
 
-        async startLive(chat: ChatRef, options: LiveOptions): Promise<LiveReply> {
+        async startLive(_chat: ChatRef, options: LiveOptions): Promise<LiveReply> {
           if (!channel) throw new Error("the Feishu connection is not ready");
-          const startedAt = Date.now();
-          let controller: lark.MarkdownStreamController | undefined;
-          let release: () => void = () => {};
-          const released = new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          const ready = Promise.withResolvers<void>();
-          // The SDK keeps a streaming card open while the producer runs; ours runs until finish().
-          const stream = channel
-            .stream(
-              chat.platformId,
-              {
-                markdown: async (c) => {
-                  controller = c;
-                  await c.setContent(options.initial);
-                  ready.resolve();
-                  await released;
-                },
-              },
-              { replyTo: options.replyTo },
-            )
-            .catch((error) => {
-              ready.reject(error);
-              throw error;
-            });
-          await ready.promise;
+          const card = await openCard(channel.rawClient, options.replyTo, options.initial);
           const mention = options.mention ? `<at id=${options.mention}></at> ` : "";
           return {
             update: async (markdown) => {
-              await controller?.setContent(markdown).catch(() => {});
+              await card.push(markdown).catch(() => {});
             },
             finish: async (markdown, mentions) => {
-              // Feishu stops accepting updates to a streaming card after about ten minutes.
-              if (Date.now() - startedAt > STREAM_LIMIT_MS) {
-                release();
-                await stream.catch(() => {});
-                return { kind: "failed", code: "unknown", retryable: false };
-              }
               // The asker is mentioned up front, unless the answer already names them.
               const lead = mentions?.some((m) => m.id === options.mention) ? "" : mention;
-              await controller?.setContent(
-                `${lead}${renderMentions(markdown, mentions, (m) => `<at id=${m.id}></at>`)}`,
-              );
-              release();
-              const result = await stream;
-              return { kind: "sent", platformId: result.messageId };
+              const text = `${lead}${renderMentions(markdown, mentions, (m) => `<at id=${m.id}></at>`)}`;
+              try {
+                await card.push(text);
+              } catch {
+                // The outbox then sends the answer as a message of its own.
+                await card.close().catch(() => {});
+                return { kind: "failed", code: "unknown", retryable: false };
+              }
+              await card.close(text).catch(() => {});
+              return { kind: "sent", platformId: card.messageId };
             },
           };
         },
@@ -708,6 +686,114 @@ export function toInbound(
 /** `@name` as a post's `md` element writes a mention. */
 function postMentions(markdown: string, mentions: readonly Mention[] | undefined): string {
   return renderMentions(markdown, mentions, (m) => `<at user_id="${m.id}">${m.name}</at>`);
+}
+
+type LarkClient = LarkChannelLike["rawClient"];
+
+/**
+ * A streaming card (CardKit) replying to a message: one markdown element whose content is
+ * replaced on each push, in order. Unlike the SDK's `stream()`, a failed push does not end the
+ * card: progress is best effort, the answer is what must land, and its push reports failure so
+ * the caller can send it another way. Streaming mode is kept on past Feishu's ten minutes.
+ */
+async function openCard(client: LarkClient, replyTo: string, initial: string) {
+  const created = await client.cardkit.v1.card.create({
+    data: {
+      type: "card_json",
+      data: JSON.stringify({
+        schema: "2.0",
+        config: {
+          streaming_mode: true,
+          summary: { content: "..." },
+          streaming_config: {
+            print_frequency_ms: { default: 70 },
+            print_step: { default: 1 },
+            print_strategy: "fast",
+          },
+        },
+        body: { elements: [{ tag: "markdown", element_id: CARD_ELEMENT, content: initial }] },
+      }),
+    },
+  });
+  const cardId = ok(created).data?.card_id;
+  if (!cardId) throw new Error("Feishu created no card");
+  const sent = await client.im.v1.message.reply({
+    path: { message_id: replyTo },
+    data: { msg_type: "interactive", content: JSON.stringify({ type: "card", data: { card_id: cardId } }) },
+  });
+  const messageId = ok(sent).data?.message_id ?? "";
+  // One sequence per card for every operation on it; Feishu rejects one that does not grow.
+  let sequence = 0;
+  let streamingSince = Date.now();
+  let queue: Promise<unknown> = Promise.resolve();
+  const serial = <T>(work: () => Promise<T>): Promise<T> => {
+    const run = queue.then(work, work);
+    queue = run.catch(() => {});
+    return run;
+  };
+  const settings = async (config: Record<string, unknown>) => {
+    const seq = ++sequence;
+    ok(
+      await client.cardkit.v1.card.settings({
+        path: { card_id: cardId },
+        data: { settings: JSON.stringify({ config }), sequence: seq, uuid: `s_${cardId}_${seq}` },
+      }),
+    );
+  };
+  const reopen = async () => {
+    await settings({ streaming_mode: true });
+    streamingSince = Date.now();
+  };
+  const write = async (content: string) => {
+    const seq = ++sequence;
+    ok(
+      await client.cardkit.v1.cardElement.content({
+        path: { card_id: cardId, element_id: CARD_ELEMENT },
+        data: { content, sequence: seq, uuid: `c_${cardId}_${seq}` },
+      }),
+    );
+  };
+  return {
+    messageId,
+    push: (content: string) =>
+      serial(async () => {
+        if (Date.now() - streamingSince > STREAM_RENEW_MS) await reopen().catch(() => {});
+        try {
+          await write(content);
+        } catch (error) {
+          if (!STREAM_CLOSED.has(feishuCode(error) ?? 0)) throw error;
+          await reopen();
+          await write(content);
+        }
+      }),
+    /** Ends streaming (no more typing cursor) and sets the chat-list preview. */
+    close: (content?: string) =>
+      serial(() => {
+        if (content === undefined) return settings({ streaming_mode: false });
+        const flat = content
+          .replace(/<at id=[^>]*><\/at>/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        return settings({
+          streaming_mode: false,
+          summary: { content: flat.length > 50 ? `${flat.slice(0, 49)}…` : flat },
+        });
+      }),
+  };
+}
+
+/** A raw client response: a non-zero Feishu code is an error. */
+function ok<T extends { code?: number | undefined; msg?: string | undefined }>(response: T): T {
+  if (response.code)
+    throw Object.assign(new Error(response.msg ?? `Feishu error ${response.code}`), { code: response.code });
+  return response;
+}
+
+/** The Feishu error code of a raw client failure: on the error, or in the HTTP response body. */
+function feishuCode(error: unknown): number | undefined {
+  const e = error as { code?: unknown; response?: { data?: { code?: unknown } } };
+  const code = typeof e?.code === "number" ? e.code : e?.response?.data?.code;
+  return typeof code === "number" ? code : undefined;
 }
 
 function sendFailure(error: unknown): SendResult {

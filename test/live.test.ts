@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelConnection } from "../src/channels/channel.ts";
 import { failureText, LiveReplies, stepKind } from "../src/core/live.ts";
 import { type Failure, type Harness, HarnessError } from "../src/harness/harness.ts";
 import { type InboundState, Store } from "../src/store/store.ts";
@@ -503,5 +504,57 @@ describe("ignoring messages", () => {
     expect(anonymous.status).toBe(401);
     expect(store.message(receivedId)?.state).toBe("received");
     expect(store.message(foreignId)?.state).toBe("failed");
+  });
+});
+
+describe("live replies the platform stops taking", () => {
+  it("closes the reply with a note before its window ends, and lets the answer go out on its own", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 0;
+      const frames: string[] = [];
+      const connection = {
+        react: async () => {},
+        startLive: async (_chat: unknown, options: { initial: string }) => {
+          frames.push(options.initial);
+          return {
+            until: 60_000,
+            update: async (markdown: string) => void frames.push(markdown),
+            finish: async (markdown: string) => {
+              frames.push(markdown);
+              return { kind: "sent" as const, platformId: "live" };
+            },
+          };
+        },
+      } as unknown as ChannelConnection;
+      const replies = new LiveReplies(
+        () => {},
+        () => now,
+      );
+      replies.open({
+        messageId: "m1",
+        agentId: "a1",
+        platform: "wecom",
+        chat: { platformId: "zhangsan", kind: "dm" },
+        platformMessageId: "msg1",
+        senderId: "zhangsan",
+        connection,
+      });
+      now = 10_000;
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(frames.at(-1)).toBe("**正在思考** · 10 秒");
+      now = 61_000;
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(frames.at(-1)).toBe("*还在处理，完成后另发一条消息回复。*");
+      const count = frames.length;
+      replies.activity("a1", "tool", "Bash");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(frames).toHaveLength(count);
+      // The answer is not written into the closed reply: the outbox sends it as a message.
+      expect(await replies.answer("m1", "答案")).toBeUndefined();
+      expect(frames).toHaveLength(count);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
