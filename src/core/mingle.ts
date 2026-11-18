@@ -1036,7 +1036,32 @@ export class Mingle {
       : chinese
         ? `你好，我是 ${agent.name}。直接在这里给我发消息，或者把我拉进群里 @ 我。`
         : `Hi, I'm ${agent.name}. Message me here, or add me to a group and @ me.`;
-    await live.messageUser(ownerId, text).catch((error) => this.log(`greeting failed: ${(error as Error).message}`));
+    await this.messageOwner(connectionId, ownerId, text).catch((error) =>
+      this.log(`greeting failed: ${(error as Error).message}`),
+    );
+  }
+
+  /**
+   * A line of Mingle's own to the bot's owner: in their direct chat with the bot when there is one,
+   * else by opening it. Kept with the chat as a notice, so the console shows what the owner got.
+   */
+  private async messageOwner(connectionId: string, ownerId: string, text: string): Promise<void> {
+    const known = this.store.directChatWith(connectionId, ownerId) ?? this.store.directChat(connectionId, ownerId);
+    if (known) return this.note(connectionId, known, text);
+    const live = this.live.get(connectionId);
+    if (!live?.messageUser) return;
+    const sent = await live.messageUser(ownerId, text);
+    if (!sent) return; // The platform did not say where it went: nothing to keep it with.
+    const owner = this.store.contactByPlatformId(connectionId, ownerId);
+    const chat = this.store.upsertChat({
+      connectionId,
+      platformId: sent.chat,
+      kind: "dm",
+      ...(owner?.name ? { name: owner.name } : {}),
+      peerId: ownerId,
+    });
+    const record = this.store.insertOutbound({ chatId: chat.id, body: text, replyTo: null, notice: true });
+    this.store.setOutboundResult(record.id, "sent", sent.platformId ?? null);
   }
 
   /**
@@ -1459,7 +1484,7 @@ export class Mingle {
     // What the new owner wrote before claiming waited as a stranger's; it goes through now.
     this.admit(connection.agentId, this.heldIn(connection.agentId, { contact }));
     const name = this.store.agent(connection.agentId)?.name ?? "";
-    this.note(connection.id, chat, accessText(connection.platform).claimed(name), inbound.platformId);
+    this.note(connection.id, chat, accessText(connection.platform).claimed(name), message?.id);
     return true;
   }
 
@@ -1475,7 +1500,7 @@ export class Mingle {
       `${connection.platform}: holding a message from ${group ? `group ${group.id}` : `contact ${contact.id}`} for the owner`,
     );
     const text = accessText(connection.platform);
-    this.note(connection.id, chat, text.askNote, message.platformId ?? undefined);
+    this.note(connection.id, chat, text.askNote, message.id);
     const ownerId = connection.ownerId;
     if (!ownerId) return;
     const note = text.askOwner({
@@ -1484,29 +1509,22 @@ export class Mingle {
       group: group ? (group.name ?? "") : null,
       body: message.body,
     });
-    const ownerChat = this.store.directChatWith(connection.id, ownerId);
-    if (ownerChat) this.note(connection.id, ownerChat, note);
-    else
-      void this.live
-        .get(connection.id)
-        ?.messageUser?.(ownerId, note)
-        .catch((error) => this.log(`owner notice failed: ${(error as Error).message}`));
+    void this.messageOwner(connection.id, ownerId, note).catch((error) =>
+      this.log(`owner notice failed: ${(error as Error).message}`),
+    );
   }
 
   /**
-   * A line of Mingle's own in a chat, like the greeting a new bot sends its owner: not something
-   * the agent said, so it is not recorded as the agent's message, answers nothing, and does not
-   * count as the agent's first reply. Best effort.
+   * A line of Mingle's own in a chat, like the greeting a new bot sends its owner. Kept with the chat
+   * as a notice, so the console shows it, but not the agent's message: it answers nothing and does
+   * not count as the agent's first reply (docs/spec.md 4.7). `replyTo` is the Mingle message it
+   * quotes. Best effort.
    */
   private note(connectionId: string, chat: Chat, text: string, replyTo?: string): void {
-    const live = this.live.get(connectionId);
-    if (!live) return;
-    const ref: ChatRef = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
-    void live
-      .send({ chat: ref, text, ...(replyTo ? { replyTo } : {}) })
-      .then((result) => {
-        if (result.kind === "failed") this.log(`note to ${chat.id} failed: ${result.code}`);
-      })
+    const agentId = this.store.connection(connectionId)?.agentId;
+    if (!agentId || !this.live.has(connectionId)) return;
+    void this.outbox
+      .send(agentId, { chatId: chat.id, text, notice: true, ...(replyTo ? { replyTo } : {}) })
       .catch((error) => this.log(`note to ${chat.id} failed: ${(error as Error).message}`));
   }
 

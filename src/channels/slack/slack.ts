@@ -434,7 +434,8 @@ export function slackChannel(options: SlackOptions = {}): Channel {
 
         async messageUser(userId: string, text: string) {
           const { channel } = await call<{ channel: { id: string } }>("conversations.open", { users: userId });
-          await call("chat.postMessage", { channel: channel.id, ...content(text) });
+          const sent = await call<{ ts: string }>("chat.postMessage", { channel: channel.id, ...content(text) });
+          return { chat: channel.id, platformId: sent.ts };
         },
 
         async listMembers() {

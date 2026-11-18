@@ -667,7 +667,7 @@ export class AgentRuntime {
     // A reply shows what it answers: "已授权" alone does not say to what (MING-103).
     const parent = message.replyTo ? store.message(message.replyTo) : undefined;
     const quoted = parent && {
-      from: parent.direction === "out" ? "you" : (parent.senderName ?? "someone"),
+      from: parent.direction === "out" ? (parent.notice ? "Mingle" : "you") : (parent.senderName ?? "someone"),
       body: parent.body,
     };
     const rendered = renderMessage(store, message, { unseen, ...(quoted ? { quoted } : {}) });

@@ -357,8 +357,12 @@ export interface ChannelConnection {
   setTyping(chat: ChatRef, typing: boolean): Promise<void>;
 
   download(attachment: InboundAttachment, toPath: string): Promise<void>;
-  /** Open a direct conversation with a user by sending the first message. Where the platform allows it. */
-  messageUser?(userId: string, text: string): Promise<void>;
+  /**
+   * Open a direct conversation with a user by sending the first message. Where the platform allows it.
+   * Reports the direct chat's ID, as its incoming messages name it, and the sent message's ID, so
+   * Mingle can keep the line with the chat; `undefined` when the platform does not say.
+   */
+  messageUser?(userId: string, text: string): Promise<{ chat: string; platformId?: string } | undefined>;
   /**
    * The ID to send to for a direct chat with this user, when they have not messaged the bot yet
    * (docs/spec.md 5.3). Absent where the platform lets a bot write only to people who wrote first;

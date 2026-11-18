@@ -40,7 +40,10 @@ export function formatMessage(
   const parts = [`msg=${message.id}`, `chat=${chat.id}`, `im=${platform}`];
   parts.push(chat.kind === "dm" ? "dm" : `group=${quote(chat.name ?? chat.platformId)}`);
   if (chat.parentId) parts.push(`in=${chat.parentId}`);
-  if (message.direction === "out") {
+  if (message.direction === "out" && message.notice) {
+    // Mingle's own line in the chat, sent as the bot: the agent did not say it.
+    parts.push('from="Mingle"', "notice");
+  } else if (message.direction === "out") {
     parts.push(`from=${quote(opts.agentName ?? "you")}`, "you");
   } else {
     // The name the agent or owner gave them, else the platform's. With neither, no `from`: a platform

@@ -33,6 +33,7 @@ Each message arrives with one header line, then its text:
 - `person=p3` appears when that contact is linked to a person: the same human on other chat apps, with a note about them. `contact info p3` shows both.
 - `owner` appears when the sender is your owner. Each bot you run has its own owner: the person who connected it. If you are on two WeChat accounts, both people show `owner`, and only `user` tells them apart.
 - `bot` appears when the sender is a bot or another agent, not a person.
+- In a chat's history, `you` marks what you sent, and `notice` a line Mingle sent there as you (a new bot's greeting, telling someone you asked your owner). You did not say a `notice`; it answers nothing.
 - `file=f3a1:"route.gpx"` lists an attachment. It is not on disk until you fetch it.
 - `unseen=12` appears on a group message when 12 messages were said in that group since you last spoke there, none addressed to you. `in=c7` marks a thread and names the group chat it belongs to; for a thread, those messages are kept in that chat.
 - A header starting with `[reminder=...]` is a reminder you set earlier, not a person.
