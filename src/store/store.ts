@@ -614,6 +614,23 @@ export class Store {
     return rows.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform, owner: r.is_owner === 1 }));
   }
 
+  /**
+   * Whom the agent can @-mention in a chat: everyone on that bot, with whether they spoke in the
+   * chat (or the group a thread belongs to), which settles two people with the same name.
+   */
+  mentionCandidates(chat: Chat): (Contact & { spoke: boolean })[] {
+    const rows = this.db
+      .prepare(
+        `SELECT k.*, p.name AS person_name,
+                EXISTS (SELECT 1 FROM messages m
+                        WHERE m.chat_id IN (?, ?) AND m.direction = 'in' AND m.sender_id = k.platform_id) AS spoke
+         FROM contacts k LEFT JOIN people p ON p.id = k.person_id
+         WHERE k.connection_id = ?`,
+      )
+      .all(chat.id, chat.parentId ?? chat.id, chat.connectionId) as Row[];
+    return rows.map((r) => ({ ...toContact(r), spoke: r.spoke === 1 }));
+  }
+
   /** This agent's contacts who have written to one of its bots: who the owner has seen talk to it. */
   contactsWhoWrote(agentId: string): Set<string> {
     const rows = this.db

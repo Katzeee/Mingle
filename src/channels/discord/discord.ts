@@ -20,6 +20,7 @@ import type {
   ReactionState,
   SendResult,
 } from "../channel.ts";
+import { type Mention, renderMentions } from "../mention.ts";
 
 /**
  * Discord through the Gateway: the bot opens a WebSocket to Discord, so no public address
@@ -56,6 +57,7 @@ const CAPABILITIES: Capabilities = {
   fileUpload: true,
   fileDownload: true,
   listMembers: false,
+  mentions: true,
   // A message holds 2,000 characters; leave room for what the adapter adds.
   maxTextLength: 1_900,
 };
@@ -508,7 +510,8 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
 
         async send(message: OutboundMessage): Promise<SendResult> {
           try {
-            const sent = await post(message.chat, message.text.trim(), message.replyTo, [...(message.files ?? [])]);
+            const text = discordMentions(message.text.trim(), message.mentions);
+            const sent = await post(message.chat, text, message.replyTo, [...(message.files ?? [])]);
             if (!sent.id) return { kind: "failed", code: "too_large", retryable: false };
             return {
               kind: "sent",
@@ -536,9 +539,9 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
               last = markdown;
               await edit(chat, id, markdown).catch(() => {});
             },
-            finish: async (markdown) => {
+            finish: async (markdown, mentions) => {
               try {
-                await edit(chat, id, markdown);
+                await edit(chat, id, discordMentions(markdown, mentions));
                 return { kind: "sent", platformId: id };
               } catch (error) {
                 return sendFailure(error);
@@ -604,9 +607,13 @@ export function toInbound(message: DiscordMessage, botId: string, chat: ChatRef)
   const repliedToMe = message.referenced_message?.author?.id === botId;
 
   let text = message.content.replace(new RegExp(`<@!?${botId}>`, "g"), "");
+  const others: { id: string; name: string; isBot: boolean }[] = [];
   for (const u of message.mentions ?? []) {
     if (u.id === botId) continue;
-    text = text.replace(new RegExp(`<@!?${u.id}>`, "g"), `@${displayName(u, u.member)}`);
+    const typedHere = new RegExp(`<@!?${u.id}>`, "g");
+    // Typed, not the ping a reply adds.
+    if (typedHere.test(text)) others.push({ id: u.id, name: displayName(u, u.member), isBot: Boolean(u.bot) });
+    text = text.replace(typedHere, `@${displayName(u, u.member)}`);
   }
   text = text.replace(/[ \t]{2,}/g, " ").trim();
 
@@ -630,8 +637,13 @@ export function toInbound(message: DiscordMessage, botId: string, chat: ChatRef)
     ...(message.message_reference?.message_id ? { replyTo: message.message_reference.message_id } : {}),
     addressedToBot: chat.kind === "dm" || mentioned || repliedToMe,
     mentioned: typed,
+    ...(others.length ? { mentions: others } : {}),
     sentAt: Date.parse(message.timestamp) || Date.now(),
   };
+}
+
+function discordMentions(markdown: string, mentions: readonly Mention[] | undefined): string {
+  return renderMentions(markdown, mentions, (m) => `<@${m.id}>`);
 }
 
 function sendFailure(error: unknown): SendResult {

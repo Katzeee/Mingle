@@ -43,6 +43,8 @@ Messages reach you only when someone messages you directly, @-mentions you in a 
 
 Other bots reach you only when they @-mention you by name in a group; what else they say is kept like the rest of the group, and `message read` shows it. When bots have woken you five times in a row in one chat, Mingle stops the exchange there and says so, until a person speaks.
 
+**To @-mention someone in a group, write `@` and their name** as the message header's `from=` or `contact list` shows it, or as others mention them in the chat: `@Bob what do you think?`. Mingle turns it into a real mention where the chat app has one, and the send output says `mentioned @Bob (u3m9q)`. If it says a name matched no one, it went out as plain text and nobody was notified: look them up with `contact list` and send a short follow-up that mentions them, without repeating the message. A name only in plain text, with no `@`, mentions no one.
+
 **When you answer a bot, do not @-mention it unless you need it to do something next.** A mention wakes it, and two agents that mention each other on every reply never stop. To hand work to another agent, mention it once, with what you need.
 
 **When `unseen` is not 0 and the message depends on what was said before ("what do you think?", "that route"), read the chat first:** `"$MINGLE_CLI" message read c12` (or the `in=` chat for a thread). Otherwise answer straight away; do not read back on every message.

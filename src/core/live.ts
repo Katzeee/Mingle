@@ -2,6 +2,7 @@ import type {
   ChannelConnection,
   ChatRef,
   LiveReply,
+  Mention,
   Platform,
   ReactionState,
   SendResult,
@@ -338,7 +339,7 @@ export class LiveReplies {
    * The agent answered this message. If a live reply is open, the answer goes into it
    * and its result is returned; otherwise undefined, and the caller sends normally.
    */
-  async answer(messageId: string, markdown: string): Promise<SendResult | undefined> {
+  async answer(messageId: string, markdown: string, mentions?: readonly Mention[]): Promise<SendResult | undefined> {
     const entry = this.entries.get(messageId);
     if (!entry || entry.closed) return undefined;
     this.close(entry, messageId);
@@ -346,7 +347,7 @@ export class LiveReplies {
     const live = await entry.live;
     if (!live) return undefined;
     try {
-      const result = await live.finish(markdown);
+      const result = await live.finish(markdown, mentions?.length ? mentions : undefined);
       return result.kind === "sent" ? result : undefined;
     } catch (error) {
       this.log(`live reply could not finish: ${(error as Error).message}`);

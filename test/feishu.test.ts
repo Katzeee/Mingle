@@ -784,3 +784,49 @@ describe("QR onboarding through the console API", () => {
     expect(mingle.store.connections(agentId).filter((n) => n.platform === "feishu")).toHaveLength(1);
   });
 });
+
+describe("feishu mentions (MING-107)", () => {
+  const connect = async () => {
+    const lark = fakeLark();
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: () => {}, onState: () => {}, onMembership: () => {} },
+    );
+    return { lark, connection };
+  };
+
+  it("writes @name as a real mention in a post and in a live reply", async () => {
+    const { lark, connection } = await connect();
+    expect(connection.capabilities().mentions).toBe(true);
+    const chat = { platformId: "oc_1", kind: "group" as const };
+    const mentions = [{ id: "ou_pm", name: "Mingle产品经理" }];
+    await connection.send({ chat, text: "@Mingle产品经理 想听你一句", mentions });
+    expect(lark.sent[0]?.input).toEqual({ markdown: '<at user_id="ou_pm">Mingle产品经理</at> 想听你一句' });
+
+    const live = await connection.startLive?.(chat, { replyTo: "om_1", mention: "ou_asker", initial: "…" });
+    await live?.finish("@Mingle产品经理想听你一句", mentions);
+    expect(lark.streams[0]?.contents.at(-1)).toBe("<at id=ou_asker></at> <at id=ou_pm></at>想听你一句");
+
+    // The asker named in the answer is mentioned once, where the answer names them.
+    const again = await connection.startLive?.(chat, { replyTo: "om_2", mention: "ou_asker", initial: "…" });
+    await again?.finish("好的 @张三", [{ id: "ou_asker", name: "张三" }]);
+    expect(lark.streams[1]?.contents.at(-1)).toBe("好的 <at id=ou_asker></at>");
+    await connection.close();
+  });
+
+  it("reports the others a message mentions, so the agent can mention them back", () => {
+    const inbound = toInbound(
+      message({
+        content: "@Bryce小跟班 你们聊几句",
+        mentions: [
+          { key: "@_user_1", openId: "ou_bot", name: "Alex", isBot: true },
+          { key: "@_user_2", openId: "ou_other", name: "Bryce小跟班", isBot: false },
+        ],
+      }),
+      bot,
+      "群",
+    );
+    expect(inbound?.mentions).toEqual([{ id: "ou_other", name: "Bryce小跟班", isBot: false }]);
+  });
+});
