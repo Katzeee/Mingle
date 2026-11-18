@@ -250,6 +250,25 @@ try {
     now - 21 * 3_600_000,
     now - 7 * 86_400_000,
   );
+  // Reminders that fire on change: the command under the times; one that keeps failing says so.
+  insert(
+    "INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, last_fired_at, created_at, check_command, check_once, check_output, last_checked_at) VALUES ('r3', ?, 'CI on PR 141 finished: tell the group how it went and link the failing job if any', 'every:2m', 'Asia/Shanghai', ?, ?, ?, ?, 1, 'pending', ?)",
+    alex.id,
+    now + 120_000,
+    now - 2 * 3_600_000,
+    now - 3 * 3_600_000,
+    "gh pr checks 141 -R earayu/Mingle --json bucket -q 'map(.bucket) | unique | join(\",\")'",
+    now,
+  );
+  insert(
+    "INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, created_at, check_command, check_failures, check_error, last_checked_at) VALUES ('r4', ?, '香山公园官网的开放时间变了就告诉群里', 'every:1h', 'Asia/Shanghai', ?, ?, ?, 4, ?, ?)",
+    alex.id,
+    now + 3_600_000,
+    now - 86_400_000,
+    "curl -fsSL https://www.xiangshanpark.com.cn/notice | shasum",
+    "exited with 6: curl: (6) Could not resolve host: www.xiangshanpark.com.cn",
+    now,
+  );
   insert(
     "UPDATE agents SET status = 'working', status_detail = 'Bash: curl -s https://api.weather.example/forecast?lat=39.99&lon=116.19' WHERE id = ?",
     alex.id,

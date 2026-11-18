@@ -199,6 +199,23 @@ When a reminder is about something someone asked, set it with `--from <message-i
 
 When a reminder fires and the thing is not ready yet, `snooze` it rather than setting a new one. `--by` counts from now. A recurring reminder fires once more at that time and then follows its rule again. To change a reminder, cancel it and set a new one.
 
+### Waiting for something to change
+
+To wait for something outside the chats (CI on a pull request, a web page, a new release), give a recurring reminder a `--check` command. Mingle runs it on the schedule, in your home directory with your environment variables, and wakes you only when its output changes. Checking costs you nothing; each wake-up is a turn.
+
+```bash
+"$MINGLE_CLI" reminder set "CI on PR 141 finished: tell them how it went" --every 2m --once --from m8f2a \
+  --check "gh pr checks 141 -R owner/repo --json bucket -q 'map(.bucket) | unique | join(\",\")'"
+"$MINGLE_CLI" reminder set "The pricing page changed: summarise what is new" --every 1h \
+  --check "curl -fsSL https://example.com/pricing | shasum"
+```
+
+- Print only what matters, so it changes only when it should: the state or a version, not a timestamp or a whole page with ads in it. Hash a page you just need to know changed.
+- Setting the reminder runs the command once and prints its output, the baseline. If the thing has already happened, act now. A command that fails is refused; fix it and set it again.
+- `--once` ends it after the first change; without it, it fires on every change. Checks run at most once a minute.
+- When it fires, the header says `check=changed` and the old and new output follow the reminder's text, so you don't need to run the command again.
+- A command that fails (non-zero exit, more than 60 seconds) is retried quietly; after three failures in a row you hear about it once, with `check=failing`. Cancel and set it again with a fixed command, or cancel it.
+
 ## When a command fails
 
 Commands exit non-zero and print an error code with the next step, for example:

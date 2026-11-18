@@ -184,6 +184,24 @@ export interface Reminder {
   nextFireAt: number | null;
   lastFiredAt: number | null;
   createdAt: number;
+  /** A shell command Mingle runs on the rule; the reminder fires only when its output changes. */
+  check: ReminderCheck | null;
+}
+
+/** The check of a reminder that fires on change (docs/spec.md 4.6). */
+export interface ReminderCheck {
+  command: string;
+  /** Ends after the first change. */
+  once: boolean;
+  /** SHA-256 of the trimmed output it compares against. */
+  hash: string | null;
+  /** The start of that output, for the agent and the console. */
+  output: string | null;
+  /** Failed runs in a row; 0 after a run that worked. */
+  failures: number;
+  /** Why the last run failed, while it keeps failing. */
+  error: string | null;
+  lastCheckedAt: number | null;
 }
 
 type Row = Record<string, SQLInputValue>;
@@ -1401,13 +1419,19 @@ export class Store {
   // --------------------------------------------------------------- reminders
 
   createReminder(
-    input: Omit<Reminder, "id" | "createdAt" | "lastFiredAt" | "sourceMessageId"> & { sourceMessageId?: string | null },
+    input: Omit<Reminder, "id" | "createdAt" | "lastFiredAt" | "sourceMessageId" | "check"> & {
+      sourceMessageId?: string | null;
+      /** A reminder that fires on change, with the output of its first run as the baseline. */
+      check?: { command: string; once: boolean; hash: string; output: string } | null;
+    },
   ): Reminder {
     const id = this.mint("reminders", "r", 3);
+    const check = input.check ?? null;
     this.db
       .prepare(
-        `INSERT INTO reminders (id, agent_id, body, rule, timezone, chat_id, source_message_id, next_fire_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO reminders (id, agent_id, body, rule, timezone, chat_id, source_message_id, next_fire_at, created_at,
+           check_command, check_once, check_hash, check_output, last_checked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1419,6 +1443,11 @@ export class Store {
         input.sourceMessageId ?? null,
         input.nextFireAt,
         this.now(),
+        check?.command ?? null,
+        check?.once ? 1 : 0,
+        check?.hash ?? null,
+        check?.output ?? null,
+        check ? this.now() : null,
       );
     return this.reminder(input.agentId, id) as Reminder;
   }
@@ -1452,6 +1481,42 @@ export class Store {
   /** A reminder fired at `at`; `next` is when it fires again, null for a one-off. */
   markReminderFired(id: string, at: number, next: number | null): void {
     this.db.prepare("UPDATE reminders SET next_fire_at = ?, last_fired_at = ? WHERE id = ?").run(next, at, id);
+  }
+
+  /** A check came due: it runs now and comes due again at `next`. Not a fire: the agent heard nothing. */
+  markReminderDue(id: string, next: number | null): void {
+    this.db.prepare("UPDATE reminders SET next_fire_at = ? WHERE id = ?").run(next, id);
+  }
+
+  /**
+   * A check ran and worked. When its output changed, the new output becomes the baseline and the
+   * reminder fired at `at`; a `once` check then ends.
+   */
+  recordCheck(id: string, at: number, result: { hash: string; output: string; fired: boolean; ended: boolean }): void {
+    if (result.fired) {
+      this.db
+        .prepare(
+          `UPDATE reminders SET check_hash = ?, check_output = ?, check_failures = 0, check_error = NULL,
+             last_checked_at = ?, last_fired_at = ?, next_fire_at = CASE WHEN ? THEN NULL ELSE next_fire_at END
+           WHERE id = ?`,
+        )
+        .run(result.hash, result.output, at, at, result.ended ? 1 : 0, id);
+    } else {
+      this.db
+        .prepare("UPDATE reminders SET check_failures = 0, check_error = NULL, last_checked_at = ? WHERE id = ?")
+        .run(at, id);
+    }
+  }
+
+  /** A check failed; returns how many times in a row it has now. */
+  recordCheckFailure(id: string, at: number, error: string): number {
+    this.db
+      .prepare(
+        "UPDATE reminders SET check_failures = check_failures + 1, check_error = ?, last_checked_at = ? WHERE id = ?",
+      )
+      .run(error, at, id);
+    const row = this.db.prepare("SELECT check_failures FROM reminders WHERE id = ?").get(id) as Row | undefined;
+    return row ? Number(row.check_failures) : 0;
   }
 
   /** Move the next fire. A recurring reminder goes back to its rule after that one. */
@@ -1663,6 +1728,19 @@ function toReminder(r: Row): Reminder {
     nextFireAt: r.next_fire_at === null ? null : Number(r.next_fire_at),
     lastFiredAt: r.last_fired_at === null || r.last_fired_at === undefined ? null : Number(r.last_fired_at),
     createdAt: Number(r.created_at),
+    check:
+      typeof r.check_command === "string"
+        ? {
+            command: r.check_command,
+            once: Number(r.check_once) === 1,
+            hash: str(r.check_hash),
+            output: str(r.check_output),
+            failures: Number(r.check_failures ?? 0),
+            error: str(r.check_error),
+            lastCheckedAt:
+              r.last_checked_at === null || r.last_checked_at === undefined ? null : Number(r.last_checked_at),
+          }
+        : null,
   };
 }
 
