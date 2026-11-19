@@ -28,6 +28,11 @@ export interface LineDeps {
   readonly agentEnv: (agentId: string) => Promise<Record<string, string>> | undefined;
   /** Told with the agent's next input: no turn of its own (like the owner's notes). */
   readonly note: (agentId: string, body: string) => void;
+  /**
+   * Follow-ups handed to the line and not answered yet. Kept in the store, so what was handed over
+   * before a restart (or while the line waited for a free slot) still reaches it.
+   */
+  readonly unanswered: (task: Task) => { id: string; input: string }[];
   readonly paused: (agentId: string) => boolean;
   readonly log?: (line: string) => void;
 }
@@ -42,6 +47,13 @@ interface Line {
    * never acted on; if it is still unanswered when the turn ends, it goes in again as the next.
    */
   steered: Map<string, string>;
+  /** Messages already in `pending`, so a recovered follow-up is not handed over twice. */
+  pendingIds: Set<string>;
+  /**
+   * Not run since Mingle (re)started or the agent came back: its next turn picks up the follow-ups
+   * the store says are still unanswered, which the memory of the previous run took with it.
+   */
+  recovering: boolean;
   session?: HarnessSession | undefined;
   /** A turn is under way, or its session is opening. */
   active: boolean;
@@ -84,8 +96,18 @@ export class Lines {
     const line = this.line(task);
     if (line.active && line.session) {
       if (messageId) line.steered.set(messageId, input);
-      void line.session.deliver(input, randomUUID()).catch(() => line.pending.push(input));
+      const session = line.session;
+      // Refused (the turn just ended, say): it waits for the line's next turn instead.
+      const later = () => {
+        if (line.session === session && line.active) return void line.pending.push(input);
+        this.wake(taskId, input, messageId);
+      };
+      void session.deliver(input, randomUUID()).then((r) => r.outcome === "rejected" && later(), later);
       return;
+    }
+    if (messageId) {
+      if (line.pendingIds.has(messageId)) return;
+      line.pendingIds.add(messageId);
     }
     line.pending.push(input);
     if (task.lineState !== "running") this.deps.store.updateLine(task.id, { lineState: "queued" });
@@ -117,6 +139,7 @@ export class Lines {
       if (!line.active) continue;
       stopped = true;
       line.pending = [];
+      line.pendingIds.clear();
       await this.letGo(line, true);
       this.deps.store.updateLine(line.taskId, { lineState: "idle" });
     }
@@ -140,7 +163,16 @@ export class Lines {
   private line(task: Task): Line {
     let line = this.lines.get(task.id);
     if (!line) {
-      line = { taskId: task.id, agentId: task.agentId, pending: [], steered: new Map(), active: false, generation: 0 };
+      line = {
+        taskId: task.id,
+        agentId: task.agentId,
+        pending: [],
+        steered: new Map(),
+        pendingIds: new Set(),
+        recovering: true,
+        active: false,
+        generation: 0,
+      };
       this.lines.set(task.id, line);
     }
     return line;
@@ -198,10 +230,17 @@ export class Lines {
     }
     line.session = session;
     if (task.sessionId !== session.id) store.updateLine(task.id, { sessionId: session.id });
+    if (line.recovering) {
+      line.recovering = false;
+      for (const { id, input } of this.deps.unanswered(task)) {
+        if (!line.pendingIds.has(id)) line.pending.push(input);
+      }
+    }
     // A new conversation instead of the old one: it starts from the brief, not from nothing.
     const fresh = Boolean(task.sessionId) && !session.resumed;
     const input = line.pending.join("\n\n");
     line.pending = [];
+    line.pendingIds.clear();
     const text = fresh ? this.brief(task, input) : input;
     const result = await session.deliver(text, randomUUID()).catch((error: Error) => ({
       outcome: "rejected" as const,
@@ -258,7 +297,17 @@ export class Lines {
     if (line.pending.length && line.session) {
       const input = line.pending.join("\n\n");
       line.pending = [];
-      void line.session.deliver(input, randomUUID());
+      line.pendingIds.clear();
+      const gen = line.generation;
+      const result = await line.session.deliver(input, randomUUID()).catch((error: Error) => ({
+        outcome: "rejected" as const,
+        reason: error.message,
+      }));
+      // Refused: the line would wait for a turn that never comes. It stops with an error, which the
+      // main session hears about, and the next follow-up starts it again.
+      if (result.outcome === "rejected" && gen === line.generation) {
+        this.failed(line, task, result.reason ?? "the harness refused the input");
+      }
       return;
     }
     await this.letGo(line, false);

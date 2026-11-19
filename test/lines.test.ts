@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import type { ScriptedTurn } from "@botiverse/oar/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_LINES } from "../src/core/lines.ts";
+import { Lines, MAX_LINES } from "../src/core/lines.ts";
 import { renderManual } from "../src/core/manual.ts";
+import type { Harness, HarnessEvents } from "../src/harness/harness.ts";
 import { messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
 
 /** Several things at once (docs/spec.md 4.13): lines beside the main session. */
@@ -13,7 +15,8 @@ afterEach(async () => {
 });
 
 const env = (t: ScriptedTurn) => t.options.env as Record<string, string>;
-const isLine = (t: ScriptedTurn) => String(t.options.cwd).includes("/lines/");
+// Either separator: the line's directory is a Windows path there.
+const isLine = (t: ScriptedTurn) => /[\\/]lines[\\/]/.test(String(t.options.cwd));
 /** The message a line's brief says it is for. */
 const fromOf = (input: string) => input.match(/\[task=t\w+ from=(m\w+)/)?.[1] as string;
 const taskOf = (input: string) => input.match(/\[task=(t\w+)/)?.[1] as string;
@@ -186,6 +189,101 @@ describe("lines", () => {
     await admin("POST", `/v1/admin/agents/${agentId}/tasks/${task}/close`);
     await until(() => mingle.store.task(agentId, task)?.lineState === "ended");
     expect(mingle.store.task(agentId, task)?.status).toBe("closed");
+  });
+
+  it("keeps a follow-up that waits for a free line across a restart", async () => {
+    const quickInputs: string[] = [];
+    let runs = 0;
+    current = await rig(async (t) => {
+      if (isLine(t)) {
+        if (/\] quick\n/.test(t.input) || t.input.includes("FOLLOWUP")) quickInputs.push(t.input);
+        if (/\] quick\n/.test(t.input) && !t.input.includes("reported last time")) {
+          await runCli(env(t), ["message", "reply", fromOf(t.input)], "Quick done.");
+          await runCli(env(t), ["task", "done", taskOf(t.input)], "ok");
+        } else if (t.input.includes("[task=") && !t.input.includes("FOLLOWUP")) {
+          await new Promise(() => {}); // busy until stopped
+        }
+        return;
+      }
+      for (const id of messageIds(t.input))
+        await runCli(env(t), ["task", "run", runs++ === 0 ? "quick" : "slow", "--from", id], "go");
+    });
+    const { channel, mingle, agentId } = current;
+    const group = (n: string) => ({ platformId: `-7${n}`, kind: "group" as const, name: `G${n}` });
+    channel.receive({ text: "@Alex quick", chat: group("q") });
+    await until(() => channel.sent.some((m) => m.text === "Quick done."));
+    await until(() => mingle.store.activeLines(agentId).length === 0);
+    for (let i = 0; i < MAX_LINES; i++) channel.receive({ text: `@Alex slow ${i}`, chat: group(String(i)) });
+    await until(() => mingle.store.activeLines(agentId).filter((t) => t.lineState === "running").length === MAX_LINES);
+
+    // A follow-up to the finished work waits: every line is busy.
+    const quick = channel.sent.find((m) => m.text === "Quick done.");
+    channel.receive({ text: "FOLLOWUP: signup too", replyTo: quick?.platformId as string, chat: group("q") });
+    await until(() => mingle.store.activeLines(agentId).some((t) => t.lineState === "queued"));
+
+    // Mingle stops and starts again before a line is free; the follow-up must not be lost.
+    await mingle.lines.suspend(agentId);
+    mingle.lines.restore(agentId);
+    const slow = mingle.store.activeLines(agentId).find((t) => t.title === "slow");
+    await mingle.lines.end(slow?.id as string);
+    await until(() => quickInputs.some((i) => i.includes("FOLLOWUP: signup too")));
+    expect(quickInputs.filter((i) => i.includes("FOLLOWUP: signup too"))).toHaveLength(1);
+  });
+
+  it("does not leave a line working when the harness refuses its next input", async () => {
+    current = await rig(async () => {});
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "@Alex hi" });
+    await until(() => mingle.store.agentChats(agentId).length > 0);
+    const chat = mingle.store.agentChats(agentId)[0];
+    const from = mingle.store.chatMessages(chat?.id as string, 1)[0]?.id as string;
+    let events: HarnessEvents | undefined;
+    let delivered = 0;
+    const harness = {
+      open: async (_options: unknown, e: HarnessEvents) => {
+        events = e;
+        return {
+          id: "s1",
+          resumed: false,
+          deliver: async () => {
+            delivered++;
+            // The first input starts a turn; the harness refuses everything after it.
+            return delivered === 1
+              ? { outcome: "prompted" as const }
+              : { outcome: "rejected" as const, reason: "closed" };
+          },
+          abort: async () => false,
+          dispose: async () => {},
+        };
+      },
+    } as unknown as Harness;
+    const lines = new Lines({
+      store: mingle.store,
+      harness,
+      dir: () => join(current?.home as string, "lines-unit"),
+      manual: () => "",
+      env: () => ({}),
+      agentEnv: () => undefined,
+      note: () => {},
+      unanswered: () => [],
+      paused: () => false,
+    });
+    const task = mingle.store.createLineTask({
+      agentId,
+      title: "Job",
+      fromMessage: from,
+      fromChat: chat?.id as string,
+      brief: "go",
+    });
+    lines.start(task);
+    await until(() => delivered === 1);
+    // Handed something mid-turn and refused: it waits for the next turn, which is refused too.
+    lines.wake(task.id, "more");
+    await until(() => delivered === 2);
+    events?.onTurnEnded({ kind: "completed" });
+    await until(() => mingle.store.taskById(task.id)?.lineState === "error");
+    expect(delivered).toBe(3);
+    await lines.close();
   });
 
   it("guides the main session to hand off long work, and a line to stay on its task", () => {

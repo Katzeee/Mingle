@@ -238,6 +238,12 @@ export class Mingle {
       }),
       agentEnv: (id) => this.agentEnv(id),
       note: (id, body) => this.store.addOwnerNote(id, body),
+      unanswered: (task) => {
+        const agent = this.store.agent(task.agentId);
+        return this.store
+          .lineInbox(task.id)
+          .map((m) => ({ id: m.id, input: renderMessage(this.store, m, { agentName: agent?.name ?? "" }) }));
+      },
       paused: (id) => this.paused.has(id) || this.deleting.has(id),
       log: (line) => this.log(line),
     });

@@ -1307,6 +1307,16 @@ export class Store {
     return rows.map(toMessage);
   }
 
+  /** Follow-ups handed to a line and not answered yet (docs/spec.md 4.13), oldest first. */
+  lineInbox(taskId: string): Message[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM messages WHERE line_task_id = ? AND direction = 'in' AND state = 'delivered' ORDER BY created_at",
+      )
+      .all(taskId) as Row[];
+    return rows.map(toMessage);
+  }
+
   /** Whether the agent sent anything into this chat after `at`: a reply to another message, or a plain send. */
   spokeSince(chatId: string, at: number): boolean {
     const row = this.db
