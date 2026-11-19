@@ -248,6 +248,54 @@ describe("message flow", () => {
     await until(() => current?.turns.some((t) => t.input.startsWith("[mingle] Not answered yet")));
   });
 
+  it("redelivers a queued message after refreshing the session", async () => {
+    const first = Promise.withResolvers<void>();
+    const logs: string[] = [];
+    let opens = 0;
+    current = await rig(
+      async (t) => {
+        if (t.input.includes("finish-current-turn")) await first.promise;
+        for (const id of messageIds(t.input)) {
+          const result = await runCli(t.options.env as Record<string, string>, ["message", "reply", id], "done");
+          expect(result.code).toBe(0);
+        }
+      },
+      {
+        log: (line) => logs.push(line),
+        wrap: (harness) => ({
+          ...harness,
+          open: async (options, events) => {
+            const isOld = ++opens === 1;
+            const session = await harness.open(options, events);
+            return {
+              ...session,
+              deliver: (text, id) =>
+                isOld && text.includes("queued-for-next-turn")
+                  ? Promise.resolve({ outcome: "queued" as const })
+                  : session.deliver(text, id),
+            };
+          },
+        }),
+      },
+    );
+    const { channel, mingle, agentId } = current;
+    const original = channel.receive({ text: "finish-current-turn" });
+    let second: ReturnType<typeof channel.receive>;
+    try {
+      await until(() => current?.turns.length === 1);
+      second = channel.receive({ text: "queued-for-next-turn" });
+      await until(() => logs.some((line) => line.endsWith("(queued)")));
+      await mingle.runtime(agentId)?.refresh();
+      expect(opens).toBe(1);
+    } finally {
+      first.resolve();
+    }
+    expect((await until(() => channel.sent[0])).replyTo).toBe(original.platformId);
+    expect((await until(() => channel.sent[1])).replyTo).toBe(second.platformId);
+    expect(opens).toBe(2);
+    expect(current.turns.map((turn) => turn.input.includes("queued-for-next-turn"))).toEqual([false, true]);
+  });
+
   it("quotes what a reply answers, so a bare '已授权' reads in context (MING-103)", async () => {
     current = await rig(async (t) => {
       if (!t.input.includes("download")) return;

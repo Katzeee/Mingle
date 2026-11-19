@@ -341,10 +341,17 @@ export class AgentRuntime {
   }
 
   /** Reopen the session with fresh settings (role or harness changed), serialized with delivery. */
-  async restart(): Promise<void> {
+  async restart(waitForTurn = false): Promise<void> {
     this.chain = this.chain
       .then(async () => {
+        if (this.disposed) return;
+        // OAR may start the next queued turn before a deferred refresh gets here.
+        if (waitForTurn && this.running) {
+          this.stale = true;
+          return;
+        }
         const session = this.session;
+        const queued = [...this.queued];
         // The old session's events are ignored from here on (docs/spec.md 4.3).
         this.generation++;
         this.session = undefined;
@@ -354,6 +361,9 @@ export class AgentRuntime {
         await session?.dispose().catch(() => {});
         if (this.disposed) return;
         await this.ensureSession();
+        // Only inputs still waiting for their turn were lost with the old process.
+        const requeued = this.deps.store.moveInbound(queued, "requeue");
+        this.pending.unshift(...requeued.map((id): Pending => ({ kind: "message", id })));
         this.setStatus("idle");
         // Messages that arrived while the brain was broken still need delivering.
         if (this.pending.length > 0) this.flushSoon();
@@ -378,7 +388,7 @@ export class AgentRuntime {
       this.stale = true;
       return;
     }
-    await this.restart();
+    await this.restart(true);
   }
 
   /**
@@ -894,7 +904,7 @@ export class AgentRuntime {
       this.emptyWait.unref?.();
     }
     if (this.stale) {
-      void this.restart();
+      void this.restart(true);
       return;
     }
     if (this.pending.length > 0) this.flushSoon();
@@ -1012,7 +1022,7 @@ export class AgentRuntime {
     if (completed && !this.stopped && this.pending.length === 0) this.checkMemory();
     if (this.stale) {
       // restart() delivers what is pending once the new process is up.
-      void this.restart();
+      void this.restart(true);
       return;
     }
     if (this.pending.length > 0) this.flushSoon();
