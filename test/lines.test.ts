@@ -146,7 +146,8 @@ describe("lines", () => {
     for (let i = 0; i < MAX_LINES + 1; i++) {
       channel.receive({ text: `@Alex job ${i}`, chat: { platformId: `-3${i}`, kind: "group", name: `G${i}` } });
     }
-    await until(() => gates.length === MAX_LINES);
+    // The main session may start the fourth in a later turn than the first three.
+    await until(() => gates.length === MAX_LINES && mingle.store.activeLines(agentId).length === MAX_LINES + 1);
     await new Promise((r) => setTimeout(r, 200));
     expect(gates).toHaveLength(MAX_LINES);
     expect(mingle.store.activeLines(agentId).filter((t) => t.lineState === "queued")).toHaveLength(1);
