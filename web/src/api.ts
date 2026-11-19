@@ -167,6 +167,8 @@ export interface AgentView {
   connections: ConnectionView[];
   /** Ask about new people and groups on every chat app, not only the public ones. */
   askAll: boolean;
+  /** The daily memory tidy-up while the agent is idle (docs/spec.md 4.5). */
+  tidy: boolean;
   requests: AccessRequest[];
 }
 
@@ -446,6 +448,7 @@ export const api = {
     call<{ listen: boolean }>("PUT", `/v1/admin/agents/${id}/chats/${chatId}/listen`, { listen }),
   access: (id: string) => call<AccessEntry[]>("GET", `/v1/admin/agents/${id}/access`),
   setAskAll: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/ask-all`, { on }),
+  setTidy: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/tidy`, { on }),
   contacts: (id: string) => call<ContactEntry[]>("GET", `/v1/admin/agents/${id}/contacts`),
   /** Name, note (on the person) or bot mark; fields left out stay. */
   editContact: (id: string, contactId: string, patch: { name?: string; note?: string; bot?: boolean }) =>

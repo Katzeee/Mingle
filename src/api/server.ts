@@ -988,6 +988,13 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json(agentView(mingle.agent(c.req.param("id"))));
   });
 
+  /** The daily memory tidy-up (docs/spec.md 4.5), on by default. */
+  app.put("/v1/admin/agents/:id/tidy", async (c) => {
+    const { on } = await c.req.json<{ on?: unknown }>();
+    mingle.setTidy(c.req.param("id"), on === true);
+    return c.json(agentView(mingle.agent(c.req.param("id"))));
+  });
+
   app.get("/v1/admin/agents/:id/work", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     return c.json({ tasks: store.tasks(agent.id, false), reminders: store.reminders(agent.id) });

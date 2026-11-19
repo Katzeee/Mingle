@@ -422,6 +422,7 @@ export function AgentPage({
                       )}
                       {pauseFailure ? <p className="w-full text-caption text-red">{pauseFailure}</p> : null}
                     </GroupRow>
+                    <TidyRow agent={agent} onChanged={onChanged} />
                     <ResetRow key={agent.id} agent={agent} busy={busy} disabled={switching} />
                     <DiagnosticsRow key={`d-${agent.id}`} agent={agent} />
                   </Group>
@@ -1412,6 +1413,37 @@ function DeleteRow({
  * Start the agent over in a new session, for a session that is stuck or muddled. Its history is
  * gone afterwards, so it asks in place first (DESIGN.md: no modal dialogs).
  */
+/** The daily memory tidy-up (docs/spec.md 4.5): one switch, on by default. */
+function TidyRow({ agent, onChanged }: { agent: AgentView; onChanged: () => unknown }) {
+  const { t } = useI18n();
+  const [failure, setFailure] = useState<string | null>(null);
+  return (
+    <GroupRow className="flex-wrap">
+      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span>{t("agent.tidyTitle")}</span>
+          <span className="text-caption text-ink2">{t("agent.tidyBody", { name: agent.name })}</span>
+        </span>
+        <input
+          type="checkbox"
+          className="size-4 shrink-0 accent-[var(--accent-btn)]"
+          checked={agent.tidy}
+          onChange={async (e) => {
+            setFailure(null);
+            try {
+              await api.setTidy(agent.id, e.target.checked);
+            } catch (error) {
+              setFailure(errorText(t, error));
+            }
+            await onChanged();
+          }}
+        />
+      </label>
+      {failure ? <p className="w-full text-caption text-red">{failure}</p> : null}
+    </GroupRow>
+  );
+}
+
 function ResetRow({ agent, busy, disabled }: { agent: AgentView; busy: boolean; disabled: boolean }) {
   const { t } = useI18n();
   const [confirming, setConfirming] = useState(false);
