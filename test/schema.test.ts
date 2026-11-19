@@ -321,7 +321,7 @@ describe("reminder check privacy", () => {
   });
 });
 
-describe("teams removed (026)", () => {
+describe("teams removed (027)", () => {
   it("frees members, gives their open tasks back with a note, and drops team chats", () => {
     const dir = mkdtempSync(join(tmpdir(), "mingle-schema-"));
     const path = join(dir, "mingle.db");
