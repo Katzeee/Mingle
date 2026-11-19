@@ -130,8 +130,10 @@ export class TeamLink implements ChannelConnection {
 }
 
 /**
- * Turns team chats started without a person speaking, per pair of agents. In memory: a restart is
- * an interruption of its own. A person writing to either agent gives the pair its turns back.
+ * Turns team chats started without a person speaking, per pair of agents. The counts are in memory
+ * and start over after a restart; a stopped pair is found again from its held messages
+ * (`Mingle.restoreTeamStops`), so what waits for the owner never gets lost. A person writing to
+ * either agent gives the pair its turns back.
  */
 export class TeamHops {
   private readonly pairs = new Map<string, { hops: number; stoppedAt: number | null }>();
@@ -157,6 +159,13 @@ export class TeamHops {
     for (const [key, entry] of this.pairs) {
       if (entry.stoppedAt === null && key.split("|").includes(agentId)) this.pairs.delete(key);
     }
+  }
+
+  /** Mark a pair stopped, as found in the store after a restart. */
+  stop(a: string, b: string, at: number): void {
+    const key = TeamHops.key(a, b);
+    const entry = this.pairs.get(key);
+    this.pairs.set(key, { hops: entry?.hops ?? MAX_TEAM_HOPS, stoppedAt: Math.min(entry?.stoppedAt ?? at, at) });
   }
 
   /** The owner let the pair go on. */

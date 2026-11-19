@@ -267,6 +267,8 @@ function sendText(report: SendReport): string {
     markdown_flattened: "formatting is shown as plain text here",
     text_split: "the text was long and went out as several messages",
     mentions_plain: "this chat app has no mentions a bot can make; the names went out as plain text and notify no one",
+    team_stopped:
+      "Mingle stopped this team chat after 20 turns without a person; the message is kept and reaches the other agent only once your owner lets you go on. Do not resend it; tell whoever is waiting",
   };
   if (report.mentioned?.length)
     lines.push(`mentioned ${report.mentioned.map((m) => `@${m.name} (${m.contact})`).join(", ")}`);
@@ -460,16 +462,19 @@ async function agentCommand(group: string, action: string | undefined, args: str
       );
       // Given to a team member: the brief on standard input goes to it with the title.
       const brief = flags.to ? (await readStdin()).trim() : undefined;
-      const task = await call()<{ id: string; title: string; assignee: string | null; message?: string | null }>(
-        "POST",
-        "/v1/agent/tasks",
-        { title, from: flags.from, ...(flags.to ? { to: flags.to, brief } : {}) },
-      );
-      print(task, () =>
-        task.assignee
-          ? `created ${task.id}: ${task.title}\nsent to ${task.assignee}${task.message ? ` as ${task.message}` : ""}; it reports back in your team chat`
-          : `created ${task.id}: ${task.title}`,
-      );
+      const task = await call()<{
+        id: string;
+        title: string;
+        assignee: string | null;
+        message?: string | null;
+        degraded?: string[];
+      }>("POST", "/v1/agent/tasks", { title, from: flags.from, ...(flags.to ? { to: flags.to, brief } : {}) });
+      print(task, () => {
+        if (!task.assignee) return `created ${task.id}: ${task.title}`;
+        if (task.degraded?.includes("team_stopped"))
+          return `created ${task.id}: ${task.title}\nnot handed over yet: Mingle stopped your team chat with ${task.assignee} after 20 turns without a person. The brief is kept and reaches it once your owner lets you go on. Tell whoever asked`;
+        return `created ${task.id}: ${task.title}\nsent to ${task.assignee}${task.message ? ` as ${task.message}` : ""}; it reports back in your team chat`;
+      });
       return true;
     }
     case "task list": {

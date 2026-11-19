@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { arch, release } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type {
   Channel,
   ChannelConnection,
@@ -270,6 +270,7 @@ export class Mingle {
       for (const agent of this.store.agents()) this.saveLimitFor(agent.id);
     }
     this.syncTeams();
+    this.restoreTeamStops();
     for (const agent of this.store.agents()) {
       // A paused agent stays paused across restarts: no session, no token, until the owner resumes it.
       if (agent.status === "paused") this.paused.add(agent.id);
@@ -485,8 +486,11 @@ export class Mingle {
       this.rescope(agent.id);
     }
     const brainChanged = harnessChanged || (patch.model !== undefined && (patch.model || null) !== agent.model);
-    // Teammates see the new name on their side of the team chat.
-    if (name && name !== agent.name) this.syncTeams();
+    // Teammates see the new name on their side of the team chat, and in their guide.
+    if (name && name !== agent.name) {
+      this.syncTeams();
+      for (const mate of this.teammates(agent.id)) await this.runtimes.get(mate.id)?.refresh();
+    }
     // The name is in the appended system prompt too, so either change reopens the session.
     if (brainChanged || (name && name !== agent.name)) await this.runtimes.get(agent.id)?.restart();
     return this.agent(agent.id);
@@ -1500,9 +1504,10 @@ export class Mingle {
     if (!message || inbound.earlier) return; // Delivered before, or the group's past.
     if (chat.kind !== "dm") this.roster(connectionId, chat.id, inbound.chat);
     if (!bot) this.learnProfile(connectionId, contact);
+    // A person the agent answers to (not one held for the owner or refused) gives its team chats their turns back.
+    if (!bot && triggers && verdict === "deliver") this.teamPerson(connection.agentId);
     if (!bot) this.botHops.person(chat.id);
     else if (triggers) this.botHops.woke(chat.id);
-    if (!bot && triggers) this.teamPerson(connection.agentId);
     else if (decision === "brake" && this.botHops.braked(chat.id)) {
       // Said once, without quoting or naming the bot as a mention: that would only wake it again.
       const name = contactName(contact) ?? inbound.sender.name;
@@ -2030,6 +2035,24 @@ export class Mingle {
     });
     this.store.touchContact(connection.id, from.id, from.name);
     const quoted = send.replyTo ? this.store.messageByPlatformId(chat.id, send.replyTo) : undefined;
+    // Files are copied as they are now, like a chat app's upload: the sender may change or delete its own.
+    let files: { ref: string; name: string }[];
+    try {
+      files = send.files.map((f, i) => {
+        const dir = join(this.options.paths.home, "team-files", send.platformId, String(i));
+        mkdirSync(dir, { recursive: true });
+        const copy = join(dir, basename(f.name) || "file");
+        copyFileSync(f.id, copy);
+        return { ref: copy, name: f.name };
+      });
+    } catch (error) {
+      return {
+        kind: "failed",
+        code: "unknown",
+        retryable: false,
+        detail: `a file could not be read: ${(error as Error).message}`,
+      };
+    }
     // Past the limit with no person in between: kept, and handed over only once the owner says so.
     const stopped = this.teamHops.woke(from.id, to.id);
     const message = this.store.insertInbound({
@@ -2038,15 +2061,38 @@ export class Mingle {
       senderId: from.id,
       senderName: from.name,
       body: send.text,
-      attachments: send.files.map((f) => ({ ref: f.id, name: f.name })),
+      attachments: files,
       replyTo: quoted?.id ?? null,
       triggers: true,
       held: stopped,
       createdAt: Date.now(),
     });
-    if (stopped) this.log(`team chat ${from.name} → ${to.name} stopped after ${MAX_TEAM_HOPS} turns without a person`);
-    else if (message) this.runtimes.get(to.id)?.enqueueMessage(message.id);
+    if (stopped) {
+      this.log(`team chat ${from.name} → ${to.name} stopped after ${MAX_TEAM_HOPS} turns without a person`);
+      // Kept, not handed over: the sender hears so, instead of waiting for an answer that cannot come.
+      return { kind: "sent", platformId: send.platformId, degraded: ["team_stopped"] };
+    }
+    if (message) this.runtimes.get(to.id)?.enqueueMessage(message.id);
     return { kind: "sent", platformId: send.platformId };
+  }
+
+  /**
+   * After a restart the hop counts are gone, but a stopped chat's messages are still held: find
+   * those pairs again so the owner sees them stopped and can let them go on (docs/spec.md 4.13).
+   */
+  private restoreTeamStops(): void {
+    for (const agent of this.store.agents()) {
+      const connection = this.store.teamConnection(agent.id);
+      if (!connection) continue;
+      for (const mate of this.teammates(agent.id)) {
+        const chat = this.store.directChat(connection.id, mate.id);
+        const held = chat
+          ? this.store.chatMessages(chat.id, 200).filter((m) => m.direction === "in" && m.state === "held")
+          : [];
+        const first = held.reduce<number | null>((at, m) => (at === null || m.createdAt < at ? m.createdAt : at), null);
+        if (first !== null) this.teamHops.stop(agent.id, mate.id, first);
+      }
+    }
   }
 
   /** A person wrote to this agent: its team chats get their turns back, and one that stopped goes on. */

@@ -1,7 +1,9 @@
-import { basename } from "node:path";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { ScriptedTurn } from "@botiverse/oar/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderManual } from "../src/core/manual.ts";
+import { Mingle } from "../src/core/mingle.ts";
 import { MAX_TEAM_HOPS, TeamHops } from "../src/core/team.ts";
 import { messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
 
@@ -82,11 +84,15 @@ describe("forming a team", () => {
 
   it("writes the team into each agent's guide", () => {
     const lead = renderManual("Alex", "", "darwin", [], { role: "lead", members: ["Coder", "Researcher"] });
-    expect(lead).toContain("You lead a team: Coder and Researcher.");
+    // No names in the guide: who is in the team changes without a new session, so whoami says it.
+    expect(lead).toContain("You lead a team of agents on this computer.");
+    expect(lead).not.toContain("Researcher");
     expect(lead).toContain("task create");
-    expect(lead).toContain("--to Coder");
+    expect(lead).toContain("--to <member>");
+    expect(lead).toContain("starts on it once that is done");
     const member = renderManual("Coder", "", "darwin", [], { role: "member", lead: "Alex" });
     expect(member).toContain("You are in Alex's team.");
+    expect(member).toContain("finish what you are doing first");
     expect(renderManual("Kit", "", "darwin")).not.toContain("## Your team");
   });
 });
@@ -172,8 +178,9 @@ describe("working as a team", () => {
   });
 
   it("stops two agents that keep answering each other, until the owner lets them go on", async () => {
+    const said: string[] = [];
     const chatty: Turn = async (t) => {
-      for (const id of messageIds(t.input)) await runCli(env(t), ["message", "reply", id], "ok");
+      for (const id of messageIds(t.input)) said.push((await runCli(env(t), ["message", "reply", id], "ok")).stdout);
     };
     current = await team({
       alex: async (t) => {
@@ -196,6 +203,18 @@ describe("working as a team", () => {
     // Stopped messages wait for the owner; they are not offered as strangers to let in.
     expect(mingle.store.heldMessages(agentId)).toEqual([]);
     expect(mingle.store.heldMessages(c.id)).toEqual([]);
+    // The one whose message was held hears so, instead of waiting for an answer.
+    await until(() => said.some((o) => o.includes("stopped this team chat")));
+
+    // A restart forgets the counts, not the stop: the held message still waits for the owner.
+    const again = new Mingle(mingle.options);
+    await again.start("http://127.0.0.1:1");
+    try {
+      expect(again.teamStops(agentId).map((s) => s.name)).toEqual(["Coder"]);
+      expect(again.teamStops(c.id).map((s) => s.name)).toEqual(["Alex"]);
+    } finally {
+      await again.stop();
+    }
 
     await mingle.removeMember(agentId, c.id); // ends the exchange before letting it go on
     await mingle.addMember(agentId, c.id);
@@ -205,6 +224,35 @@ describe("working as a team", () => {
     expect(released.released).toBe(1);
     expect(mingle.teamStops(agentId)).toEqual([]);
     await mingle.removeMember(agentId, c.id);
+  });
+});
+
+describe("files in a team chat", () => {
+  it("hands over a copy, so the sender may change or delete its own", async () => {
+    let sent = false;
+    current = await team({
+      alex: async (t) => {
+        if (sent || !t.input.includes("im=telegram")) return;
+        sent = true;
+        const file = join(String(t.options.cwd), "notes.txt");
+        writeFileSync(file, "first");
+        const contact = (await runCli(env(t), ["whoami"])).stdout.match(/Coder \((u\w+)\)/)?.[1] as string;
+        await runCli(env(t), ["message", "send", "--to", contact, "--file", file], "the notes");
+        rmSync(file);
+      },
+    });
+    const { mingle, agentId, channel } = current;
+    const c = coder(current);
+    await mingle.addMember(agentId, c.id);
+    channel.receive({ text: "@Alex go" });
+    const connection = mingle.store.teamConnection(c.id);
+    const chat = await until(() => connection && mingle.store.directChat(connection.id, agentId));
+    const withFile = await until(() =>
+      mingle.store.chatMessages(chat.id, 20).find((m) => m.direction === "in" && m.attachments.length > 0),
+    );
+    const ref = withFile.attachments[0]?.ref as string;
+    expect(ref.startsWith(join(current.home, "team-files"))).toBe(true);
+    expect(readFileSync(ref, "utf8")).toBe("first");
   });
 });
 

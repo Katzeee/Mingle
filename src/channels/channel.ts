@@ -303,7 +303,9 @@ export type Degradation =
   | "markdown_flattened"
   | "text_split"
   /** `@name`s went out as plain text: the chat app has no mention a bot can write. */
-  | "mentions_plain";
+  | "mentions_plain"
+  /** A team chat Mingle stopped after too many turns without a person: kept, not handed over yet (docs/spec.md 4.13). */
+  | "team_stopped";
 
 // ------------------------------------------------------------------- adapter
 

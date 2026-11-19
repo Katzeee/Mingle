@@ -388,11 +388,23 @@ export function createApi(mingle: Mingle): Hono<Env> {
     });
     if (!member || !chatId) return c.json(taskView(task));
     const brief = body.brief?.trim();
-    const report = await mingle.outbox.send(agent.id, {
-      chatId,
-      text: `Task ${task.id}: ${task.title}${brief ? `\n\n${brief}` : ""}`,
+    let report: Awaited<ReturnType<typeof mingle.outbox.send>>;
+    try {
+      report = await mingle.outbox.send(agent.id, {
+        chatId,
+        text: `Task ${task.id}: ${task.title}${brief ? `\n\n${brief}` : ""}`,
+      });
+    } catch (error) {
+      // The member never got it: no task may claim it is on one.
+      store.setTaskStatus(agent.id, task.id, "closed");
+      throw error;
+    }
+    return c.json({
+      ...taskView(task),
+      message: report.messages[0]?.id ?? null,
+      state: report.state,
+      degraded: report.degraded,
     });
-    return c.json({ ...taskView(task), message: report.messages[0]?.id ?? null });
   });
 
   /** A member of the agent's team, by name, slug, agent ID or its contact ID in the team chat. */
