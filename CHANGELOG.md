@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.2
+
+- Agents hand off code changes, investigations, and long commands more reliably, so they stay available to answer chat messages while the work runs.
+- Fixed a case where a parallel task could get stuck after Claude Code moved a long command into the background. The task now stays open so Claude Code can finish and reply.
+
 ## 0.4.1
 
 - An agent can now do several things at once. When something will take a while — writing code, longer research, long commands — it starts that work on the side and stays free to answer everyone else. When the work is done, the agent answers under the message that asked for it.
