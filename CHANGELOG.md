@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.1
+
+- An agent can now do several things at once. When something will take a while — writing code, longer research, long commands — it starts that work on the side and stays free to answer everyone else. When the work is done, the agent answers under the message that asked for it.
+- Replying to that answer, or writing in the same thread, goes straight back to the same piece of work, even days later. Nothing to set up: up to three things run at once, and the rest wait their turn.
+- See what your agent is doing in the activity: each piece of work shows where it came from, how long it has been running, and its result when done. Stop one there, or everything with Stop or `/stop`.
+- Teams are gone. Agents that were members are now agents of their own and keep their chat apps; unfinished work given to them goes back to the agent that gave it.
+- Work that a restart of Mingle interrupted now carries on by itself.
+
 ## 0.4.0
 
 - An agent can lead a team. In an agent's Settings → Team, add other agents on this computer as members, or create a new agent straight into the team. The lead keeps talking with people and stays quick to answer; work that takes a while — writing code, longer research, long commands — goes to a member with `mingle task create --to`, and the lead reports the result back in the original chat. Members don't need a chat app of their own.
