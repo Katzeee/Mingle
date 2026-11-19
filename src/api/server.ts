@@ -16,7 +16,6 @@ import { renderManual } from "../core/manual.ts";
 import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
 import * as people from "../core/people.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
-import { teamRole } from "../core/team.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
 import { readSshConfig } from "../platform/ssh-config.ts";
 import {
@@ -33,9 +32,17 @@ import {
 import { VERSION } from "../version.ts";
 import { remoteGateway, remoteResponse } from "./remote.ts";
 
-type Env = { Variables: { agent: Agent } };
+/** `line`: the task a line's token is scoped to (docs/spec.md 4.13); absent for the main session. */
+type Env = { Variables: { agent: Agent; line: string | undefined } };
 
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "closed"];
+
+/** What a line may write (docs/spec.md 4.13): answer about its task, fetch files, finish it. */
+const LINE_WRITES = [
+  /^\/v1\/agent\/messages\/(reply|send)$/,
+  /^\/v1\/agent\/files\/[^/]+\/download$/,
+  /^\/v1\/agent\/tasks\/[^/]+\/done$/,
+];
 
 /**
  * The local API. Two kinds of caller:
@@ -97,12 +104,35 @@ export function createApi(mingle: Mingle): Hono<Env> {
       );
     }
     c.set("agent", agent);
+    c.set("line", mingle.lineForToken(token));
+    // A line speaks for its agent about its task only: it reads freely, and writes only these.
+    if (c.get("line") && c.req.method !== "GET" && !LINE_WRITES.some((r) => r.test(new URL(c.req.url).pathname))) {
+      throw new MingleError(
+        "line_out_of_scope",
+        "this session works on one task: it can reply and send about that task, fetch files and finish it with task done, nothing else",
+        403,
+      );
+    }
     // A command from the agent is progress in its turn, whatever the harness reports.
     mingle.runtime(agent.id)?.noteProgress();
     await next();
   });
 
   const render = (agent: Agent, m: Message) => renderMessage(store, m, { agentName: agent.name });
+
+  /**
+   * A line replies only about its task: to the message it came from, to what it said itself, or to
+   * follow-ups handed to it. Throws otherwise.
+   */
+  const lineScope = (taskId: string, message?: Message) => {
+    const task = store.taskById(taskId);
+    if (task && message && (message.lineTaskId === task.id || message.id === task.fromMessage)) return;
+    throw new MingleError(
+      "line_out_of_scope",
+      `this session works on ${task?.id ?? taskId} ("${task?.title ?? ""}"): speak only about it, in the chat it came from`,
+      403,
+    );
+  };
 
   app.get("/v1/agent/whoami", (c) => {
     const agent = c.get("agent");
@@ -111,54 +141,33 @@ export function createApi(mingle: Mingle): Hono<Env> {
       bot: n.botName,
       state: mingle.isLive(n.id) ? n.state : n.state === "connected" ? "reconnecting" : n.state,
     }));
+    const line = c.get("line");
+    // What it is doing at once: each line's task and how far it is (docs/spec.md 4.13).
+    const doing = (line ? [store.taskById(line)].filter((t) => t !== undefined) : store.lineTasks(agent.id, 0))
+      .filter((t) => t.status !== "closed" && t.lineState !== "ended")
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, line: t.lineState, from: t.fromMessage }));
     return c.json({
       name: agent.name,
       harness: agent.harness,
       home: mingle.homeDir(agent),
       connections,
-      team: teamView(agent),
+      ...(line ? { line } : {}),
+      doing,
     });
   });
-
-  /**
-   * Who the agent works with (docs/spec.md 4.13): its lead, or its members with what each is doing,
-   * so a lead can pick someone free. `contact` is where `message send --to` reaches them.
-   */
-  const teamView = (agent: Agent) => {
-    const role = teamRole(store, agent);
-    if (!role) return null;
-    const team = store.teamConnection(agent.id);
-    const mate = (other: Agent) => {
-      const contact = team ? store.contactByPlatformId(team.id, other.id) : undefined;
-      const status = mingle.isPaused(other.id) ? "paused" : other.status;
-      const doing = store.assignedTasks(other.id, false);
-      return {
-        name: other.name,
-        contact: contact?.id ?? null,
-        role: firstLine(readRole(mingle.homeDir(other))),
-        status,
-        detail: status === "working" || status === "thinking" ? other.statusDetail : null,
-        tasks: doing.map((t) => ({ id: t.id, title: t.title, status: t.status })),
-      };
-    };
-    if (role.role === "member") {
-      const lead = agent.leadId ? store.agent(agent.leadId) : undefined;
-      return { role: "member" as const, lead: lead ? mate(lead) : null, members: [] };
-    }
-    return { role: "lead" as const, lead: null, members: store.members(agent.id).map(mate) };
-  };
 
   app.get("/v1/agent/manual", (c) => {
     const agent = c.get("agent");
     // The same guide the session opened with, so the variable names match what it can read.
     const names = mingle.options.harness.acceptsEnv?.(agent.harness) === false ? [] : store.envNames(agent.id);
+    const task = c.get("line") ? store.taskById(c.get("line") as string) : undefined;
     return c.text(
       renderManual(
         agent.name,
         readRole(mingle.homeDir(agent)),
         process.platform,
         names.map((v) => v.name),
-        teamRole(store, agent),
+        task ? { taskId: task.id, title: task.title, home: mingle.homeDir(agent) } : undefined,
       ),
     );
   });
@@ -179,12 +188,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const body = await c.req.json<{ messageId: string; text: string; files?: string[] }>();
     const original = store.agentMessage(agent.id, body.messageId);
     if (!original) throw notFound("message", body.messageId);
-    mingle.checkTeamSend(agent.id, original.chatId);
+    const line = c.get("line");
+    if (line) lineScope(line, original);
     const report = await mingle.outbox.send(agent.id, {
       chatId: original.chatId,
       text: body.text ?? "",
       replyTo: original.id,
       files: resolveFiles(mingle.homeDir(agent), body.files),
+      lineTaskId: line,
     });
     return c.json(report);
   });
@@ -195,12 +206,17 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const body = await c.req.json<{ to?: string; chatId?: string; text: string; files?: string[] }>();
     // A chat, or a person by contact or person ID: their direct chat, opened if need be.
     const to = body.to ?? body.chatId ?? "";
-    const chatId = await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to);
-    mingle.checkTeamSend(agent.id, chatId);
+    const line = c.get("line");
+    // A line sends only into the chat its task came from, under the message it came from.
+    const task = line ? store.taskById(line) : undefined;
+    if (line && (!task?.fromChat || (to && to !== task.fromChat))) lineScope(line);
+    const chatId = task?.fromChat ?? (await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to));
     const report = await mingle.outbox.send(agent.id, {
       chatId,
       text: body.text ?? "",
+      ...(task?.fromMessage ? { replyTo: task.fromMessage } : {}),
       files: resolveFiles(mingle.homeDir(agent), body.files),
+      lineTaskId: line,
     });
     return c.json(report);
   });
@@ -361,7 +377,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.post("/v1/agent/tasks", async (c) => {
     const agent = c.get("agent");
-    const body = await c.req.json<{ title: string; from?: string; to?: string; brief?: string }>();
+    const body = await c.req.json<{ title: string; from?: string }>();
     if (!body.title?.trim())
       throw new MingleError("title_required", 'give the task a title: mingle task create "Compare the routes"');
     let fromChat: string | null = null;
@@ -370,78 +386,63 @@ export function createApi(mingle: Mingle): Hono<Env> {
       if (!message) throw notFound("message", body.from);
       fromChat = message.chatId;
     }
-    // Given to a member of the agent's team (docs/spec.md 4.13): the brief goes to it in their chat.
-    const member = body.to ? teamMember(agent, body.to) : undefined;
-    let chatId: string | undefined;
-    if (member) {
-      const contact = store.contactByPlatformId(store.teamConnection(agent.id)?.id ?? "", member.id);
-      if (!contact) throw new MingleError("team_not_ready", "the team chat is not open yet; try again", 503);
-      chatId = await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, contact.id);
-      mingle.checkTeamSend(agent.id, chatId);
-    }
-    const task = store.createTask({
-      agentId: agent.id,
-      title: body.title.trim(),
-      fromMessage: body.from ?? null,
-      fromChat,
-      assigneeId: member?.id ?? null,
-    });
-    if (!member || !chatId) return c.json(taskView(task));
-    const brief = body.brief?.trim();
-    let report: Awaited<ReturnType<typeof mingle.outbox.send>>;
-    try {
-      report = await mingle.outbox.send(agent.id, {
-        chatId,
-        text: `Task ${task.id}: ${task.title}${brief ? `\n\n${brief}` : ""}`,
-      });
-    } catch (error) {
-      // The member never got it: no task may claim it is on one.
-      store.setTaskStatus(agent.id, task.id, "closed");
-      throw error;
-    }
-    return c.json({
-      ...taskView(task),
-      message: report.messages[0]?.id ?? null,
-      state: report.state,
-      degraded: report.degraded,
-    });
-  });
-
-  /** A member of the agent's team, by name, slug, agent ID or its contact ID in the team chat. */
-  const teamMember = (agent: Agent, to: string): Agent => {
-    const members = store.members(agent.id);
-    const wanted = to.trim().toLowerCase();
-    const team = store.teamConnection(agent.id);
-    const found = members.find(
-      (m) =>
-        m.id === to ||
-        m.slug === wanted ||
-        m.name.toLowerCase() === wanted ||
-        (team && store.contactByPlatformId(team.id, m.id)?.id === to),
+    return c.json(
+      store.createTask({ agentId: agent.id, title: body.title.trim(), fromMessage: body.from ?? null, fromChat }),
     );
-    if (found) return found;
-    throw new MingleError(
-      members.length ? "not_a_member" : "no_team",
-      members.length
-        ? `${to} is not in your team. Your members: ${members.map((m) => m.name).join(", ")}`
-        : "you have no team; only your owner can give you one",
-      404,
-    );
-  };
-
-  /** A task with the names of who gave it and who does it, for agents and the console. */
-  const taskView = (task: Task) => ({
-    ...task,
-    assignee: task.assigneeId ? (store.agent(task.assigneeId)?.name ?? null) : null,
-    lead: task.assigneeId ? (store.agent(task.agentId)?.name ?? null) : null,
   });
 
   app.get("/v1/agent/tasks", (c) => {
     const agent = c.get("agent");
-    const all = c.req.query("all") === "1";
-    // Its own, then what its lead gave it.
-    const tasks = [...store.tasks(agent.id, all), ...store.assignedTasks(agent.id, all)];
-    return c.json(tasks.map((t) => ({ ...taskView(t), mine: t.agentId === agent.id })));
+    const line = c.get("line");
+    // A line sees the task it works on.
+    if (line) return c.json([store.taskById(line)].filter(Boolean));
+    return c.json(store.tasks(agent.id, c.req.query("all") === "1"));
+  });
+
+  /** Start a line for work that takes a while (docs/spec.md 4.13): the brief comes on standard input. */
+  app.post("/v1/agent/tasks/run", async (c) => {
+    const agent = c.get("agent");
+    refuseIfStopped(agent);
+    const body = await c.req.json<{ title?: string; from?: string; brief?: string }>();
+    if (!body.title?.trim())
+      throw new MingleError(
+        "title_required",
+        'give the task a title: mingle task run "Fix the login" --from <message-id>',
+      );
+    if (!body.from)
+      throw new MingleError("from_required", "pass --from <message-id>: the message the work is for, where it answers");
+    if (!body.brief?.trim())
+      throw new MingleError("brief_required", "pass the brief on standard input: what to do, and what done looks like");
+    return c.json(mingle.runTask(agent.id, { title: body.title.trim(), from: body.from, brief: body.brief.trim() }));
+  });
+
+  /** Pass a message, a note, or both on to a line. */
+  app.post("/v1/agent/tasks/:id/tell", async (c) => {
+    const agent = c.get("agent");
+    const body = await c.req.json<{ text?: string; from?: string }>();
+    return c.json(
+      mingle.tellTask(agent.id, c.req.param("id"), {
+        ...(body.text ? { text: body.text } : {}),
+        ...(body.from ? { from: body.from } : {}),
+      }),
+    );
+  });
+
+  /** A line finishes its task with a summary for the main session. */
+  app.post("/v1/agent/tasks/:id/done", async (c) => {
+    const agent = c.get("agent");
+    const line = c.get("line");
+    if (line !== c.req.param("id")) {
+      throw new MingleError(
+        "line_only",
+        line
+          ? `this session works on ${line}; finish that one`
+          : "task done is how a line finishes its task; for your own, use task update <id> --status done",
+        403,
+      );
+    }
+    const { summary } = await c.req.json<{ summary?: string }>();
+    return c.json(mingle.doneTask(agent.id, line, summary ?? ""));
   });
 
   app.patch("/v1/agent/tasks/:id", async (c) => {
@@ -450,14 +451,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!TASK_STATUSES.includes(status)) {
       throw new MingleError("invalid_status", `use one of: ${TASK_STATUSES.join(", ")}`);
     }
-    const before = store.taskFor(agent.id, c.req.param("id"));
     const task = store.setTaskStatus(agent.id, c.req.param("id"), status);
-    if (!task || !before) throw notFound("task", c.req.param("id"));
-    // A member finishing what its lead gave it: the lead hears with its next input, no turn of its own.
-    if (task.assigneeId === agent.id && task.agentId !== agent.id && before.status !== status) {
-      store.addOwnerNote(task.agentId, `[mingle] ${agent.name} set task ${task.id} ("${task.title}") to ${status}.`);
-    }
-    return c.json(taskView(task));
+    if (!task) throw notFound("task", c.req.param("id"));
+    return c.json(task);
   });
 
   app.post("/v1/agent/reminders", async (c) => {
@@ -607,8 +603,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
         claim: claimView(n),
       })),
       requests: accessRequests(agent.id),
-      // Team chats Mingle stopped after too many turns without a person (docs/spec.md 4.13).
-      teamStops: mingle.teamStops(agent.id),
+      // Things under way at once, besides talking (docs/spec.md 4.13).
+      doing: mingle.lines.busy(agent.id),
     };
   };
 
@@ -859,6 +855,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const connections = store.connections(agent.id);
     const owners = new Set(connections.map((n) => `${n.id}:${n.ownerId}`));
     const shared = sharedOwners(connections);
+    // The work a message started, or the line it went to (docs/spec.md 4.13).
+    const lines = store.lineTasks(agent.id, 0);
+    const lineOf = (m: Message) => {
+      const task = m.lineTaskId ? lines.find((t) => t.id === m.lineTaskId) : lines.find((t) => t.fromMessage === m.id);
+      return task
+        ? { id: task.id, title: task.title, state: lineState(task), started: task.fromMessage === m.id }
+        : null;
+    };
     return (m: Message & { chat: Chat; platform: Platform }) => {
       const contact =
         m.direction === "in" && m.senderId ? store.contactByPlatformId(m.chat.connectionId, m.senderId) : undefined;
@@ -885,6 +889,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
         retryAt: m.state === "waiting" ? (m.retryAt ?? null) : null,
         files: m.attachments.map((a) => a.name),
         createdAt: m.createdAt,
+        line: lineOf(m),
       };
     };
   };
@@ -1107,28 +1112,29 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.get("/v1/admin/agents/:id/work", (c) => {
     const agent = mingle.agent(c.req.param("id"));
-    const tasks = [...store.tasks(agent.id, false), ...store.assignedTasks(agent.id, false)];
-    return c.json({ tasks: tasks.map(taskView), reminders: store.reminders(agent.id) });
-  });
-
-  /** The owner adds an agent to this agent's team (docs/spec.md 4.13). Returns the member. */
-  app.post("/v1/admin/agents/:id/members", async (c) => {
-    const { member } = await c.req.json<{ member?: unknown }>();
-    if (typeof member !== "string" || !member) throw new MingleError("member_required", "say which agent to add");
-    return c.json(agentView(await mingle.addMember(c.req.param("id"), member)));
-  });
-
-  /** The owner takes an agent out of this agent's team. */
-  app.delete("/v1/admin/agents/:id/members/:memberId", async (c) => {
-    await mingle.removeMember(c.req.param("id"), c.req.param("memberId"));
-    return c.json({ ok: true });
-  });
-
-  /** The owner lets a team chat that Mingle stopped go on. */
-  app.post("/v1/admin/agents/:id/team/continue", async (c) => {
-    const body = await c.req.json<{ with?: unknown }>();
-    if (typeof body.with !== "string") throw new MingleError("with_required", "say which teammate");
-    return c.json({ released: mingle.continueTeam(c.req.param("id"), body.with) });
+    // Open tasks, and the work its lines finished in the last day.
+    const lines = store.lineTasks(agent.id, Date.now() - 86_400_000);
+    const open = store.tasks(agent.id, false).filter((t) => !lines.some((l) => l.id === t.id));
+    const tasks = [...open, ...lines]
+      .filter((t) => t.status !== "closed")
+      // Work under way first, oldest first; what finished today after it.
+      .sort((a, b) => Number(a.status === "done") - Number(b.status === "done") || a.createdAt - b.createdAt)
+      .map((t) => {
+        const chat = t.fromChat ? store.chat(t.fromChat) : undefined;
+        const platform = chat ? store.connection(chat.connectionId)?.platform : undefined;
+        return {
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          line: t.lineState ? lineState(t) : null,
+          summary: t.summary,
+          error: t.lineError,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+          from: chat ? { name: chat.name, platform } : null,
+        };
+      });
+    return c.json({ tasks, reminders: store.reminders(agent.id) });
   });
 
   /** The owner stops a reminder; the agent hears it with its next input (docs/spec.md 4.6). */
@@ -1175,7 +1181,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
   };
 
   app.post("/v1/admin/agents", async (c) => {
-    const body = await c.req.json<{ name: string; role?: string; harness: string; model?: string; lead?: string }>();
+    const body = await c.req.json<{ name: string; role?: string; harness: string; model?: string }>();
     await requireHarness(body.harness);
     return c.json(
       agentView(
@@ -1184,7 +1190,6 @@ export function createApi(mingle: Mingle): Hono<Env> {
           role: body.role ?? "",
           harness: body.harness,
           model: body.model ?? null,
-          ...(body.lead ? { lead: body.lead } : {}),
         }),
       ),
     );
@@ -1433,11 +1438,11 @@ export function listen(app: Hono<Env>, port: number): Promise<{ url: string; clo
   });
 }
 
-/** The first non-empty line of a role, for a one-line description. */
-function firstLine(text: string): string | null {
-  const line = text
-    .split("\n")
-    .map((l) => l.replace(/^#+\s*/, "").trim())
-    .find(Boolean);
-  return line ? (line.length > 120 ? `${line.slice(0, 119)}…` : line) : null;
+/** How a line's work reads to the owner: under way, waiting its turn, waiting for a reply, done, broken. */
+function lineState(task: Task): "running" | "queued" | "waiting" | "done" | "error" | "stopped" {
+  if (task.lineState === "error") return "error";
+  if (task.lineState === "ended" || task.status === "closed") return "stopped";
+  if (task.status === "done") return "done";
+  if (task.lineState === "queued") return "queued";
+  return task.lineState === "running" ? "running" : "waiting";
 }

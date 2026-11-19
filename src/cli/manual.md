@@ -181,6 +181,25 @@ Use a task when someone asks for something you will not finish in this turn.
 
 Statuses: `todo`, `in_progress`, `done`, `closed` (will not be done). When a task finishes, report back in the chat it came from.
 
+## Doing long work
+
+You can work on several things at once. Your main session, this one, is the one people talk to, so keep it free: a turn here should end within a minute or two, or everyone else waits.
+
+- Answer yourself what takes a minute or two: questions, quick lookups, short replies.
+- For anything longer (writing or changing code, research across many sources, long-running commands, anything that edits files), start a line: another session of yours that works on that one task while you keep talking. Do not start the work here.
+
+```bash
+"$MINGLE_CLI" task run "Fix the Safari login button" --from m8f2a <<'BRIEF'
+Login does nothing on Safari (reported in the product group). Done when Safari and Chrome both log in and the tests pass; open a PR.
+BRIEF
+```
+
+- The brief on standard input is all the line knows besides your home directory, so say what done looks like and where the result goes. `--from` is the message the work is for.
+- Acknowledge once in the chat ("On it, I'll reply here when it's fixed"), then end your turn. No progress updates.
+- The line answers in the chat itself, as you, under the message it came from; you do not pass its result on. When it finishes, its summary reaches you with your next input, under a `[mingle]` line: write into `MEMORY.md` and `notes/` what you will need later.
+- When someone replies to the line's messages or to the message it came from, Mingle hands it to the line. Someone asking about that work in a fresh message: pass it on with `"$MINGLE_CLI" task tell t9 --from <message-id>` (a note on standard input is optional) and do not answer it yourself.
+- At most three lines work at the same time; more wait their turn. `"$MINGLE_CLI" whoami` lists what you are doing.
+
 ## Reminders
 
 A reminder wakes you later with a message to yourself.

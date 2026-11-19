@@ -22,9 +22,7 @@ export type Platform =
   | "discord"
   | "telegram"
   | "imessage"
-  | "github"
-  /** Not a chat app: the direct chats between a lead and its team on this computer (docs/spec.md 4.13). */
-  | "team";
+  | "github";
 
 export type ChatKind = "dm" | "group" | "thread";
 
@@ -303,9 +301,7 @@ export type Degradation =
   | "markdown_flattened"
   | "text_split"
   /** `@name`s went out as plain text: the chat app has no mention a bot can write. */
-  | "mentions_plain"
-  /** A team chat Mingle stopped after too many turns without a person: kept, not handed over yet (docs/spec.md 4.13). */
-  | "team_stopped";
+  | "mentions_plain";
 
 // ------------------------------------------------------------------- adapter
 

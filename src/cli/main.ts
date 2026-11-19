@@ -191,31 +191,6 @@ function contactInfo(found: ContactInfo): string {
   return out.join("\n");
 }
 
-interface TeamMate {
-  name: string;
-  contact: string | null;
-  role: string | null;
-  status: string;
-  detail: string | null;
-  tasks: { id: string; title: string; status: string }[];
-}
-
-/** The team part of `whoami` (docs/spec.md 4.13): who, what they do, and whether they are free. */
-function teamLines(team: { role: "lead" | "member"; lead: TeamMate | null; members: TeamMate[] } | null): string[] {
-  if (!team) return [];
-  const line = (m: TeamMate) => {
-    const doing = m.tasks.map((t) => `${t.id} ${t.title}`).join("; ");
-    const state = m.detail ? `${m.status}: ${m.detail}` : m.status;
-    return [
-      `  ${m.name}${m.contact ? ` (${m.contact})` : ""}  ${state}${doing ? `  tasks: ${doing}` : ""}`,
-      ...(m.role ? [`    ${m.role}`] : []),
-    ].join("\n");
-  };
-  if (team.role === "member")
-    return team.lead ? ["", `team: you are in ${team.lead.name}'s team`, line(team.lead)] : [];
-  return ["", "team: you lead", ...team.members.map(line)];
-}
-
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
   const chunks: Buffer[] = [];
@@ -267,8 +242,6 @@ function sendText(report: SendReport): string {
     markdown_flattened: "formatting is shown as plain text here",
     text_split: "the text was long and went out as several messages",
     mentions_plain: "this chat app has no mentions a bot can make; the names went out as plain text and notify no one",
-    team_stopped:
-      "Mingle stopped this team chat after 20 turns without a person; the message is kept and reaches the other agent only once your owner lets you go on. Do not resend it; tell whoever is waiting",
   };
   if (report.mentioned?.length)
     lines.push(`mentioned ${report.mentioned.map((m) => `@${m.name} (${m.contact})`).join(", ")}`);
@@ -455,48 +428,59 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "task create": {
-      const title = need(
-        args.join(" "),
-        "title_required",
-        'usage: mingle task create "title" [--from <message-id>] [--to <team member> with the brief on standard input]',
-      );
-      // Given to a team member: the brief on standard input goes to it with the title.
-      const brief = flags.to ? (await readStdin()).trim() : undefined;
-      const task = await call()<{
-        id: string;
-        title: string;
-        assignee: string | null;
-        message?: string | null;
-        degraded?: string[];
-      }>("POST", "/v1/agent/tasks", { title, from: flags.from, ...(flags.to ? { to: flags.to, brief } : {}) });
-      print(task, () => {
-        if (!task.assignee) return `created ${task.id}: ${task.title}`;
-        if (task.degraded?.includes("team_stopped"))
-          return `created ${task.id}: ${task.title}\nnot handed over yet: Mingle stopped your team chat with ${task.assignee} after 20 turns without a person. The brief is kept and reaches it once your owner lets you go on. Tell whoever asked`;
-        return `created ${task.id}: ${task.title}\nsent to ${task.assignee}${task.message ? ` as ${task.message}` : ""}; it reports back in your team chat`;
-      });
+      const title = need(args.join(" "), "title_required", 'usage: mingle task create "title" [--from <message-id>]');
+      const task = await call()<{ id: string; title: string }>("POST", "/v1/agent/tasks", { title, from: flags.from });
+      print(task, () => `created ${task.id}: ${task.title}`);
       return true;
     }
     case "task list": {
-      const tasks = await call()<
-        {
-          id: string;
-          mine: boolean;
-          title: string;
-          status: string;
-          fromChat: string | null;
-          assignee: string | null;
-          lead: string | null;
-        }[]
-      >("GET", `/v1/agent/tasks${flags.all ? "?all=1" : ""}`);
-      const who = (t: (typeof tasks)[number]) => {
-        if (!t.assignee) return t.fromChat ? `  (from ${t.fromChat})` : "";
-        // Given to a member, or given to this agent by its lead.
-        return t.mine ? `  (${t.assignee} is on it)` : `  (from ${t.lead})`;
-      };
-      print(tasks, () =>
-        tasks.length ? tasks.map((t) => `${t.id}  ${t.status}  ${t.title}${who(t)}`).join("\n") : "no open tasks",
+      const tasks = await call()<{ id: string; title: string; status: string; fromChat: string | null }[]>(
+        "GET",
+        `/v1/agent/tasks${flags.all ? "?all=1" : ""}`,
       );
+      print(tasks, () =>
+        tasks.length
+          ? tasks.map((t) => `${t.id}  ${t.status}  ${t.title}${t.fromChat ? `  (from ${t.fromChat})` : ""}`).join("\n")
+          : "no open tasks",
+      );
+      return true;
+    }
+    case "task run": {
+      const usage = 'usage: mingle task run "title" --from <message-id>, the brief on standard input';
+      const title = need(args.join(" "), "title_required", usage);
+      const from = need(flags.from, "from_required", usage);
+      const brief = need((await readStdin()).trim(), "brief_required", usage);
+      const task = await call()<{ id: string; title: string; lineState: string }>("POST", "/v1/agent/tasks/run", {
+        title,
+        from,
+        brief,
+      });
+      print(task, () =>
+        task.lineState === "queued"
+          ? `started ${task.id}: ${task.title} (waiting for a free line; it starts by itself)`
+          : `started ${task.id}: ${task.title}; it answers under ${from} itself`,
+      );
+      return true;
+    }
+    case "task tell": {
+      const id = need(
+        args[0],
+        "task_id_required",
+        "usage: mingle task tell <task-id> [--from <message-id>] [note on standard input]",
+      );
+      const note = (await readStdin()).trim();
+      const task = await call()<{ id: string; title: string }>("POST", `/v1/agent/tasks/${id}/tell`, {
+        ...(note ? { text: note } : {}),
+        ...(flags.from ? { from: flags.from } : {}),
+      });
+      print(task, () => `passed on to ${task.id} (${task.title})`);
+      return true;
+    }
+    case "task done": {
+      const id = need(args[0], "task_id_required", "usage: mingle task done <task-id>, the summary on standard input");
+      const summary = need((await readStdin()).trim(), "summary_required", "pass a summary on standard input");
+      const task = await call()<{ id: string; title: string }>("POST", `/v1/agent/tasks/${id}/done`, { summary });
+      print(task, () => `${task.id} is done; your main session gets the summary`);
       return true;
     }
     case "task update": {
@@ -594,18 +578,22 @@ async function agentCommand(group: string, action: string | undefined, args: str
         harness: string;
         home: string;
         connections: { platform: string; bot: string; state: string }[];
-        team: {
-          role: "lead" | "member";
-          lead: TeamMate | null;
-          members: TeamMate[];
-        } | null;
+        line?: string;
+        doing: { id: string; title: string; status: string; line: string | null; from: string | null }[];
       }>("GET", "/v1/agent/whoami");
+      const doing = me.doing.map(
+        (t) => `  ${t.id}  ${t.line === "idle" ? t.status : t.line}  ${t.title}  (from ${t.from})`,
+      );
       print(me, () =>
         [
           `${me.name} (${me.harness})`,
           `home: ${me.home}`,
           ...me.connections.map((c) => `${c.platform}: ${c.bot} ${c.state}`),
-          ...teamLines(me.team),
+          ...(me.line
+            ? ["", `this session works on ${me.line}`, ...doing]
+            : doing.length
+              ? ["", "doing:", ...doing]
+              : []),
         ].join("\n"),
       );
       return true;
@@ -1008,7 +996,7 @@ For agents (inside a session):
   mingle chat list | info <chat>
   mingle contact list [name] | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
-  mingle task create | list | update
+  mingle task create | run | tell | done | list | update
   mingle reminder set | list | snooze | cancel
   mingle whoami | manual
 
