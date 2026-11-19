@@ -33,7 +33,7 @@ import type { InboundState } from "../store/store.ts";
 export type InboundEvent =
   /** Handed to the agent's session. */
   | "deliver"
-  /** The session was replaced before a queued message reached a turn. */
+  /** The session was replaced before a queued message reached a turn, or Mingle stopped mid-turn. */
   | "requeue"
   /** Could not be handed over, or the turn it was in failed. */
   | "fail"

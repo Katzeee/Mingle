@@ -260,8 +260,30 @@ export class AgentRuntime {
         this.setStatus("idle");
       })
       .catch((error) => this.fail(error));
+    this.resumeInterrupted();
     for (const message of this.deps.store.undelivered(this.agentId)) this.enqueueMessage(message.id);
     for (const handoff of this.deps.store.waitingHandoffs(this.agentId)) this.enqueueHandoff(handoff.id);
+  }
+
+  /**
+   * Mingle stopped in the middle of this agent's turn (a restart, an update, a crash): the turn
+   * went with the old process, and nothing else would start one, so the agent would sit idle with
+   * its work half done (docs/spec.md 7.1). It is told so in its first input, and the messages
+   * that turn had taken in and not answered are handed over again, so it sees them even when the
+   * harness had only queued them. What it still leaves unanswered is reminded about as after any
+   * turn.
+   */
+  private resumeInterrupted(): void {
+    const { store } = this.deps;
+    const turnAt = store.turnAt(this.agentId);
+    const awaiting = store.awaitingReply(this.agentId).map((m) => m.id);
+    if (turnAt === null && awaiting.length === 0) return;
+    store.setTurnAt(this.agentId, null);
+    // Back in the inbox, they are delivered with the other undelivered messages, after this note.
+    const again = store.moveInbound(awaiting, "requeue");
+    this.deps.log?.(`${this.agentId}: resuming work interrupted when Mingle stopped (${again.length} message(s))`);
+    this.pending.push({ kind: "text", text: interruptedText(again.length > 0) });
+    this.schedule();
   }
 
   enqueueMessage(messageId: string): void {
@@ -356,8 +378,7 @@ export class AgentRuntime {
         this.generation++;
         this.session = undefined;
         this.stale = false;
-        this.running = false;
-        this.clearStall();
+        this.ended();
         await session?.dispose().catch(() => {});
         if (this.disposed) return;
         await this.ensureSession();
@@ -406,6 +427,9 @@ export class AgentRuntime {
     this.pending = [];
     // Written now, not after the session is gone: closing can wait on a session still opening.
     this.deps.store.setAgentStatus(this.agentId, final);
+    // Paused or reset, the work in hand ends on purpose: the next start does not pick it up. When
+    // Mingle itself stops, the mark stays, so the next start does (docs/spec.md 7.1).
+    if (final === "paused" || abortWork) this.deps.store.setTurnAt(this.agentId, null);
     // Pausing ends the work in hand; the session is closed right after.
     if (abortWork || (final === "paused" && this.running)) await this.session?.abort().catch(() => {});
     await this.chain.catch(() => {});
@@ -439,6 +463,7 @@ export class AgentRuntime {
     // A message settled while it waited (answered, or queued twice) is not delivered again.
     // A reminder names only what is still unanswered: the agent may have answered meanwhile (a
     // background command finished and woke it), and a stale reminder makes it answer twice.
+    const seen = new Set<string>();
     const batch = taken.flatMap((p): Pending[] => {
       if (p.kind === "text") return [p];
       if (p.kind === "handoff") return this.deps.store.handoff(p.id)?.state === "waiting" ? [p] : [];
@@ -446,6 +471,8 @@ export class AgentRuntime {
         const ids = p.ids.filter((id) => this.deps.store.message(id)?.state === "delivered");
         return ids.length > 0 ? [{ kind: "nudge", ids }] : [];
       }
+      if (seen.has(p.id)) return [];
+      seen.add(p.id);
       return this.deps.store.message(p.id)?.state === "received" ? [p] : [];
     });
     if (batch.length === 0) return;
@@ -799,6 +826,7 @@ export class AgentRuntime {
             void this.session?.abort().catch(() => {});
           }
           this.running = true;
+          this.deps.store.setTurnAt(this.agentId, this.now());
           // The harness runs what it queued as the turn it starts for a prompt.
           if (!self) this.queued.clear();
           this.watchStall();
@@ -808,8 +836,7 @@ export class AgentRuntime {
         },
         onTurnEnded: (outcome) => {
           if (this.disposed || gen !== this.generation) return;
-          this.running = false;
-          this.clearStall();
+          this.ended();
           this.idleSince = this.now();
           if (outcome.kind === "failed") {
             const failure = outcome.failure ?? "unknown";
@@ -972,8 +999,7 @@ export class AgentRuntime {
       this.deps.log?.(`${this.agentId}: the harness did not end the stuck turn; reopening its session`);
       this.generation++;
       this.session = undefined;
-      this.running = false;
-      this.clearStall();
+      this.ended();
       this.turnRevision = undefined;
       this.idleSince = this.now();
       // What the old process queued goes with it: those messages are reminded about too.
@@ -1045,6 +1071,13 @@ export class AgentRuntime {
     this.pending.push({ kind: "text", text: memoryHint(size) });
   }
 
+  /** No turn runs any more in this session. */
+  private ended(): void {
+    this.running = false;
+    this.clearStall();
+    this.deps.store.setTurnAt(this.agentId, null);
+  }
+
   private agent(): Agent {
     const agent = this.deps.store.agent(this.agentId);
     if (!agent) throw new Error(`agent ${this.agentId} no longer exists`);
@@ -1076,13 +1109,16 @@ export class AgentRuntime {
     const session = this.session;
     this.generation++;
     this.session = undefined;
-    this.running = false;
-    this.clearStall();
+    this.ended();
     void session?.dispose().catch(() => {});
     const failure = failureOf(error);
     this.setStatus("error", message, failure);
     this.settleAwaiting({ failure });
   }
+}
+
+function interruptedText(again: boolean): string {
+  return `[mingle] Mingle restarted while you were working, which cut your last turn short. Pick up where you left off: finish what you were doing and tell whoever is waiting.${again ? " The messages that turn had not answered yet follow again; answer each once." : ""} If it was already done, there is nothing more to do.`;
 }
 
 function nudgeText(ids: readonly string[]): string {

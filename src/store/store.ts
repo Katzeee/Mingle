@@ -356,6 +356,16 @@ export class Store {
     this.db.prepare("UPDATE agents SET tidy_at = ? WHERE id = ?").run(at, id);
   }
 
+  /** When the agent's running turn began, or null when none runs (docs/spec.md 7.1). */
+  turnAt(id: string): number | null {
+    const row = this.db.prepare("SELECT turn_at FROM agents WHERE id = ?").get(id) as Row | undefined;
+    return row?.turn_at == null ? null : Number(row.turn_at);
+  }
+
+  setTurnAt(id: string, at: number | null): void {
+    this.db.prepare("UPDATE agents SET turn_at = ? WHERE id = ?").run(at, id);
+  }
+
   setAvatar(id: string, file: string | null): void {
     this.db.prepare("UPDATE agents SET avatar = ?, updated_at = ? WHERE id = ?").run(file, this.now(), id);
   }
