@@ -21,7 +21,7 @@
 | | |
 | --- | --- |
 | **聊天软件** | 微信、企业微信、飞书、钉钉、QQ、Slack、Discord、Telegram；GitHub 的 issue 和 PR（用 Agent 自己的账号）；Mac 上的 iMessage（给自己发消息） |
-| **Harness** | Claude Code、Codex、Cursor、OpenCode、Kimi Code、Grok Build、Qwen Code、Qoder、CodeBuddy Code、DeepSeek Harness、Pi、Antigravity，通过 [OAR](https://github.com/botiverse/oar) 接入 |
+| **Harness** | Claude Code、Codex、Cursor、OpenCode、Kimi Code、Grok Build、Qwen Code、Qoder、CodeBuddy Code、DeepSeek Harness、Pi、Antigravity、Devin、Factory Droid，通过 [OAR](https://github.com/botiverse/oar) 接入 |
 | **系统** | macOS、Windows、Linux |
 
 Mingle 处于早期开发阶段。核心流程已用 Claude Code、Codex、OpenCode、Kimi Code 端到端跑通。飞书在真实租户上验证过，其余聊天软件对着平台接口和测试验证。
