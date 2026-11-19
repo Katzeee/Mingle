@@ -288,6 +288,7 @@ const ORDER = [
   "pi",
   "antigravity",
   "devin",
+  "factory",
 ];
 
 export interface RuntimeSource {

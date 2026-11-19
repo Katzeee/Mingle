@@ -21,7 +21,7 @@ Create an agent on your own computer: it has a name, a role, a memory and a home
 | | |
 | --- | --- |
 | **Chat apps** | WeChat, WeCom, Feishu, DingTalk, QQ, Slack, Discord, Telegram; GitHub issues and pull requests, from an account of the agent's own; iMessage on a Mac, by texting yourself |
-| **Harnesses** | Claude Code, Codex, Cursor, OpenCode, Kimi Code, Grok Build, Qwen Code, Qoder, CodeBuddy Code, DeepSeek Harness, Pi, Antigravity, Devin, through [OAR](https://github.com/botiverse/oar) |
+| **Harnesses** | Claude Code, Codex, Cursor, OpenCode, Kimi Code, Grok Build, Qwen Code, Qoder, CodeBuddy Code, DeepSeek Harness, Pi, Antigravity, Devin, Factory Droid, through [OAR](https://github.com/botiverse/oar) |
 | **Systems** | macOS, Windows, Linux |
 
 Mingle is in early development. The core works end to end with Claude Code, Codex, OpenCode and Kimi Code. Feishu is verified on a real tenant; the other chat apps against their APIs and in tests.

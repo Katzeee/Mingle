@@ -90,22 +90,27 @@ describe("harness list", () => {
     expect(list[0]?.version).toBe("1.2.3");
   });
 
-  it("offers Devin as a usable harness on OAR 0.120.0", async () => {
-    const devin: Runtime = {
-      ...defaultRuntimes.require("devin"),
-      installation: async () => ({ kind: "available", via: "executable", command: "devin", version: "1.0.0" }),
-    };
+  it("offers Devin and Factory Droid as usable harnesses, after the others", async () => {
+    const installed = (id: string): Runtime => ({
+      ...defaultRuntimes.require(id),
+      installation: async () => ({ kind: "available", via: "executable", command: id, version: "1.0.0" }),
+    });
+    const runtimes = ["factory", "devin", "claude"].map(installed);
     const source = {
       require: (id: string): Runtime => {
-        if (id !== "devin") throw new Error("not offered here");
-        return devin;
+        const found = runtimes.find((r) => r.id === id);
+        if (!found) throw new Error("not offered here");
+        return found;
       },
-      list: () => [devin],
+      list: () => runtimes,
     };
     const list = await oarHarness(source).available();
-    expect(list.map((h) => h.id)).toEqual(["devin"]);
-    expect(list[0]?.disabled).toBeUndefined();
-    expect(list[0]?.noEnv).toBeUndefined();
+    expect(list.map((h) => h.id)).toEqual(["claude", "devin", "factory"]);
+    for (const entry of list) expect(entry.disabled).toBeUndefined();
+    // Devin takes the environment but not an appended prompt; Factory Droid takes both.
+    expect(list.find((h) => h.id === "devin")?.noEnv).toBeUndefined();
+    expect(list.find((h) => h.id === "factory")?.noEnv).toBeUndefined();
+    expect(list.find((h) => h.id === "factory")?.icon).toBeDefined();
   });
 
   /** CodeBuddy whose probe answers from `answers` in turn, found at a real file. */
