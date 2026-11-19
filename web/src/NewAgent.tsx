@@ -116,11 +116,14 @@ function suggestName(pool: readonly string[], taken: ReadonlySet<string>, curren
 
 export function NewAgent({
   first,
+  only,
   taken,
   onNavigate,
   onCreated,
 }: {
   first: boolean;
+  /** The one agent there already is, if exactly one: the note above the form offers it instead. */
+  only?: AgentView | undefined;
   /** Names other agents already have: the suggest button avoids them. */
   taken: readonly string[];
   onNavigate: Navigate;
@@ -193,6 +196,21 @@ export function NewAgent({
   const takenNames = new Set(taken.map((n) => n.toLowerCase()));
   const form = (
     <form onSubmit={submit} className="flex flex-col gap-8">
+      {/* One agent is enough for most people (docs/spec.md 1.5): say so before they make a second. */}
+      {first ? null : (
+        <p className="rounded-card border border-line bg-bg2 px-4 py-3 text-small text-ink2">
+          {t("new.oneIsEnough")}
+          {only ? (
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "connect", slug: only.slug })}
+              className="mt-1 block font-medium text-accent hover:underline"
+            >
+              {t("new.connectInstead", { name: only.name })}
+            </button>
+          ) : null}
+        </p>
+      )}
       <Steps>
         <Step n={1} state={named ? "done" : "now"} title={t("new.step1")} open>
           <div className="relative">

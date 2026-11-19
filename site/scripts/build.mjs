@@ -130,7 +130,9 @@ function phone(key, t, chat, msgs, cls = "") {
       const name =
         group && dir === "in" ? `<span class="nm">${agent ? "Alex" : esc(who)}${tag}<time>${time}</time></span>` : "";
       const rx = opts.react ? `<span class="chip">${opts.react}</span>` : "";
-      return `<div class="m ${dir}${agent ? " agent" : ""}" data-seq="${opts.seq ?? i}"${opts.typing ? " data-typing" : ""}>${avatar(who)}<div class="mb">${name}<div class="bb"><div class="tx"><p>${text}</p></div><span class="im-meta"><time>${group ? "" : time}</time>${dir === "out" && !agent ? '<i class="ticks">✓✓</i>' : ""}</span></div><div class="rx">${rx}</div></div></div>`;
+      // A reply that quotes what it answers, as the chat apps show one.
+      const quote = opts.quote ? `<div class="qt"><b>${esc(opts.quote[0])}</b>${esc(opts.quote[1])}</div>` : "";
+      return `<div class="m ${dir}${agent ? " agent" : ""}" data-seq="${opts.seq ?? i}"${opts.typing ? " data-typing" : ""}>${avatar(who)}<div class="mb">${name}<div class="bb">${quote}<div class="tx"><p>${text}</p></div><span class="im-meta"><time>${group ? "" : time}</time>${dir === "out" && !agent ? '<i class="ticks">✓✓</i>' : ""}</span></div><div class="rx">${rx}</div></div></div>`;
     })
     .join("");
   const back = '<span class="im-back" aria-hidden="true"></span>';
@@ -156,6 +158,24 @@ function heroPhone(key, t) {
     ["in", c.follower, c.follow],
     ["in", "agent", c.reply2, { typing: true }],
   ]);
+}
+
+// Several things at once: a long job acknowledged, a quick question answered meanwhile, the result under the ask.
+function parallelPhone(key, t) {
+  const c = t.parallel.chat;
+  return phone(
+    key,
+    t,
+    { app: "feishu", name: c.group, members: 6, hour: 14 },
+    [
+      ["in", c.asker, c.ask, { react: "👀" }],
+      ["in", "agent", c.ack, { typing: true }],
+      ["in", c.other, c.quick],
+      ["in", "agent", c.answer, { typing: true }],
+      ["in", "agent", c.done, { typing: true, quote: [c.asker, c.ask] }],
+    ],
+    "parallel-phone",
+  );
 }
 
 const brainIcon = (id) =>
@@ -296,12 +316,6 @@ function page(key) {
     .join("");
   const dl = (os) =>
     `<div class="dl"><b>${t.alsoFor[os]}</b><div>${downloads[os].map(([label, href]) => `<a href="${href}">${label}</a>`).join("")}</div></div>`;
-  // Under the hero: three harnesses, each in a different chat app. Any one goes with any other.
-  const pairs = [
-    ["claude", "Claude Code", key === "zh" ? "wechat" : "slack"],
-    ["codex", "Codex", "feishu"],
-    ["cursor", "Cursor", "telegram"],
-  ];
   const steps = t.how.steps
     .map(
       (s, i) => `
@@ -353,26 +367,16 @@ ${Object.values(copy)
 <main>
 <section class="hero">
   <div class="wrap">
-    <div class="hero-grid">
-      <div>
-        <h1 class="rise">${t.hero.title}</h1>
-        <ul class="pairs rise" aria-label="${esc(t.logos.harnesses)} → ${esc(t.logos.apps)}">${pairs
-          .map(
-            ([id, name, app]) =>
-              `<li>${brainIcon(id)}<b>${name}</b><span class="pair-arrow" aria-hidden="true">→</span>${platformIcon(app, 18)}${t.platforms[app]}</li>`,
-          )
-          .join("")}</ul>
+    <div class="hero-head">
+      <h1 class="rise">${t.hero.title}</h1>
+      <p class="lead rise">${t.hero.lead}</p>
+      <div class="cta rise">
+        <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
+           data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
+           data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
+        <a class="btn" href="#cli">${t.installTerminal}</a>
       </div>
-      <div class="hero-text">
-        <p class="lead rise">${t.hero.lead}</p>
-        <div class="cta rise">
-          <a class="btn btn-primary" data-os-download data-os="mac" href="${downloads.mac[0][1]}"
-             data-mac="${downloads.mac[0][1]}" data-windows="${downloads.windows[0][1]}" data-linux="#download"
-             data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
-          <a class="btn" href="#cli">${t.installTerminal}</a>
-        </div>
-        <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
-      </div>
+      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
     </div>
     ${shot("agent", lang, t.hero.alt, "hero-shot rise")}
   </div>
@@ -380,20 +384,21 @@ ${Object.values(copy)
 
 ${logos(t)}
 
-<section id="privacy" class="section">
-  <div class="wrap">
-    <p class="eyebrow">${t.privacy.eyebrow}</p>
-    <h2>${t.privacy.title}</h2>
-    <p class="lead">${t.privacy.lead}</p>
-    ${flow(t)}
-    <ul class="table table-2 reveal">
-      ${t.privacy.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
-    </ul>
-    <p class="note">${t.privacy.note}</p>
+${demoSection(key, t)}
+
+<section id="parallel" class="section">
+  <div class="wrap split parallel">
+    <div>
+      <p class="eyebrow">${t.parallel.eyebrow}</p>
+      <h2>${t.parallel.title}</h2>
+      <p class="lead">${t.parallel.lead}</p>
+      <ul class="lines reveal">
+        ${t.parallel.points.map(([h, p]) => `<li><b>${h}</b> ${p}</li>`).join("")}
+      </ul>
+    </div>
+    ${parallelPhone(key, t)}
   </div>
 </section>
-
-${demoSection(key, t)}
 
 <section id="how" class="section">
   <div class="wrap">
@@ -414,6 +419,19 @@ ${demoSection(key, t)}
     <ul class="lines reveal">
       ${t.brains.points.map(([h, p]) => `<li><b>${h}</b> ${p}</li>`).join("")}
     </ul>
+  </div>
+</section>
+
+<section id="privacy" class="section">
+  <div class="wrap">
+    <p class="eyebrow">${t.privacy.eyebrow}</p>
+    <h2>${t.privacy.title}</h2>
+    <p class="lead">${t.privacy.lead}</p>
+    ${flow(t)}
+    <ul class="table table-2 reveal">
+      ${t.privacy.items.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
+    </ul>
+    <p class="note">${t.privacy.note}</p>
   </div>
 </section>
 

@@ -23,9 +23,6 @@ const copy = {
   en: {
     locale: "en-US",
     role: "You help our weekend hiking group: plan routes, check the weather, and remind everyone of the meeting time on Friday evening.",
-    second: ["Iris", "Reads the articles our book club shares and keeps a list of what we liked."],
-    third: ["Kit", "My coding partner for side projects."],
-    fourth: ["Nova", "Translates between our Chinese and English teams."],
     // Where Alex is: the first two hold the chats below, the rest are connected too.
     platforms: [
       ["telegram", "@alex_hikes_bot"],
@@ -65,15 +62,12 @@ const copy = {
       900_000,
     ],
     task: "Compare the three route options by climb, distance and transit, and recommend one by Friday",
-    task2: "Book the minibus for Saturday",
+    task2: "Look up the climbing on the last five trails",
     reminder: "Remind the group: Saturday 7:30 at the north gate, and count who's coming",
   },
   zh: {
     locale: "zh-CN",
     role: "帮我们的周末徒步群规划路线、查天气，并在周五晚上提醒大家集合时间。",
-    second: ["读书会小助手", "整理读书会里分享的文章，记下大家推荐的书。"],
-    third: ["Kit", "陪我写业余项目的编程搭档。"],
-    fourth: ["小译", "在中英文团队之间翻译。"],
     platforms: [
       ["wechat", "Alex"],
       ["feishu", "Alex"],
@@ -106,7 +100,7 @@ const copy = {
       900_000,
     ],
     task: "比较三条备选路线的爬升、距离和交通，周五前给出推荐",
-    task2: "订周六的小巴",
+    task2: "查一下最近五条路线的爬升",
     reminder: "在群里提醒周六 7:30 香山公园北门集合，并确认人数",
   },
 };
@@ -279,11 +273,8 @@ for (const [lang, c] of Object.entries(copy)) {
             decodeURIComponent(h.icon[theme].replace(/^data:image\/svg\+xml,/, "")),
           );
     const claude = harnesses.find((h) => h.id === "claude")?.id ?? harnesses[0]?.id ?? "claude";
-    const codex = harnesses.find((h) => h.id === "codex")?.id ?? claude;
     const alex = await m.admin("POST", "/v1/admin/agents", { name: "Alex", harness: claude, role: c.role });
-    await m.admin("POST", "/v1/admin/agents", { name: c.second[0], harness: codex, role: c.second[1] });
-    await m.admin("POST", "/v1/admin/agents", { name: c.third[0], harness: claude, role: c.third[1] });
-    await m.admin("POST", "/v1/admin/agents", { name: c.fourth[0], harness: codex, role: c.fourth[1] });
+    // One agent: the site's story is one Alex in every chat app, not a row of agents (docs/spec.md 1.5).
 
     const db = new DatabaseSync(join(m.home, "mingle.db"));
     const now = Date.now();
@@ -343,18 +334,21 @@ for (const [lang, c] of Object.entries(copy)) {
       message.run("x1", "in", "x1", "u3", sender, ask, "replied", now - ago);
       message.run("x2", "out", "x2", null, null, reply, "sent", now - ago + 50_000);
     }
+    // Two things under way beside the conversation (docs/spec.md 4.13): one at work, one waiting its turn.
     insert(
-      "INSERT INTO tasks (id, agent_id, title, status, created_at, updated_at) VALUES ('t1', ?, ?, 'in_progress', ?, ?)",
+      "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, created_at, updated_at) VALUES ('t1', ?, ?, 'in_progress', 'x1', 'c3', 'running', 'brief', ?, ?)",
       alex.id,
       c.task,
-      now,
+      now - 12 * 60_000,
       now,
     );
     insert(
-      "INSERT INTO tasks (id, agent_id, title, status, created_at, updated_at) VALUES ('t2', ?, ?, 'todo', ?, ?)",
+      "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, created_at, updated_at) VALUES ('t2', ?, ?, 'in_progress', ?, 'c1', 'queued', 'brief', ?, ?)",
       alex.id,
       c.task2,
-      now,
+      // The group's latest question started it.
+      `m${c.messages.length - 1}`,
+      now - 2 * 60_000,
       now,
     );
     insert(

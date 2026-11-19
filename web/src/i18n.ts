@@ -476,6 +476,9 @@ const en = {
   "welcome.step3Hint": "Message it directly, or @ it in a group.",
   "welcome.start": "Get started",
   "welcome.privacy": "Data stays on the machines you choose. There is no Mingle cloud service or account.",
+  "new.oneIsEnough":
+    "One agent can join all your chat apps and work on several things at once. Make another when you want a different name or identity.",
+  "new.connectInstead": "Connect {name} to another chat app instead →",
   "new.title": "New agent",
   "new.subtitle": "You can change all of this later.",
   "new.step1": "Give it a name",
@@ -1257,6 +1260,8 @@ const zh: Record<MessageKey, string> = {
   "welcome.step3Hint": "私聊它，或在群里 @ 它。",
   "welcome.start": "开始",
   "welcome.privacy": "数据保存在你选择的设备上。没有 Mingle 云服务，也不需要注册账号。",
+  "new.oneIsEnough": "同一个 Agent 可以接进你所有的聊天软件，也能同时做几件事。需要另一个名字或身份时，再新建一个。",
+  "new.connectInstead": "给 {name} 接入另一个聊天软件 →",
   "new.title": "新建 Agent",
   "new.subtitle": "这些之后都能改。",
   "new.step1": "给它起个名字",
