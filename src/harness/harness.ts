@@ -152,6 +152,11 @@ export interface HarnessSession {
   /** Tokens in the session's context as the harness last reported it; null before it has. */
   contextTokens?(): number | null;
   /**
+   * Background tasks (commands, subagents) the session started and still runs. Claude Code begins a
+   * turn of its own when one ends, so the session must stay open until then.
+   */
+  background?(): number;
+  /**
    * Stop the agent's work: the running turn, and the background tasks (commands, subagents) it
    * left running, where the harness can stop one task (Claude Code, Codex, Qoder). True when
    * there was something to stop.
@@ -905,6 +910,9 @@ export function oarHarness(source: RuntimeSource = defaultRuntimes, options: { v
         },
         contextTokens() {
           return session.contextUsage?.().value?.tokens ?? null;
+        },
+        background() {
+          return tasks.size;
         },
         async abort() {
           const running = turn;

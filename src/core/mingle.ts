@@ -105,6 +105,8 @@ export interface MingleOptions {
   readonly coalesceMs?: number;
   /** See `RuntimeDeps.emptyTurnWaitMs`. */
   readonly emptyTurnWaitMs?: number;
+  /** See `LineDeps.settleMs`. */
+  readonly lineSettleMs?: number;
   /** See `RuntimeDeps.stallMs`. */
   readonly stallMs?: number;
   /** Which agents open a fresh session on a cold start (`cold.ts`); the value of `MINGLE_COLD_START`. */
@@ -237,6 +239,7 @@ export class Mingle {
         MINGLE_CLI: this.cliPath,
       }),
       agentEnv: (id) => this.agentEnv(id),
+      ...(options.lineSettleMs !== undefined ? { settleMs: options.lineSettleMs } : {}),
       note: (id, body) => this.store.addOwnerNote(id, body),
       unanswered: (task) => {
         const agent = this.store.agent(task.agentId);
