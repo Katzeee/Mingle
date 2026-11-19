@@ -236,6 +236,8 @@ erDiagram
 
 实现上只用 OAR 的 `deliver`：空闲时它开始新一轮，工作中它插话，不支持插话时它排队。每条消息用自己的 `inputId` 投递，重复投递不会重复生效。
 
+因团队或设置变更重开会话时，旧会话中仍在排队、尚未进入一轮的消息回到收件箱，由新会话继续处理；已经回复的消息不会重投。
+
 **收到即有回执，进度实时可见。** 这一步不经过 Agent，所以即使它正忙，发消息的人也立刻知道没有被漏掉、正在做什么：
 
 - **表情**：消息落库后，Mingle 立刻在这条消息上加"处理中"的表情，回复后换成"完成"，出错时换成"出错"。飞书用 OnIt → DONE / ERROR；Telegram 用 👀，回复后清除，出错 👎；GitHub 用 👀，回复后换成 🚀，出错换成 😕；没有表情能力的平台（个人微信）改为显示"正在输入"。
@@ -425,6 +427,7 @@ stateDiagram-v2
   received --> delivered: 投递（deliver）
   received --> failed: 会话打不开（fail）
   delivered --> failed: 本轮失败（fail）
+  delivered --> received: 会话被替换，仍在排队（requeue）
   delivered --> unanswered: 提示一次后仍未回复（give_up）
   received --> replied: 引用回复 / owner 的 /stop（reply）
   delivered --> replied: 引用回复或聊天里的普通发送（reply / send）
