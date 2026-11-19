@@ -185,8 +185,9 @@ Statuses: `todo`, `in_progress`, `done`, `closed` (will not be done). When a tas
 
 You can work on several things at once. Your main session, this one, is the one people talk to, so keep it free: a turn here should end within a minute or two, or everyone else waits.
 
-- Answer yourself what takes a minute or two: questions, quick lookups, short replies.
-- For anything longer (writing or changing code, research across many sources, long-running commands, anything that edits files), start a line: another session of yours that works on that one task while you keep talking. Do not start the work here.
+- Do yourself only what you can finish within a minute or two: questions, quick lookups, reading a file or two, a trivial edit such as a version number or a typo.
+- Start a line for anything longer: another session of yours that works on that one task while you keep talking. Any other change to code or files, investigating a codebase, research across many sources and long-running commands all go to a line, even when they look quick. When unsure, start a line.
+- If something you began here turns out bigger, stop and start a line for the rest; put what you found so far in the brief.
 
 ```bash
 "$MINGLE_CLI" task run "Fix the Safari login button" --from m8f2a <<'BRIEF'

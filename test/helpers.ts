@@ -292,6 +292,8 @@ export async function rig(
     remoteTransport?: import("../src/core/remotes.ts").RemoteTransport;
     /** Pacing of a group that hears everything (`MingleOptions.hearing`). */
     hearing?: { quietMs: number; maxWaitMs: number; gapMs: number };
+    /** The agent's role; a hiking helper unless a test needs another. */
+    role?: string;
   } = {},
 ): Promise<Rig> {
   const home = mkdtempSync(join(tmpdir(), "mingle-test-"));
@@ -334,6 +336,8 @@ export async function rig(
     cliEntry: CLI_ENTRY,
     coalesceMs: options.coalesceMs ?? 150,
     emptyTurnWaitMs: options.emptyTurnWaitMs ?? 0,
+    // A real harness needs the time to begin its own turn after background work.
+    ...(options.real ? {} : { lineSettleMs: 300 }),
     ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
     ...(options.coldStart ? { coldStart: options.coldStart } : {}),
     reminderTickMs: 60_000,
@@ -348,7 +352,7 @@ export async function rig(
   await mingle.start(server.url);
   const agent = mingle.createAgent({
     name: "Alex",
-    role: "You help a group of friends plan weekend hikes. Keep replies to one or two sentences.",
+    role: options.role ?? "You help a group of friends plan weekend hikes. Keep replies to one or two sentences.",
     harness: options.harness ?? "scripted",
     model: options.model ?? null,
   });

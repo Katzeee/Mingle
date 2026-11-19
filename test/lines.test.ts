@@ -287,6 +287,137 @@ describe("lines", () => {
     await lines.close();
   });
 
+  it("keeps a line's session open while its background work runs, so the harness can wake it", async () => {
+    current = await rig(async () => {});
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "@Alex hi" });
+    await until(() => mingle.store.agentChats(agentId).length > 0);
+    const chat = mingle.store.agentChats(agentId)[0];
+    const from = mingle.store.chatMessages(chat?.id as string, 1)[0]?.id as string;
+    let events: HarnessEvents | undefined;
+    let background = 0;
+    let disposed = 0;
+    const inputs: string[] = [];
+    const harness = {
+      open: async (_options: unknown, e: HarnessEvents) => {
+        events = e;
+        return {
+          id: "s1",
+          resumed: false,
+          deliver: async (text: string) => {
+            inputs.push(text);
+            e.onTurnStarted();
+            return { outcome: "prompted" as const };
+          },
+          background: () => background,
+          abort: async () => false,
+          dispose: async () => {
+            disposed++;
+          },
+        };
+      },
+    } as unknown as Harness;
+    const lines = new Lines({
+      store: mingle.store,
+      harness,
+      dir: () => join(current?.home as string, "lines-unit"),
+      manual: () => "",
+      env: () => ({}),
+      agentEnv: () => undefined,
+      note: () => {},
+      unanswered: () => [],
+      paused: () => false,
+      settleMs: 100,
+    });
+    const task = mingle.store.createLineTask({
+      agentId,
+      title: "Job",
+      fromMessage: from,
+      fromChat: chat?.id as string,
+      brief: "go",
+    });
+    lines.start(task);
+    await until(() => inputs.length === 1);
+    // The turn ends with a command still running in the background (a long sleep, a build).
+    background = 1;
+    events?.onTurnEnded({ kind: "completed" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(disposed).toBe(0);
+    expect(mingle.store.taskById(task.id)?.lineState).toBe("running");
+    // A follow-up meanwhile goes straight into the open session.
+    lines.wake(task.id, "how is it going?");
+    await until(() => inputs.length === 2);
+    events?.onTurnEnded({ kind: "completed" });
+    // The command ends and the harness begins a turn of its own; the line answers and rests.
+    background = 0;
+    events?.onTurnStarted(true);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(disposed).toBe(0);
+    events?.onTurnEnded({ kind: "completed" });
+    await until(() => mingle.store.taskById(task.id)?.lineState === "idle");
+    expect(disposed).toBe(1);
+    expect(mingle.store.taskById(task.id)?.status).toBe("in_progress");
+    await lines.close();
+  });
+
+  it("closes a line whose background work ended without the harness waking it", async () => {
+    current = await rig(async () => {});
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "@Alex hi" });
+    await until(() => mingle.store.agentChats(agentId).length > 0);
+    const chat = mingle.store.agentChats(agentId)[0];
+    const from = mingle.store.chatMessages(chat?.id as string, 1)[0]?.id as string;
+    let events: HarnessEvents | undefined;
+    let background = 1;
+    let disposed = 0;
+    const harness = {
+      open: async (_options: unknown, e: HarnessEvents) => {
+        events = e;
+        return {
+          id: "s1",
+          resumed: false,
+          deliver: async () => {
+            e.onTurnStarted();
+            return { outcome: "prompted" as const };
+          },
+          background: () => background,
+          abort: async () => false,
+          dispose: async () => {
+            disposed++;
+          },
+        };
+      },
+    } as unknown as Harness;
+    const lines = new Lines({
+      store: mingle.store,
+      harness,
+      dir: () => join(current?.home as string, "lines-unit"),
+      manual: () => "",
+      env: () => ({}),
+      agentEnv: () => undefined,
+      note: () => {},
+      unanswered: () => [],
+      paused: () => false,
+      settleMs: 100,
+    });
+    const task = mingle.store.createLineTask({
+      agentId,
+      title: "Job",
+      fromMessage: from,
+      fromChat: chat?.id as string,
+      brief: "go",
+    });
+    lines.start(task);
+    await until(() => events);
+    events?.onTurnEnded({ kind: "completed" });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(disposed).toBe(0);
+    background = 0;
+    await until(() => mingle.store.taskById(task.id)?.lineState === "idle");
+    expect(disposed).toBe(1);
+    await lines.close();
+  });
+
   it("guides the main session to hand off long work, and a line to stay on its task", () => {
     const main = renderManual("Alex", "", "darwin");
     expect(main).toContain("## Doing long work");

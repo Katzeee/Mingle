@@ -35,7 +35,20 @@ export interface LineDeps {
   readonly unanswered: (task: Task) => { id: string; input: string }[];
   readonly paused: (agentId: string) => boolean;
   readonly log?: (line: string) => void;
+  /**
+   * How long a line whose background work ended waits for the turn the harness begins on its own
+   * before it closes the session. Default `SETTLE_MS`.
+   */
+  readonly settleMs?: number;
 }
+
+/**
+ * A turn ended while commands the line started in the background still run (Claude Code refuses a
+ * long foreground `sleep` and the model backgrounds it): the session stays open, or closing it would
+ * kill them and the line would never answer. When they end, the harness begins a turn of its own;
+ * if none begins within this long, the line closes as after any turn.
+ */
+export const SETTLE_MS = 15_000;
 
 interface Line {
   readonly taskId: string;
@@ -59,6 +72,10 @@ interface Line {
   active: boolean;
   /** Bumped whenever the line is let go, so a late event of an old session changes nothing. */
   generation: number;
+  /** A turn of its session is under way, prompted or begun by the harness itself. */
+  turning: boolean;
+  /** Checks on background work after a turn ended with some still running. */
+  watch?: ReturnType<typeof setInterval> | undefined;
 }
 
 export class Lines {
@@ -172,6 +189,7 @@ export class Lines {
         recovering: true,
         active: false,
         generation: 0,
+        turning: false,
       };
       this.lines.set(task.id, line);
     }
@@ -263,10 +281,16 @@ export class Lines {
       env: { ...own, ...this.deps.env(agent, task) },
     };
     const events = {
-      onTurnStarted: () => {},
+      onTurnStarted: () => {
+        if (gen !== line.generation) return;
+        line.turning = true;
+        this.unwatch(line);
+      },
       onActivity: () => {},
       onTurnEnded: (outcome: TurnEnd) => {
-        if (gen === line.generation) void this.ended(line, outcome);
+        if (gen !== line.generation) return;
+        line.turning = false;
+        void this.ended(line, outcome);
       },
     };
     try {
@@ -310,9 +334,50 @@ export class Lines {
       }
       return;
     }
+    // Still working in the background: the harness wakes the session when that work ends.
+    if (task.status === "in_progress" && (line.session?.background?.() ?? 0) > 0) {
+      this.watch(line);
+      return;
+    }
+    await this.rest(line);
+  }
+
+  /** Nothing more to do for now: the session closes until the next follow-up. */
+  private async rest(line: Line): Promise<void> {
     await this.letGo(line, false);
-    if (store.taskById(line.taskId)?.lineState === "running") store.updateLine(line.taskId, { lineState: "idle" });
+    if (this.deps.store.taskById(line.taskId)?.lineState === "running") {
+      this.deps.store.updateLine(line.taskId, { lineState: "idle" });
+    }
     this.schedule(line.agentId);
+  }
+
+  /**
+   * Keep the session open while its background work runs. Once none runs and no turn has begun for
+   * `settleMs`, rest.
+   */
+  private watch(line: Line): void {
+    this.unwatch(line);
+    const settle = this.deps.settleMs ?? SETTLE_MS;
+    const every = Math.max(10, Math.min(1000, settle / 3));
+    const gen = line.generation;
+    let quietSince: number | undefined;
+    line.watch = setInterval(() => {
+      if (gen !== line.generation || line.turning || !line.session) return this.unwatch(line);
+      if ((line.session.background?.() ?? 0) > 0) {
+        quietSince = undefined;
+        return;
+      }
+      quietSince ??= Date.now();
+      if (Date.now() - quietSince < settle) return;
+      this.unwatch(line);
+      void this.rest(line);
+    }, every);
+    line.watch.unref?.();
+  }
+
+  private unwatch(line: Line): void {
+    clearInterval(line.watch);
+    line.watch = undefined;
   }
 
   private failed(line: Line, task: Task, why: string): void {
@@ -328,6 +393,8 @@ export class Lines {
   private async letGo(line: Line, abort: boolean): Promise<void> {
     line.generation++;
     line.active = false;
+    line.turning = false;
+    this.unwatch(line);
     const session = line.session;
     line.session = undefined;
     if (!session) return;

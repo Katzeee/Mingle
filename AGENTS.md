@@ -109,6 +109,7 @@ pnpm build        # 先构建控制台（web/dist），再编译到 dist/
 pnpm dev:web      # 控制台热更新开发，API 代理到正在运行的 mingle start
 pnpm ui:review    # 先 pnpm build。用长名字、长文本和所有状态，在多个宽度 × 中英文下截图到 .ui-review/
 MINGLE_E2E=claude,codex pnpm vitest run test/e2e.test.ts   # 用本机真实 harness 跑端到端，会消耗额度；条目可写 id:model 指定模型，长用例只给 MINGLE_E2E_DEEP（默认 claude,codex）跑
+MINGLE_E2E_LINES=claude pnpm vitest run test/e2e-lines.test.ts   # 真实 harness 是否把长活交给线（4.13），结果写到 e2e-lines-*.log；MINGLE_E2E_LINES_ASKS 选请求，MINGLE_E2E_LINES_ROUNDS 重复次数
 node scripts/package-smoke.mjs <安装包>   # 解包安装产物，验证内置 node 能跑 mingle --version 和 start（release.yml 的 smoke 作业在用）
 node scripts/im-smoke-check.mjs           # 检查运行中的 Mingle 有没有"收到未回复"的消息（配合 docs/im-smoke.md 的真机冒烟）
 pnpm desktop:build  # 构建桌面应用到 desktop/build/（需要 Go，go.mod 指定的版本会自动下载）
