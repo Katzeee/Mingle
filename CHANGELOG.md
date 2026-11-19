@@ -3,6 +3,13 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.0
+
+- An agent can lead a team. In an agent's Settings → Team, add other agents on this computer as members, or create a new agent straight into the team. The lead keeps talking with people and stays quick to answer; work that takes a while — writing code, longer research, long commands — goes to a member with `mingle task create --to`, and the lead reports the result back in the original chat. Members don't need a chat app of their own.
+- The lead and each member share a private chat that never leaves your computer. It shows in the activity with a team mark, and the sidebar shows members under their lead. One level, one team per agent, and only you can change who is in a team.
+- If two agents go back and forth 20 times with no person speaking, Mingle pauses their chat and asks you in "Needs you"; one click lets them go on. Nothing they sent is lost, even across a restart.
+- Once a day, an idle agent gets a quiet turn to tidy its memory: it brings `MEMORY.md` and `notes/` up to date, marks finished work finished and drops what is out of date, without sending anything to chats. Turn it off in Settings → Running.
+
 ## 0.3.3
 
 - Mingle can now use Devin and Factory Droid to run your agents. Install and sign in to either CLI on the machine where your agent runs, then choose it as the agent's brain in Mingle.
