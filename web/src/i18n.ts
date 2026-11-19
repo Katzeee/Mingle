@@ -116,6 +116,9 @@ const en = {
   "agent.pauseBody":
     "Stops what it is doing and takes no new messages until you resume it. Its memory, settings and chat apps are kept.",
   "agent.pauseBusy": "It is working now; pausing stops that work.",
+  "agent.tidyTitle": "Tidy memory daily",
+  "agent.tidyBody":
+    "Once a day, after people have talked to it and it has sat idle a while, {name} reviews recent conversations and updates its memory, dropping what is out of date. It sends nothing to chats; each tidy-up uses one harness turn.",
   "agent.pause": "Pause",
   "agent.resetTitle": "Reset session",
   "agent.resetBody":
@@ -896,6 +899,9 @@ const zh: Record<MessageKey, string> = {
   "agent.pauseTitle": "暂停 {name}",
   "agent.pauseBody": "停下手头的事，并且不再接收新消息，直到你恢复它。记忆、设置和聊天软件都保留。",
   "agent.pauseBusy": "它正在工作，暂停会中止这件事。",
+  "agent.tidyTitle": "每天整理记忆",
+  "agent.tidyBody":
+    "有人找过它、空闲一段时间后，{name} 每天回顾一次最近的对话，更新记忆：留下要紧的，删掉过时的。不会在聊天里说话。每次整理用掉一轮 harness 额度。",
   "agent.pause": "暂停",
   "agent.resetTitle": "重置会话",
   "agent.resetBody":

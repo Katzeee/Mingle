@@ -37,6 +37,8 @@ export interface Agent {
   hasReplied: boolean;
   /** Ask the owner about new people and groups on every chat app, not only public ones (docs/spec.md 4.7). */
   askAll: boolean;
+  /** Give the agent a daily turn to tidy its memory while it is idle (docs/spec.md 4.5). */
+  tidy: boolean;
   createdAt: number;
 }
 
@@ -322,6 +324,20 @@ export class Store {
 
   setAskAll(id: string, on: boolean): void {
     this.db.prepare("UPDATE agents SET ask_all = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
+  }
+
+  setTidy(id: string, on: boolean): void {
+    this.db.prepare("UPDATE agents SET tidy = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
+  }
+
+  /** When the agent was last given its memory tidy-up (docs/spec.md 4.5), or null if never. */
+  tidyAt(id: string): number | null {
+    const row = this.db.prepare("SELECT tidy_at FROM agents WHERE id = ?").get(id) as Row | undefined;
+    return row?.tidy_at == null ? null : Number(row.tidy_at);
+  }
+
+  setTidyAt(id: string, at: number): void {
+    this.db.prepare("UPDATE agents SET tidy_at = ? WHERE id = ?").run(at, id);
   }
 
   setAvatar(id: string, file: string | null): void {
@@ -1615,6 +1631,7 @@ function toAgent(r: Row): Agent {
     statusFailure: str(r.status_failure),
     hasReplied: Number(r.has_replied) === 1,
     askAll: Number(r.ask_all) === 1,
+    tidy: Number(r.tidy) === 1,
     createdAt: Number(r.created_at),
   };
 }

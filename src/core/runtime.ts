@@ -11,7 +11,7 @@ import {
   RECENT_ACTIONS,
 } from "./cold.ts";
 import { formatHandoff, renderMessage } from "./format.ts";
-import { MEMORY_LIMIT, memoryHint, memoryHintDue, memorySize, readRole } from "./home.ts";
+import { MEMORY_LIMIT, memoryHint, memoryHintDue, memorySize, readRole, tidyDue, tidyText } from "./home.ts";
 import { renderManual } from "./manual.ts";
 
 export interface RuntimeDeps {
@@ -298,6 +298,26 @@ export class AgentRuntime {
     if (this.pending.some((p) => p.kind === "handoff" && p.id === id)) return;
     this.pending.push({ kind: "handoff", id });
     this.schedule();
+  }
+
+  /**
+   * Start the daily memory tidy-up when it is due (docs/spec.md 4.5). Only an idle agent with
+   * nothing queued, no usage wait and no failed session gets it: it never joins or delays other
+   * work. Recorded before delivery, so a failing turn is not retried until the next day.
+   */
+  tidyIfDue(now = this.now()): boolean {
+    if (this.disposed || this.running || this.pending.length > 0 || this.blocked || this.status === "error") {
+      return false;
+    }
+    const agent = this.deps.store.agent(this.agentId);
+    if (!agent) return false;
+    const tidyAt = this.deps.store.tidyAt(this.agentId);
+    const lastInAt = this.deps.store.lastMessageTimes(this.agentId).inAt;
+    if (!tidyDue({ on: agent.tidy, now, idleSince: this.idleSince, tidyAt, lastInAt })) return false;
+    this.deps.store.setTidyAt(this.agentId, now);
+    this.deps.log?.(`${this.agentId}: memory tidy-up`);
+    this.enqueueText(tidyText(tidyAt));
+    return true;
   }
 
   /** True between an owner's stop and the next input Mingle delivers: the agent may not send. */

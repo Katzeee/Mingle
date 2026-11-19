@@ -292,6 +292,11 @@ export class Mingle {
       } catch (error) {
         this.log(`waiting-messages tick failed: ${(error as Error).message}`);
       }
+      try {
+        this.tidyMemories();
+      } catch (error) {
+        this.log(`memory tidy-up tick failed: ${(error as Error).message}`);
+      }
     }, tick);
     // Timers do not run while the computer sleeps: a tick that comes far later than due means it
     // slept, and its connections are likely dead without knowing it yet (docs/spec.md 7.1).
@@ -1802,6 +1807,17 @@ export class Mingle {
   /** Ask the owner about new people and groups on every chat app, not only public ones. */
   setAskAll(idOrSlug: string, on: boolean): void {
     this.store.setAskAll(this.agent(idOrSlug).id, on);
+  }
+
+  /** Switch the daily memory tidy-up (docs/spec.md 4.5) on or off for one agent. */
+  setTidy(idOrSlug: string, on: boolean): void {
+    this.store.setTidy(this.agent(idOrSlug).id, on);
+  }
+
+  /** Give each idle agent whose tidy-up is due its turn for it. Paused agents have no runtime. */
+  tidyMemories(now = Date.now()): void {
+    if (this.stopping) return;
+    for (const runtime of this.runtimes.values()) runtime.tidyIfDue(now);
   }
 
   /**
