@@ -427,7 +427,7 @@ stateDiagram-v2
   received --> delivered: 投递（deliver）
   received --> failed: 会话打不开（fail）
   delivered --> failed: 本轮失败（fail）
-  delivered --> received: 会话被替换，仍在排队（requeue）
+  delivered --> received: 会话被替换时仍在排队，或 Mingle 退出打断了那一轮（requeue，7.1）
   delivered --> unanswered: 提示一次后仍未回复（give_up）
   received --> replied: 引用回复 / owner 的 /stop（reply）
   delivered --> replied: 引用回复或聊天里的普通发送（reply / send）
@@ -965,6 +965,7 @@ flowchart TD
 
 - **去重**：`(connection_id, 平台消息 ID)` 唯一，平台重推不会重复触发。
 - **重启**：进程启动时恢复所有连接和 Agent 会话。重启前未处理完的消息保留在收件箱，重新投递。
+- **重启时正在干活**：一轮开始时把时间写进 `agents.turn_at`（迁移 026），结束、出错、被叫停、暂停或重置时清掉；Mingle 退出（重启、升级、崩溃）时不清。启动时它还在，或者还有已投递未回复的消息（升级自没有这一列的版本时也算），就说明上次退出打断了一轮：清掉标记，把这一轮收下但没回复的消息放回收件箱（`requeue`），在第一条输入最前面加一行 `[mingle] Mingle restarted while you were working…`，让 Agent 在续上的会话里接着做完，再把那些消息重新交给它。之后没回复的照常提醒一次、再标为“没有回复”。提醒、转交、团队任务这类没有消息可补的一轮也靠这行说明续上。不这样做的话，那一轮随旧进程消失，没有任何事件会再开一轮，Agent 会停在空闲，已投递的消息也一直卡在“已投递”（MING-124）。
 - **发送失败**：明确失败最多重试三次；结果不确定时不自动重试，避免重复发言。
 - **离线期间的消息**：以各平台长连接的补推能力为准，不自行向平台回拉历史。
 - **睡眠醒来**：定时器的间隔比预期长出一分钟以上，说明电脑睡过。此时立即关闭并重连所有聊天软件，不等各连接自己的心跳超时，然后补发期间到期的提醒（重复提醒只补一次，从当前时间算下一次）。
