@@ -17,6 +17,8 @@ import { REMOTE_MOCK } from "./ui-remote.mjs";
 const LOCALES = {
   "en-US": {
     storage: "en",
+    teamAdd: "Add member",
+    teamNew: "Create an agent for the team…",
     settings: "Settings",
     manage: "Manage",
     more: "More",
@@ -84,6 +86,8 @@ const LOCALES = {
   },
   "zh-CN": {
     storage: "zh-CN",
+    teamAdd: "添加成员",
+    teamNew: "新建一个 Agent 加入团队…",
     settings: "设置",
     manage: "管理",
     more: "更多",
@@ -278,6 +282,7 @@ export async function reviewInteractions({
   pauseSlug,
   sharedSlug,
   emptySlug,
+  teamSlug,
   envSecret,
   chrome,
   out,
@@ -1262,6 +1267,25 @@ export async function reviewInteractions({
         await resetScenario(localeName, labels, width);
         passed++;
         console.log(`reset ${localeName} ${width}: passed`);
+      }
+    }
+
+    // --- form a team: Settings → Team, "Add member" opens in place (docs/spec.md 4.13) ---
+    if (teamSlug) {
+      for (const [localeName, labels] of Object.entries(LOCALES)) {
+        for (const width of [1440, 560]) {
+          const tag = `team ${localeName} ${width}`;
+          await metrics(width);
+          await goto(`/a/${teamSlug}`, labels);
+          await clickEl(await call(centerOfText, "header", '[role="radio"]', labels.settings));
+          await clickEl(await settled("add member", buttonByText, labels.teamAdd));
+          await until("member picker", (wanted) => document.body.textContent.includes(wanted), labels.teamNew);
+          assert(await call(pageFits), `${tag}: horizontal overflow`);
+          await call(buttonByText, labels.teamAdd);
+          await shot(`${localeName}-${width}-team-add`);
+          passed++;
+          console.log(`${tag}: passed`);
+        }
       }
     }
 

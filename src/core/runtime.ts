@@ -13,6 +13,7 @@ import {
 import { formatHandoff, renderMessage } from "./format.ts";
 import { MEMORY_LIMIT, memoryHint, memoryHintDue, memorySize, readRole, tidyDue, tidyText } from "./home.ts";
 import { renderManual } from "./manual.ts";
+import { teamRole } from "./team.ts";
 
 export interface RuntimeDeps {
   readonly store: Store;
@@ -769,7 +770,13 @@ export class AgentRuntime {
         model: agent.model,
         cwd: this.deps.homeDir,
         resume: fresh ? null : agent.sessionId,
-        appendSystemPrompt: renderManual(agent.name, readRole(this.deps.homeDir), process.platform, Object.keys(own)),
+        appendSystemPrompt: renderManual(
+          agent.name,
+          readRole(this.deps.homeDir),
+          process.platform,
+          Object.keys(own),
+          teamRole(this.deps.store, agent),
+        ),
         // Mingle's own variables win over the agent's.
         env: { ...own, ...this.deps.env() },
       },

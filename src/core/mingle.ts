@@ -13,6 +13,7 @@ import type {
   OnboardingFailure,
   PermissionId,
   Platform,
+  SendResult,
 } from "../channels/channel.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
 import { checkEnvironment, runCommand } from "../platform/command.ts";
@@ -56,6 +57,7 @@ import type { Paths } from "./paths.ts";
 import { Remotes, type RemoteTransport } from "./remotes.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
+import { MAX_TEAM_HOPS, TeamHops, TeamLink, type TeamSend, teamPair, teamRefusal } from "./team.ts";
 import { BotHops, trigger } from "./trigger.ts";
 
 export interface OnboardingSession {
@@ -163,6 +165,8 @@ export class Mingle {
   private readonly claimMisses = new Map<string, number>();
   /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
   private readonly botHops = new BotHops();
+  /** Team chats' turns without a person speaking (docs/spec.md 4.13). */
+  private readonly teamHops = new TeamHops();
   /**
    * Chats that hear everything with a stretch waiting to reach the agent: from which message on,
    * since when it waits, and the timer. In memory: after a restart the next message starts anew.
@@ -265,6 +269,7 @@ export class Mingle {
       }
       for (const agent of this.store.agents()) this.saveLimitFor(agent.id);
     }
+    this.syncTeams();
     for (const agent of this.store.agents()) {
       // A paused agent stays paused across restarts: no session, no token, until the owner resumes it.
       if (agent.status === "paused") this.paused.add(agent.id);
@@ -480,6 +485,8 @@ export class Mingle {
       this.rescope(agent.id);
     }
     const brainChanged = harnessChanged || (patch.model !== undefined && (patch.model || null) !== agent.model);
+    // Teammates see the new name on their side of the team chat.
+    if (name && name !== agent.name) this.syncTeams();
     // The name is in the appended system prompt too, so either change reopens the session.
     if (brainChanged || (name && name !== agent.name)) await this.runtimes.get(agent.id)?.restart();
     return this.agent(agent.id);
@@ -520,17 +527,36 @@ export class Mingle {
     if (file && AVATAR_FILE.test(file)) rmSync(join(this.options.paths.avatars, file), { force: true });
   }
 
-  createAgent(input: { name: string; role: string; harness: string; model?: string | null }): Agent {
+  createAgent(input: { name: string; role: string; harness: string; model?: string | null; lead?: string }): Agent {
     const name = input.name.trim();
     if (!name) throw new MingleError("name_required", "give the agent a name");
+    // Checked before anything is made: a refused team leaves no agent behind.
+    const lead = input.lead ? this.agent(input.lead) : undefined;
+    if (lead?.leadId) {
+      throw new MingleError(
+        "team_lead_is_member",
+        `${lead.name} is in another agent's team, so it cannot lead one`,
+        409,
+      );
+    }
     const base = slugify(name);
     let slug = base;
     for (let i = 2; this.store.agent(slug) || existsSync(join(this.options.paths.agents, slug)); i++)
       slug = `${base}-${i}`;
     const agent = this.store.createAgent({ name, slug, harness: input.harness, model: input.model ?? null });
     createHome(this.homeDir(agent), name, input.role);
+    if (lead) {
+      // In the team from its first session, so its guide already says so: no restart needed.
+      this.store.setLead(agent.id, lead.id);
+      this.syncTeams();
+      this.teamNote(
+        lead.id,
+        `[mingle] The owner added ${name} to your team. Run "$MINGLE_CLI" whoami to see your team.`,
+      );
+      void this.runtimes.get(lead.id)?.refresh();
+    }
     this.addRuntime(agent).start();
-    return agent;
+    return this.agent(agent.id);
   }
 
   agent(idOrSlug: string): Agent {
@@ -623,6 +649,10 @@ export class Mingle {
     this.abortCheck(agent.id);
     try {
       for (const connection of this.store.connections(agent.id)) await this.removeConnection(connection.id);
+      const team = this.store.teamConnection(agent.id);
+      if (team) this.closeLive(team.id);
+      const lead = agent.leadId ? this.store.agent(agent.leadId) : undefined;
+      const members = this.store.members(agent.id);
       for (const { name } of this.store.envNames(agent.id)) {
         await this.options.secrets.delete(envRef(agent.id, name)).catch(() => {});
       }
@@ -633,6 +663,15 @@ export class Mingle {
       this.paused.delete(agent.id);
       this.store.deleteAgent(agent.id);
       this.removeAvatar(agent.avatar);
+      // Its team goes with it: members are on their own now, a lead has one member fewer.
+      for (const member of members) {
+        this.teamNote(member.id, `[mingle] ${agent.name} was deleted, so you are no longer in a team.`);
+        await this.runtimes.get(member.id)?.refresh();
+      }
+      if (lead) {
+        this.teamNote(lead.id, `[mingle] ${agent.name} was deleted and is no longer in your team.`);
+        if (this.store.members(lead.id).length === 0) await this.runtimes.get(lead.id)?.refresh();
+      }
       if (removeHome) rmSync(this.homeDir(agent), { recursive: true, force: true });
     } finally {
       this.deleting.delete(agent.id);
@@ -1463,6 +1502,7 @@ export class Mingle {
     if (!bot) this.learnProfile(connectionId, contact);
     if (!bot) this.botHops.person(chat.id);
     else if (triggers) this.botHops.woke(chat.id);
+    if (!bot && triggers) this.teamPerson(connection.agentId);
     else if (decision === "brake" && this.botHops.braked(chat.id)) {
       // Said once, without quoting or naming the bot as a mention: that would only wake it again.
       const name = contactName(contact) ?? inbound.sender.name;
@@ -1901,6 +1941,209 @@ export class Mingle {
       this.store.retryable(agent.id, ids).map((message) => message.id),
       "ignore",
     );
+  }
+
+  // ------------------------------------------------------------------ teams
+
+  /**
+   * Every agent in a team has its end of the team chats open, with its teammates in its address
+   * book under their current names (docs/spec.md 4.13). Cheap and idempotent: run after any change.
+   */
+  syncTeams(): void {
+    for (const agent of this.store.agents()) {
+      const mates = this.teammates(agent.id);
+      const existing = this.store.teamConnection(agent.id);
+      if (!mates.length && !existing) continue;
+      const connection = this.store.teamConnection(agent.id, true);
+      if (!connection) continue;
+      if (connection.botName !== agent.name) this.store.updateConnection(connection.id, { botName: agent.name });
+      const live = this.live.get(connection.id);
+      if (!live || live.bot.name !== agent.name) {
+        this.live.set(
+          connection.id,
+          new TeamLink(
+            agent,
+            (send) => this.teamDeliver(send),
+            (to) => teamPair(this.store, agent.id, to),
+          ),
+        );
+      }
+      for (const mate of mates) {
+        const contact = this.store.touchContact(connection.id, mate.id, mate.name);
+        if (!contact.isBot) this.store.setContactBot(contact.id, true);
+      }
+    }
+  }
+
+  /** The agents this one shares a team chat with: its lead, or its members. */
+  teammates(agentId: string): Agent[] {
+    const agent = this.store.agent(agentId);
+    if (!agent) return [];
+    const lead = agent.leadId ? this.store.agent(agent.leadId) : undefined;
+    return lead ? [lead] : this.store.members(agent.id);
+  }
+
+  /**
+   * Can this agent write to a teammate in its team chat now? The other one must still be in the
+   * team and not paused, so the sender hears at once that nobody will read it (docs/spec.md 4.13).
+   */
+  checkTeamSend(agentId: string, chatId: string): void {
+    const chat = this.store.agentChat(agentId, chatId);
+    const connection = chat && this.store.connection(chat.connectionId);
+    if (!chat || connection?.platform !== "team") return;
+    const other = this.store.agent(chat.platformId);
+    if (!other || !teamPair(this.store, agentId, other.id)) {
+      throw new MingleError(
+        "team_left",
+        `${other?.name ?? "That agent"} is no longer in your team, so it will not get this. Tell whoever asked`,
+        409,
+      );
+    }
+    if (this.paused.has(other.id)) {
+      throw new MingleError(
+        "agent_paused",
+        `${other.name} is paused by the owner and will not read this until it is resumed. Tell whoever asked, or pick another member`,
+        409,
+      );
+    }
+  }
+
+  /** A message from one agent's end of a team chat to the other's (docs/spec.md 4.13). */
+  private teamDeliver(send: TeamSend): SendResult {
+    const from = this.store.agent(send.from);
+    const to = this.store.agent(send.to);
+    if (!from || !to || !teamPair(this.store, from.id, to.id)) {
+      return { kind: "failed", code: "forbidden", retryable: false, detail: "not in the same team" };
+    }
+    if (this.paused.has(to.id)) {
+      return { kind: "failed", code: "forbidden", retryable: false, detail: `${to.name} is paused` };
+    }
+    this.syncTeams();
+    const connection = this.store.teamConnection(to.id, true);
+    if (!connection) return { kind: "failed", code: "unknown", retryable: false };
+    const chat = this.store.upsertChat({
+      connectionId: connection.id,
+      platformId: from.id,
+      kind: "dm",
+      name: from.name,
+      peerId: from.id,
+    });
+    this.store.touchContact(connection.id, from.id, from.name);
+    const quoted = send.replyTo ? this.store.messageByPlatformId(chat.id, send.replyTo) : undefined;
+    // Past the limit with no person in between: kept, and handed over only once the owner says so.
+    const stopped = this.teamHops.woke(from.id, to.id);
+    const message = this.store.insertInbound({
+      chatId: chat.id,
+      platformId: send.platformId,
+      senderId: from.id,
+      senderName: from.name,
+      body: send.text,
+      attachments: send.files.map((f) => ({ ref: f.id, name: f.name })),
+      replyTo: quoted?.id ?? null,
+      triggers: true,
+      held: stopped,
+      createdAt: Date.now(),
+    });
+    if (stopped) this.log(`team chat ${from.name} → ${to.name} stopped after ${MAX_TEAM_HOPS} turns without a person`);
+    else if (message) this.runtimes.get(to.id)?.enqueueMessage(message.id);
+    return { kind: "sent", platformId: send.platformId };
+  }
+
+  /** A person wrote to this agent: its team chats get their turns back, and one that stopped goes on. */
+  private teamPerson(agentId: string): void {
+    this.teamHops.person(agentId);
+    for (const mate of this.teammates(agentId)) {
+      if (this.teamHops.stoppedAt(agentId, mate.id) !== null) this.releaseTeam(agentId, mate.id);
+    }
+  }
+
+  /** Let two agents' stopped team chat go on: what each sent the other meanwhile is handed over. */
+  private releaseTeam(a: string, b: string): number {
+    this.teamHops.release(a, b);
+    let released = 0;
+    for (const [to, from] of [
+      [a, b],
+      [b, a],
+    ] as const) {
+      const connection = this.store.teamConnection(to);
+      const chat = connection && this.store.directChat(connection.id, from);
+      if (!chat) continue;
+      const held = this.store
+        .chatMessages(chat.id, 200)
+        .filter((m) => m.direction === "in" && m.state === "held")
+        .map((m) => m.id);
+      for (const id of this.store.moveInbound(held, "admit")) {
+        this.runtimes.get(to)?.enqueueMessage(id);
+        released++;
+      }
+    }
+    return released;
+  }
+
+  /** The owner lets a stopped team chat go on (docs/spec.md 4.13). */
+  continueTeam(idOrSlug: string, withId: string): number {
+    const agent = this.agent(idOrSlug);
+    const other = this.agent(withId);
+    if (!teamPair(this.store, agent.id, other.id)) throw notFound("agent", withId);
+    const released = this.releaseTeam(agent.id, other.id);
+    this.log(`${agent.name}: owner let the team chat with ${other.name} go on (${released} message(s))`);
+    return released;
+  }
+
+  /** The team chats of this agent that stopped and wait for the owner. */
+  teamStops(agentId: string): { with: string; name: string; at: number }[] {
+    return this.teammates(agentId).flatMap((mate) => {
+      const at = this.teamHops.stoppedAt(agentId, mate.id);
+      return at === null ? [] : [{ with: mate.id, name: mate.name, at }];
+    });
+  }
+
+  /** The owner adds an agent to a team (docs/spec.md 4.13). */
+  async addMember(leadIdOrSlug: string, memberIdOrSlug: string): Promise<Agent> {
+    const lead = this.agent(leadIdOrSlug);
+    const member = this.agent(memberIdOrSlug);
+    const refused = teamRefusal(this.store, lead, member);
+    if (refused) throw refused;
+    if (member.leadId === lead.id) return member;
+    const first = this.store.members(lead.id).length === 0;
+    this.store.setLead(member.id, lead.id);
+    this.syncTeams();
+    this.teamNote(
+      lead.id,
+      `[mingle] The owner added ${member.name} to your team. Run "$MINGLE_CLI" whoami to see your team.`,
+    );
+    this.teamNote(
+      member.id,
+      `[mingle] The owner put you in ${lead.name}'s team. ${lead.name} will message you with work.`,
+    );
+    this.log(`${lead.name}: owner added ${member.name} to the team`);
+    // Its guide gains a section on the team: from the next message on, like a role change.
+    await this.runtimes.get(member.id)?.refresh();
+    if (first) await this.runtimes.get(lead.id)?.refresh();
+    return this.agent(member.id);
+  }
+
+  /** The owner takes an agent out of a team. Its chat and tasks stay on record. */
+  async removeMember(leadIdOrSlug: string, memberIdOrSlug: string): Promise<void> {
+    const lead = this.agent(leadIdOrSlug);
+    const member = this.agent(memberIdOrSlug);
+    if (member.leadId !== lead.id)
+      throw new MingleError("member_not_found", `${member.name} is not in ${lead.name}'s team`, 404);
+    this.store.setLead(member.id, null);
+    this.teamHops.release(lead.id, member.id);
+    this.teamNote(lead.id, `[mingle] The owner took ${member.name} out of your team. Do not send it work any more.`);
+    this.teamNote(
+      member.id,
+      `[mingle] The owner took you out of ${lead.name}'s team. Drop work it gave you unless told otherwise.`,
+    );
+    this.log(`${lead.name}: owner took ${member.name} out of the team`);
+    await this.runtimes.get(member.id)?.refresh();
+    if (this.store.members(lead.id).length === 0) await this.runtimes.get(lead.id)?.refresh();
+  }
+
+  /** Told with the agent's next input; never a turn of its own (like the owner's notes, docs/spec.md 4.6). */
+  private teamNote(agentId: string, body: string): void {
+    this.store.addOwnerNote(agentId, body);
   }
 
   // --------------------------------------------------------------- reminders

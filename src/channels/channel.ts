@@ -22,7 +22,9 @@ export type Platform =
   | "discord"
   | "telegram"
   | "imessage"
-  | "github";
+  | "github"
+  /** Not a chat app: the direct chats between a lead and its team on this computer (docs/spec.md 4.13). */
+  | "team";
 
 export type ChatKind = "dm" | "group" | "thread";
 
