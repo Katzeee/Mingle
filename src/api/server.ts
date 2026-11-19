@@ -16,6 +16,7 @@ import { renderManual } from "../core/manual.ts";
 import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
 import * as people from "../core/people.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
+import { teamRole } from "../core/team.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
 import { readSshConfig } from "../platform/ssh-config.ts";
 import {
@@ -26,6 +27,7 @@ import {
   contactName,
   type Handoff,
   type Message,
+  type Task,
   type TaskStatus,
 } from "../store/store.ts";
 import { VERSION } from "../version.ts";
@@ -109,8 +111,42 @@ export function createApi(mingle: Mingle): Hono<Env> {
       bot: n.botName,
       state: mingle.isLive(n.id) ? n.state : n.state === "connected" ? "reconnecting" : n.state,
     }));
-    return c.json({ name: agent.name, harness: agent.harness, home: mingle.homeDir(agent), connections });
+    return c.json({
+      name: agent.name,
+      harness: agent.harness,
+      home: mingle.homeDir(agent),
+      connections,
+      team: teamView(agent),
+    });
   });
+
+  /**
+   * Who the agent works with (docs/spec.md 4.13): its lead, or its members with what each is doing,
+   * so a lead can pick someone free. `contact` is where `message send --to` reaches them.
+   */
+  const teamView = (agent: Agent) => {
+    const role = teamRole(store, agent);
+    if (!role) return null;
+    const team = store.teamConnection(agent.id);
+    const mate = (other: Agent) => {
+      const contact = team ? store.contactByPlatformId(team.id, other.id) : undefined;
+      const status = mingle.isPaused(other.id) ? "paused" : other.status;
+      const doing = store.assignedTasks(other.id, false);
+      return {
+        name: other.name,
+        contact: contact?.id ?? null,
+        role: firstLine(readRole(mingle.homeDir(other))),
+        status,
+        detail: status === "working" || status === "thinking" ? other.statusDetail : null,
+        tasks: doing.map((t) => ({ id: t.id, title: t.title, status: t.status })),
+      };
+    };
+    if (role.role === "member") {
+      const lead = agent.leadId ? store.agent(agent.leadId) : undefined;
+      return { role: "member" as const, lead: lead ? mate(lead) : null, members: [] };
+    }
+    return { role: "lead" as const, lead: null, members: store.members(agent.id).map(mate) };
+  };
 
   app.get("/v1/agent/manual", (c) => {
     const agent = c.get("agent");
@@ -122,6 +158,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
         readRole(mingle.homeDir(agent)),
         process.platform,
         names.map((v) => v.name),
+        teamRole(store, agent),
       ),
     );
   });
@@ -142,6 +179,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     const body = await c.req.json<{ messageId: string; text: string; files?: string[] }>();
     const original = store.agentMessage(agent.id, body.messageId);
     if (!original) throw notFound("message", body.messageId);
+    mingle.checkTeamSend(agent.id, original.chatId);
     const report = await mingle.outbox.send(agent.id, {
       chatId: original.chatId,
       text: body.text ?? "",
@@ -158,6 +196,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     // A chat, or a person by contact or person ID: their direct chat, opened if need be.
     const to = body.to ?? body.chatId ?? "";
     const chatId = await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to);
+    mingle.checkTeamSend(agent.id, chatId);
     const report = await mingle.outbox.send(agent.id, {
       chatId,
       text: body.text ?? "",
@@ -322,7 +361,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.post("/v1/agent/tasks", async (c) => {
     const agent = c.get("agent");
-    const body = await c.req.json<{ title: string; from?: string }>();
+    const body = await c.req.json<{ title: string; from?: string; to?: string; brief?: string }>();
     if (!body.title?.trim())
       throw new MingleError("title_required", 'give the task a title: mingle task create "Compare the routes"');
     let fromChat: string | null = null;
@@ -331,14 +370,78 @@ export function createApi(mingle: Mingle): Hono<Env> {
       if (!message) throw notFound("message", body.from);
       fromChat = message.chatId;
     }
-    return c.json(
-      store.createTask({ agentId: agent.id, title: body.title.trim(), fromMessage: body.from ?? null, fromChat }),
+    // Given to a member of the agent's team (docs/spec.md 4.13): the brief goes to it in their chat.
+    const member = body.to ? teamMember(agent, body.to) : undefined;
+    let chatId: string | undefined;
+    if (member) {
+      const contact = store.contactByPlatformId(store.teamConnection(agent.id)?.id ?? "", member.id);
+      if (!contact) throw new MingleError("team_not_ready", "the team chat is not open yet; try again", 503);
+      chatId = await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, contact.id);
+      mingle.checkTeamSend(agent.id, chatId);
+    }
+    const task = store.createTask({
+      agentId: agent.id,
+      title: body.title.trim(),
+      fromMessage: body.from ?? null,
+      fromChat,
+      assigneeId: member?.id ?? null,
+    });
+    if (!member || !chatId) return c.json(taskView(task));
+    const brief = body.brief?.trim();
+    let report: Awaited<ReturnType<typeof mingle.outbox.send>>;
+    try {
+      report = await mingle.outbox.send(agent.id, {
+        chatId,
+        text: `Task ${task.id}: ${task.title}${brief ? `\n\n${brief}` : ""}`,
+      });
+    } catch (error) {
+      // The member never got it: no task may claim it is on one.
+      store.setTaskStatus(agent.id, task.id, "closed");
+      throw error;
+    }
+    return c.json({
+      ...taskView(task),
+      message: report.messages[0]?.id ?? null,
+      state: report.state,
+      degraded: report.degraded,
+    });
+  });
+
+  /** A member of the agent's team, by name, slug, agent ID or its contact ID in the team chat. */
+  const teamMember = (agent: Agent, to: string): Agent => {
+    const members = store.members(agent.id);
+    const wanted = to.trim().toLowerCase();
+    const team = store.teamConnection(agent.id);
+    const found = members.find(
+      (m) =>
+        m.id === to ||
+        m.slug === wanted ||
+        m.name.toLowerCase() === wanted ||
+        (team && store.contactByPlatformId(team.id, m.id)?.id === to),
     );
+    if (found) return found;
+    throw new MingleError(
+      members.length ? "not_a_member" : "no_team",
+      members.length
+        ? `${to} is not in your team. Your members: ${members.map((m) => m.name).join(", ")}`
+        : "you have no team; only your owner can give you one",
+      404,
+    );
+  };
+
+  /** A task with the names of who gave it and who does it, for agents and the console. */
+  const taskView = (task: Task) => ({
+    ...task,
+    assignee: task.assigneeId ? (store.agent(task.assigneeId)?.name ?? null) : null,
+    lead: task.assigneeId ? (store.agent(task.agentId)?.name ?? null) : null,
   });
 
   app.get("/v1/agent/tasks", (c) => {
     const agent = c.get("agent");
-    return c.json(store.tasks(agent.id, c.req.query("all") === "1"));
+    const all = c.req.query("all") === "1";
+    // Its own, then what its lead gave it.
+    const tasks = [...store.tasks(agent.id, all), ...store.assignedTasks(agent.id, all)];
+    return c.json(tasks.map((t) => ({ ...taskView(t), mine: t.agentId === agent.id })));
   });
 
   app.patch("/v1/agent/tasks/:id", async (c) => {
@@ -347,9 +450,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!TASK_STATUSES.includes(status)) {
       throw new MingleError("invalid_status", `use one of: ${TASK_STATUSES.join(", ")}`);
     }
+    const before = store.taskFor(agent.id, c.req.param("id"));
     const task = store.setTaskStatus(agent.id, c.req.param("id"), status);
-    if (!task) throw notFound("task", c.req.param("id"));
-    return c.json(task);
+    if (!task || !before) throw notFound("task", c.req.param("id"));
+    // A member finishing what its lead gave it: the lead hears with its next input, no turn of its own.
+    if (task.assigneeId === agent.id && task.agentId !== agent.id && before.status !== status) {
+      store.addOwnerNote(task.agentId, `[mingle] ${agent.name} set task ${task.id} ("${task.title}") to ${status}.`);
+    }
+    return c.json(taskView(task));
   });
 
   app.post("/v1/agent/reminders", async (c) => {
@@ -499,6 +607,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
         claim: claimView(n),
       })),
       requests: accessRequests(agent.id),
+      // Team chats Mingle stopped after too many turns without a person (docs/spec.md 4.13).
+      teamStops: mingle.teamStops(agent.id),
     };
   };
 
@@ -997,7 +1107,28 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.get("/v1/admin/agents/:id/work", (c) => {
     const agent = mingle.agent(c.req.param("id"));
-    return c.json({ tasks: store.tasks(agent.id, false), reminders: store.reminders(agent.id) });
+    const tasks = [...store.tasks(agent.id, false), ...store.assignedTasks(agent.id, false)];
+    return c.json({ tasks: tasks.map(taskView), reminders: store.reminders(agent.id) });
+  });
+
+  /** The owner adds an agent to this agent's team (docs/spec.md 4.13). Returns the member. */
+  app.post("/v1/admin/agents/:id/members", async (c) => {
+    const { member } = await c.req.json<{ member?: unknown }>();
+    if (typeof member !== "string" || !member) throw new MingleError("member_required", "say which agent to add");
+    return c.json(agentView(await mingle.addMember(c.req.param("id"), member)));
+  });
+
+  /** The owner takes an agent out of this agent's team. */
+  app.delete("/v1/admin/agents/:id/members/:memberId", async (c) => {
+    await mingle.removeMember(c.req.param("id"), c.req.param("memberId"));
+    return c.json({ ok: true });
+  });
+
+  /** The owner lets a team chat that Mingle stopped go on. */
+  app.post("/v1/admin/agents/:id/team/continue", async (c) => {
+    const body = await c.req.json<{ with?: unknown }>();
+    if (typeof body.with !== "string") throw new MingleError("with_required", "say which teammate");
+    return c.json({ released: mingle.continueTeam(c.req.param("id"), body.with) });
   });
 
   /** The owner stops a reminder; the agent hears it with its next input (docs/spec.md 4.6). */
@@ -1044,7 +1175,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
   };
 
   app.post("/v1/admin/agents", async (c) => {
-    const body = await c.req.json<{ name: string; role?: string; harness: string; model?: string }>();
+    const body = await c.req.json<{ name: string; role?: string; harness: string; model?: string; lead?: string }>();
     await requireHarness(body.harness);
     return c.json(
       agentView(
@@ -1053,6 +1184,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
           role: body.role ?? "",
           harness: body.harness,
           model: body.model ?? null,
+          ...(body.lead ? { lead: body.lead } : {}),
         }),
       ),
     );
@@ -1299,4 +1431,13 @@ export function listen(app: Hono<Env>, port: number): Promise<{ url: string; clo
     });
     server.on("error", reject);
   });
+}
+
+/** The first non-empty line of a role, for a one-line description. */
+function firstLine(text: string): string | null {
+  const line = text
+    .split("\n")
+    .map((l) => l.replace(/^#+\s*/, "").trim())
+    .find(Boolean);
+  return line ? (line.length > 120 ? `${line.slice(0, 119)}…` : line) : null;
 }

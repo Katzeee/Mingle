@@ -7,6 +7,7 @@ import { errorText, type Locale, type MessageKey, useI18n } from "./i18n.ts";
 import { LocationSentence, type Place, SshSetup, useSshHosts } from "./SshLocation.tsx";
 import {
   ApiKeyHint,
+  Avatar,
   Button,
   DiceIcon,
   Field,
@@ -117,10 +118,13 @@ function suggestName(pool: readonly string[], taken: ReadonlySet<string>, curren
 export function NewAgent({
   first,
   taken,
+  lead: leadGiven,
   onNavigate,
   onCreated,
 }: {
   first: boolean;
+  /** Made from a team's "add member": the new agent joins this agent's team (docs/spec.md 4.13). */
+  lead?: AgentView | undefined;
   /** Names other agents already have: the suggest button avoids them. */
   taken: readonly string[];
   onNavigate: Navigate;
@@ -139,6 +143,7 @@ export function NewAgent({
   const [model, setModel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lead, setLead] = useState(leadGiven);
 
   // A host being added has no brains yet; every other place reads its own list.
   const {
@@ -165,11 +170,17 @@ export function NewAgent({
     setBusy(true);
     setError(null);
     try {
-      const agent = await api.createAgent({ name: name.trim(), role, harness, ...(model ? { model } : {}) });
+      const agent = await api.createAgent({
+        name: name.trim(),
+        role,
+        harness,
+        ...(model ? { model } : {}),
+        ...(lead ? { lead: lead.id } : {}),
+      });
       // The shell must know the new agent before we route to it, or it treats the slug as gone.
       await onCreated(agent);
-      // Straight on to the next step: putting it in a chat app.
-      onNavigate({ kind: "connect", slug: agent.slug }, { replace: true });
+      // Straight on to the next step: putting it in a chat app. A team member needs none.
+      onNavigate(lead ? { kind: "agent", slug: agent.slug } : { kind: "connect", slug: agent.slug }, { replace: true });
     } catch (e) {
       setError(errorText(t, e));
       setBusy(false);
@@ -193,6 +204,25 @@ export function NewAgent({
   const takenNames = new Set(taken.map((n) => n.toLowerCase()));
   const form = (
     <form onSubmit={submit} className="flex flex-col gap-8">
+      {lead ? (
+        <p className="-mb-3 flex">
+          <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-accent-tint pr-1 pl-1.5 text-small text-accent">
+            <Avatar name={lead.name} src={lead.avatar} size={18} />
+            {t("new.joinTeam", { name: lead.name })}
+            <button
+              type="button"
+              aria-label={t("new.joinTeamRemove")}
+              title={t("new.joinTeamRemove")}
+              onClick={() => setLead(undefined)}
+              className="flex size-5 items-center justify-center rounded-full transition-colors duration-[120ms] hover:bg-accent/15"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M2.5 2.5l5 5m0-5l-5 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
+          </span>
+        </p>
+      ) : null}
       <Steps>
         <Step n={1} state={named ? "done" : "now"} title={t("new.step1")} open>
           <div className="relative">
@@ -292,11 +322,14 @@ export function NewAgent({
         </Step>
       </Steps>
       <div className="flex flex-col gap-3 border-t border-line pt-5">
-        <p className="text-small text-ink2">{t(place.host || place.setup ? "ssh.notice" : "create.notice")}</p>
+        <p className="text-small text-ink2">
+          {t(place.host || place.setup ? "ssh.notice" : "create.notice")}
+          {lead ? <span className="mt-1 block">{t("new.memberHint")}</span> : null}
+        </p>
         {error ? <p className="text-small text-red">{error}</p> : null}
         <div className="flex items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy || !named || !chosen || Boolean(chosen.disabled)}>
-            {busy ? t("new.creating") : t("new.create")}
+            {busy ? t("new.creating") : lead ? t("new.createMember") : t("new.create")}
           </Button>
           <Button variant="ghost" onClick={() => onNavigate({ kind: "home" })}>
             {t("create.cancel")}

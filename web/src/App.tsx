@@ -25,14 +25,17 @@ import { Welcome } from "./Welcome.tsx";
 
 export type View =
   | { kind: "home" }
-  | { kind: "new" }
+  | { kind: "new"; lead?: string }
   | { kind: "settings" }
   | { kind: "agent"; slug: string }
   | { kind: "connect"; slug: string; platform?: string };
 
 function viewFromPath(): View {
   const path = location.pathname;
-  if (path === "/new") return { kind: "new" };
+  if (path === "/new") {
+    const lead = new URLSearchParams(location.search).get("lead");
+    return lead ? { kind: "new", lead } : { kind: "new" };
+  }
   if (path === "/settings") return { kind: "settings" };
   const connect = /^\/a\/([^/]+)\/connect(?:\/([^/]+))?/.exec(path);
   if (connect?.[1]) {
@@ -50,7 +53,7 @@ function pathFor(view: View): string {
     case "connect":
       return `/a/${encodeURIComponent(view.slug)}/connect${view.platform ? `/${view.platform}` : ""}`;
     case "new":
-      return "/new";
+      return view.lead ? `/new?lead=${encodeURIComponent(view.lead)}` : "/new";
     case "settings":
       return "/settings";
     default:
@@ -85,6 +88,7 @@ function Shell() {
   const [problem, setProblem] = useState<"offline" | "unauthorized" | null>(token ? null : "unauthorized");
   const [view, setView] = useState<View>(viewFromPath);
   const [menuOpen, setMenuOpen] = useState(() => new URLSearchParams(location.search).get("menu") === "1");
+  const [collapsed, toggleTeam] = useCollapsedTeams();
 
   const navigate: Navigate = useCallback((next, options) => {
     if (options?.replace) history.replaceState(null, "", pathFor(next));
@@ -138,7 +142,8 @@ function Shell() {
     newAgent: () => navigate({ kind: "new" }),
     settings: () => navigate({ kind: "settings" }),
     agent: (index) => {
-      const agent = agents?.[index];
+      // ⌘1–⌘9 count the rows the sidebar shows, members under their lead.
+      const agent = sidebarRows(agents ?? [], collapsed)[index]?.agent;
       if (agent) navigate({ kind: "agent", slug: agent.slug });
     },
     escape: () => setMenuOpen(false),
@@ -172,13 +177,15 @@ function Shell() {
         <NewAgent
           first={agents.length === 0}
           taken={agents.map((a) => a.name)}
+          lead={view.lead ? agents.find((a) => a.slug === view.lead || a.id === view.lead) : undefined}
           onNavigate={navigate}
           onCreated={created}
         />
       );
     else if (view.kind === "connect" && current)
       page = <ConnectPage agent={current} platform={view.platform} onNavigate={navigate} onChanged={refresh} />;
-    else if (current) page = <AgentPage key={current.id} agent={current} onNavigate={navigate} onChanged={refresh} />;
+    else if (current)
+      page = <AgentPage key={current.id} agent={current} agents={agents} onNavigate={navigate} onChanged={refresh} />;
     else if (agents.length === 0) page = <Welcome onStart={() => navigate({ kind: "new" })} />;
     else {
       // Nothing chosen, or a link to an agent that is gone: show the first one.
@@ -194,14 +201,28 @@ function Shell() {
     <div className="flex h-full">
       {bare ? null : (
         <aside className="sidebar hidden w-[220px] shrink-0 border-r border-line bg-wing md:flex">
-          <Sidebar agents={agents ?? []} view={view} currentId={current?.id} onNavigate={navigate} />
+          <Sidebar
+            agents={agents ?? []}
+            view={view}
+            currentId={current?.id}
+            onNavigate={navigate}
+            collapsed={collapsed}
+            onToggleTeam={toggleTeam}
+          />
         </aside>
       )}
 
       {menuOpen && !bare ? (
         <div className="fixed inset-0 z-40 flex md:hidden">
           <div className="flex w-[260px] max-w-[85%] bg-wing shadow-card">
-            <Sidebar agents={agents ?? []} view={view} currentId={current?.id} onNavigate={navigate} />
+            <Sidebar
+              agents={agents ?? []}
+              view={view}
+              currentId={current?.id}
+              onNavigate={navigate}
+              collapsed={collapsed}
+              onToggleTeam={toggleTeam}
+            />
           </div>
           <button
             type="button"
@@ -234,16 +255,66 @@ function Shell() {
   );
 }
 
+const COLLAPSED_KEY = "mingle.teams.collapsed";
+
+/** Which leads' teams are folded in the sidebar, kept on this computer. */
+function useCollapsedTeams(): [ReadonlySet<string>, (leadId: string) => void] {
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggle = useCallback((leadId: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  }, []);
+  return [collapsed, toggle];
+}
+
+/**
+ * The sidebar's rows (docs/spec.md 4.13, DESIGN.md "团队"): each agent in its place, a lead's
+ * members right under it, one level deep. Members of a folded team are not shown.
+ */
+export function sidebarRows(
+  agents: readonly AgentView[],
+  collapsed: ReadonlySet<string>,
+): { agent: AgentView; member: boolean; members: AgentView[] }[] {
+  const ids = new Set(agents.map((a) => a.id));
+  const membersOf = (lead: AgentView) => agents.filter((a) => a.leadId === lead.id && !a.remote);
+  const rows: { agent: AgentView; member: boolean; members: AgentView[] }[] = [];
+  for (const agent of agents) {
+    // A member sits under its lead; one whose lead is not listed stands on its own.
+    if (agent.leadId && ids.has(agent.leadId) && !agent.remote) continue;
+    const members = agent.remote ? [] : membersOf(agent);
+    rows.push({ agent, member: false, members });
+    if (!collapsed.has(agent.id)) for (const m of members) rows.push({ agent: m, member: true, members: [] });
+  }
+  return rows;
+}
+
 function Sidebar({
   agents,
   view,
   currentId,
   onNavigate,
+  collapsed,
+  onToggleTeam,
 }: {
   agents: AgentView[];
   view: View;
   currentId: string | undefined;
   onNavigate: Navigate;
+  collapsed: ReadonlySet<string>;
+  onToggleTeam: (leadId: string) => void;
 }) {
   const { t } = useI18n();
   const update = useUpdates();
@@ -260,32 +331,77 @@ function Sidebar({
       </div>
       <Eyebrow>{t("sidebar.agents")}</Eyebrow>
       <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-        {agents.map((a, i) => {
+        {sidebarRows(agents, collapsed).map(({ agent: a, member, members }, i, rows) => {
           const on = currentId === a.id;
           // One name per chat app, even with several bots in it.
           const apps = [...new Set(a.connections.map((c) => c.platform))]
             .map((p) => t(`platform.${p}` as MessageKey))
             .join(t("list.separator"));
           const keys = KEYS.agent(i);
+          const folded = collapsed.has(a.id);
+          // A folded team still says when someone in it is at work.
+          const busy = folded ? members.filter((m) => m.status === "working" || m.status === "thinking").length : 0;
+          const more = [apps, busy ? t("sidebar.teamBusy", { count: String(busy) }) : ""]
+            .filter(Boolean)
+            .join(t("list.separator"));
+          const firstMember = member && !rows[i - 1]?.member;
+          const lastMember = member && !rows[i + 1]?.member;
+          // The hairline runs from the lead's avatar to the last member's, across the gaps between rows.
+          const line = firstMember
+            ? `-top-[11px] ${lastMember ? "h-[calc(50%+11px)]" : "bottom-0"}`
+            : `-top-[2px] ${lastMember ? "h-[calc(50%+2px)]" : "bottom-0"}`;
           return (
-            <Shortcut key={a.id} label={a.name} keys={keys} side="right">
-              <button
-                type="button"
-                title={keys ? undefined : a.name}
-                aria-keyshortcuts={keys ? keysAria(keys) : undefined}
-                onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
-                aria-current={on ? "page" : undefined}
-                className={`${row} min-h-[46px] py-1.5`}
-              >
-                <Avatar name={a.name} src={a.avatar} size={28} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate font-medium">{a.name}</span>
-                  <span className="text-caption text-ink2">
-                    <AgentStatusText status={a.status} where={a.remote} more={apps} />
+            <div key={a.id} className={`group/row relative ${member ? "pl-[30px]" : ""}`}>
+              {member ? (
+                // One hairline joins a team's members to their lead, from its avatar down.
+                <span aria-hidden className={`absolute left-[23px] w-px bg-line2 ${line}`} />
+              ) : null}
+              <Shortcut label={a.name} keys={keys} side="right">
+                <button
+                  type="button"
+                  title={keys ? undefined : a.name}
+                  aria-keyshortcuts={keys ? keysAria(keys) : undefined}
+                  onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
+                  aria-current={on ? "page" : undefined}
+                  className={`${row} ${member ? "min-h-[40px] gap-2 py-1" : "min-h-[46px] py-1.5"} ${members.length ? "pr-8" : ""}`}
+                >
+                  <Avatar name={a.name} src={a.avatar} size={member ? 22 : 28} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className={`truncate font-medium ${member ? "text-small" : ""}`}>{a.name}</span>
+                    <span className="truncate text-caption text-ink2">
+                      <AgentStatusText status={a.status} where={a.remote} more={more} />
+                    </span>
                   </span>
-                </span>
-              </button>
-            </Shortcut>
+                </button>
+              </Shortcut>
+              {members.length ? (
+                <button
+                  type="button"
+                  aria-expanded={!folded}
+                  aria-label={t(folded ? "sidebar.teamExpand" : "sidebar.teamCollapse", { name: a.name })}
+                  title={t(folded ? "sidebar.teamExpand" : "sidebar.teamCollapse", { name: a.name })}
+                  onClick={() => onToggleTeam(a.id)}
+                  className={`absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-small text-ink3 transition-[opacity,background-color] duration-[120ms] hover:bg-black/5 hover:text-ink2 focus-visible:opacity-100 dark:hover:bg-white/5 ${folded ? "opacity-100" : "opacity-0 group-hover/row:opacity-100"}`}
+                >
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 10 10"
+                    aria-hidden="true"
+                    className={`transition-transform duration-[180ms] ${folded ? "-rotate-90" : ""}`}
+                  >
+                    <path
+                      d="M2 3.5l3 3 3-3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
           );
         })}
         <Shortcut label={t("agents.new")} keys={KEYS.newAgent} side="right">

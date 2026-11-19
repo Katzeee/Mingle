@@ -191,6 +191,31 @@ function contactInfo(found: ContactInfo): string {
   return out.join("\n");
 }
 
+interface TeamMate {
+  name: string;
+  contact: string | null;
+  role: string | null;
+  status: string;
+  detail: string | null;
+  tasks: { id: string; title: string; status: string }[];
+}
+
+/** The team part of `whoami` (docs/spec.md 4.13): who, what they do, and whether they are free. */
+function teamLines(team: { role: "lead" | "member"; lead: TeamMate | null; members: TeamMate[] } | null): string[] {
+  if (!team) return [];
+  const line = (m: TeamMate) => {
+    const doing = m.tasks.map((t) => `${t.id} ${t.title}`).join("; ");
+    const state = m.detail ? `${m.status}: ${m.detail}` : m.status;
+    return [
+      `  ${m.name}${m.contact ? ` (${m.contact})` : ""}  ${state}${doing ? `  tasks: ${doing}` : ""}`,
+      ...(m.role ? [`    ${m.role}`] : []),
+    ].join("\n");
+  };
+  if (team.role === "member")
+    return team.lead ? ["", `team: you are in ${team.lead.name}'s team`, line(team.lead)] : [];
+  return ["", "team: you lead", ...team.members.map(line)];
+}
+
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
   const chunks: Buffer[] = [];
@@ -242,6 +267,8 @@ function sendText(report: SendReport): string {
     markdown_flattened: "formatting is shown as plain text here",
     text_split: "the text was long and went out as several messages",
     mentions_plain: "this chat app has no mentions a bot can make; the names went out as plain text and notify no one",
+    team_stopped:
+      "Mingle stopped this team chat after 20 turns without a person; the message is kept and reaches the other agent only once your owner lets you go on. Do not resend it; tell whoever is waiting",
   };
   if (report.mentioned?.length)
     lines.push(`mentioned ${report.mentioned.map((m) => `@${m.name} (${m.contact})`).join(", ")}`);
@@ -428,20 +455,47 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "task create": {
-      const title = need(args.join(" "), "title_required", 'usage: mingle task create "title" [--from <message-id>]');
-      const task = await call()<{ id: string; title: string }>("POST", "/v1/agent/tasks", { title, from: flags.from });
-      print(task, () => `created ${task.id}: ${task.title}`);
+      const title = need(
+        args.join(" "),
+        "title_required",
+        'usage: mingle task create "title" [--from <message-id>] [--to <team member> with the brief on standard input]',
+      );
+      // Given to a team member: the brief on standard input goes to it with the title.
+      const brief = flags.to ? (await readStdin()).trim() : undefined;
+      const task = await call()<{
+        id: string;
+        title: string;
+        assignee: string | null;
+        message?: string | null;
+        degraded?: string[];
+      }>("POST", "/v1/agent/tasks", { title, from: flags.from, ...(flags.to ? { to: flags.to, brief } : {}) });
+      print(task, () => {
+        if (!task.assignee) return `created ${task.id}: ${task.title}`;
+        if (task.degraded?.includes("team_stopped"))
+          return `created ${task.id}: ${task.title}\nnot handed over yet: Mingle stopped your team chat with ${task.assignee} after 20 turns without a person. The brief is kept and reaches it once your owner lets you go on. Tell whoever asked`;
+        return `created ${task.id}: ${task.title}\nsent to ${task.assignee}${task.message ? ` as ${task.message}` : ""}; it reports back in your team chat`;
+      });
       return true;
     }
     case "task list": {
-      const tasks = await call()<{ id: string; title: string; status: string; fromChat: string | null }[]>(
-        "GET",
-        `/v1/agent/tasks${flags.all ? "?all=1" : ""}`,
-      );
+      const tasks = await call()<
+        {
+          id: string;
+          mine: boolean;
+          title: string;
+          status: string;
+          fromChat: string | null;
+          assignee: string | null;
+          lead: string | null;
+        }[]
+      >("GET", `/v1/agent/tasks${flags.all ? "?all=1" : ""}`);
+      const who = (t: (typeof tasks)[number]) => {
+        if (!t.assignee) return t.fromChat ? `  (from ${t.fromChat})` : "";
+        // Given to a member, or given to this agent by its lead.
+        return t.mine ? `  (${t.assignee} is on it)` : `  (from ${t.lead})`;
+      };
       print(tasks, () =>
-        tasks.length
-          ? tasks.map((t) => `${t.id}  ${t.status}  ${t.title}${t.fromChat ? `  (from ${t.fromChat})` : ""}`).join("\n")
-          : "no open tasks",
+        tasks.length ? tasks.map((t) => `${t.id}  ${t.status}  ${t.title}${who(t)}`).join("\n") : "no open tasks",
       );
       return true;
     }
@@ -540,12 +594,18 @@ async function agentCommand(group: string, action: string | undefined, args: str
         harness: string;
         home: string;
         connections: { platform: string; bot: string; state: string }[];
+        team: {
+          role: "lead" | "member";
+          lead: TeamMate | null;
+          members: TeamMate[];
+        } | null;
       }>("GET", "/v1/agent/whoami");
       print(me, () =>
         [
           `${me.name} (${me.harness})`,
           `home: ${me.home}`,
           ...me.connections.map((c) => `${c.platform}: ${c.bot} ${c.state}`),
+          ...teamLines(me.team),
         ].join("\n"),
       );
       return true;

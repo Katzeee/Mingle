@@ -47,6 +47,7 @@ import {
   PageHeader,
   PauseIcon,
   PlayIcon,
+  PlusIcon,
   Problem,
   relativeTime,
   Section,
@@ -66,10 +67,13 @@ type WorkData = { tasks: Task[]; reminders: Reminder[] };
 
 export function AgentPage({
   agent,
+  agents,
   onNavigate,
   onChanged,
 }: {
   agent: AgentView;
+  /** Every agent, for the team (docs/spec.md 4.13). */
+  agents: AgentView[];
   onNavigate: Navigate;
   onChanged: () => Promise<void> | void;
 }) {
@@ -300,11 +304,12 @@ export function AgentPage({
   // With no bot left, the side panel is where to add one again (the getting-started card is gone by then).
   const hasNeeds =
     agent.connections.length > 0 ||
-    agent.hasReplied ||
+    (agent.hasReplied && !agent.leadId) ||
     troubled.length > 0 ||
     agent.requests.length > 0 ||
     unanswered.length > 0 ||
-    failed.length > 0;
+    failed.length > 0 ||
+    agent.teamStops.length > 0;
   const needsYou = hasNeeds ? (
     <NeedsYou
       agent={agent}
@@ -315,6 +320,15 @@ export function AgentPage({
       onIgnore={ignore}
       onDecide={decide}
       onConnect={connect}
+      onContinue={async (other) => {
+        try {
+          await api.continueTeam(agent.id, other);
+        } catch (error) {
+          setNotice(errorText(t, error));
+        }
+        await onChanged();
+        refresh();
+      }}
     />
   ) : null;
 
@@ -388,6 +402,9 @@ export function AgentPage({
                     }}
                   />
                 </section>
+                {agent.remote ? null : (
+                  <TeamSection agent={agent} agents={agents} onNavigate={onNavigate} onChanged={onChanged} />
+                )}
                 <AgentEnv agent={agent} />
                 <div ref={handoffRef} tabIndex={-1} className="rounded-card focus:outline-none">
                   <HandoffSection agent={agent} handoffs={handoffs} onSent={() => void refreshActivity()} />
@@ -458,7 +475,8 @@ export function AgentPage({
               </>
             ) : (
               <>
-                {!agent.hasReplied ? (
+                {/* A team member is reached through its lead: the chat-app steps are not its start. */}
+                {!agent.hasReplied && !agent.leadId ? (
                   <GettingStarted
                     agent={agent}
                     heard={(activity ?? []).some((m) => m.direction === "in" && m.state !== "held")}
@@ -539,6 +557,9 @@ export function AgentPage({
                 if (!connectionId) setManageRequest((n) => n + 1);
               }}
             />
+          ) : null}
+          {tab === "activity" ? (
+            <TeamSummary agent={agent} agents={agents} onNavigate={onNavigate} onManage={() => setTab("settings")} />
           ) : null}
           <Work agentId={agent.id} work={work} error={workError} onRetry={refreshWork} onDropped={dropWork} />
         </aside>
@@ -709,6 +730,7 @@ function NeedsYou({
   onRetry,
   onIgnore,
   onDecide,
+  onContinue,
 }: {
   agent: AgentView;
   unanswered: string[];
@@ -718,6 +740,7 @@ function NeedsYou({
   onRetry: (ids: string[]) => Promise<void>;
   onIgnore: (ids: string[]) => Promise<void>;
   onDecide: (request: AccessRequest, access: "allowed" | "blocked") => Promise<void>;
+  onContinue: (other: string) => Promise<void>;
 }) {
   const { t } = useI18n();
   // Retrying while the harness still fails only fails again; say so, but let the person try.
@@ -749,6 +772,9 @@ function NeedsYou({
     ...agent.requests.map((r) => (
       <AccessRequestItem key={`${r.kind}:${r.id}`} agent={agent} request={r} onDecide={onDecide} />
     )),
+    ...agent.teamStops.map((stop) => (
+      <TeamStopItem key={`team:${stop.with}`} agent={agent} stop={stop} onContinue={onContinue} />
+    )),
     ...(failed.length > 0
       ? [
           <Problem key="failed" tone="red" title={t("needs.failed", { count: String(failed.length) })}>
@@ -767,7 +793,8 @@ function NeedsYou({
       : []),
   ];
   // No bot left (the last one removed): nobody can reach the agent, so that comes first.
-  if (agent.connections.length === 0 && agent.hasReplied) {
+  // A team member is reached through its lead, so having no bot of its own is no problem.
+  if (agent.connections.length === 0 && agent.hasReplied && !agent.leadId) {
     items.unshift(
       <Problem key="no-bot" title={t("connection.none")}>
         <div className="mt-1">
@@ -892,6 +919,261 @@ function ChatAppsSummary({ agent, onManage }: { agent: AgentView; onManage: (con
   );
 }
 
+/**
+ * Two agents in a team went back and forth too long with no person speaking, and Mingle stopped
+ * their chat (docs/spec.md 4.13). Amber: it waits for the owner, nothing broke.
+ */
+function TeamStopItem({
+  agent,
+  stop,
+  onContinue,
+}: {
+  agent: AgentView;
+  stop: AgentView["teamStops"][number];
+  onContinue: (other: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  // The lead is the one people talk to: that is who to tell.
+  const lead = agent.leadId ? stop.name : agent.name;
+  return (
+    <Problem title={t("team.stoppedTitle", { name: agent.name, other: stop.name })}>
+      {t("team.stoppedBody", { name: lead, count: "20" })}
+      <div className="mt-2">
+        <Button
+          small
+          variant="primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await onContinue(stop.with);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {t("team.continue")}
+        </Button>
+      </div>
+    </Problem>
+  );
+}
+
+/** A teammate in a list: picture, name, and what it is doing now. */
+function TeammateLine({ agent, sub }: { agent: AgentView; sub?: ReactNode }) {
+  return (
+    <>
+      <Avatar name={agent.name} src={agent.avatar} size={24} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate">{agent.name}</span>
+        <span className="truncate text-caption text-ink2">{sub ?? <AgentStatusText status={agent.status} />}</span>
+      </span>
+    </>
+  );
+}
+
+/** The team at a glance in the side panel (docs/spec.md 4.13): members for a lead, the lead for a member. */
+function TeamSummary({
+  agent,
+  agents,
+  onNavigate,
+  onManage,
+}: {
+  agent: AgentView;
+  agents: AgentView[];
+  onNavigate: Navigate;
+  onManage: () => void;
+}) {
+  const { t } = useI18n();
+  const lead = agent.leadId ? agents.find((a) => a.id === agent.leadId) : undefined;
+  const members = agents.filter((a) => a.leadId === agent.id && !a.remote);
+  if (!lead && members.length === 0) return null;
+  const open = (a: AgentView) => onNavigate({ kind: "agent", slug: a.slug });
+  return (
+    <Section
+      title={lead ? t("team.panelMember") : t("team.title")}
+      action={
+        lead ? undefined : (
+          <Button variant="ghost" small onClick={onManage}>
+            {t("agent.manage")}
+          </Button>
+        )
+      }
+    >
+      <Group>
+        {lead ? (
+          <GroupRow className="min-h-[48px]" onClick={() => open(lead)}>
+            <TeammateLine agent={lead} sub={t("team.leadOf", { name: agent.name })} />
+            <ChevronIcon />
+          </GroupRow>
+        ) : (
+          members.map((m) => (
+            <GroupRow key={m.id} className="min-h-[48px]" onClick={() => open(m)}>
+              <TeammateLine agent={m} />
+              <ChevronIcon />
+            </GroupRow>
+          ))
+        )}
+      </Group>
+    </Section>
+  );
+}
+
+/**
+ * Settings → Team (docs/spec.md 4.13, DESIGN.md "团队"): the only place a team is made. Lists the
+ * members; "Add member" opens in place with the agents that can join and a way to make a new one.
+ * A member sees whose team it is in instead.
+ */
+function TeamSection({
+  agent,
+  agents,
+  onNavigate,
+  onChanged,
+}: {
+  agent: AgentView;
+  agents: AgentView[];
+  onNavigate: Navigate;
+  onChanged: () => Promise<void> | void;
+}) {
+  const { t } = useI18n();
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const local = agents.filter((a) => !a.remote);
+  const lead = agent.leadId ? local.find((a) => a.id === agent.leadId) : undefined;
+  if (lead) {
+    return (
+      <Section title={t("team.title")}>
+        <Group>
+          <GroupRow className="flex-wrap">
+            <Avatar name={lead.name} src={lead.avatar} size={28} />
+            <span className="min-w-0 flex-1 text-small text-ink2">
+              {t("team.memberBody", { name: agent.name, lead: lead.name })}
+            </span>
+            <Button small onClick={() => onNavigate({ kind: "agent", slug: lead.slug })}>
+              {t("team.openLead", { name: lead.name })}
+            </Button>
+          </GroupRow>
+        </Group>
+      </Section>
+    );
+  }
+  const members = local.filter((a) => a.leadId === agent.id);
+  const others = local.filter((a) => a.id !== agent.id && a.leadId !== agent.id);
+  const leads = new Set(local.flatMap((a) => (a.leadId ? [a.leadId] : [])));
+  const why = (other: AgentView): string | null => {
+    if (leads.has(other.id)) return t("team.leadsTeam");
+    if (other.leadId) {
+      return t("team.inTeam", { name: local.find((a) => a.id === other.leadId)?.name ?? "" });
+    }
+    return null;
+  };
+  const run = async (key: string, action: () => Promise<unknown>) => {
+    setBusy(key);
+    setFailure(null);
+    try {
+      await action();
+      await onChanged();
+    } catch (error) {
+      setFailure(errorText(t, error));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Section title={t("team.title")}>
+      <p className="-mt-1 px-1 text-small text-ink2">{t("team.leadBody", { name: agent.name })}</p>
+      <Group>
+        {members.map((m) => (
+          <GroupRow key={m.id} className="group/member min-h-[52px]">
+            <Avatar name={m.name} src={m.avatar} size={28} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{m.name}</span>
+              <span className="truncate text-caption text-ink2">
+                <AgentStatusText status={m.status} more={m.harnessName} />
+              </span>
+            </span>
+            <Button
+              small
+              variant="ghost"
+              aria-label={t("team.removeLabel", { name: m.name })}
+              disabled={busy !== null}
+              className="opacity-0 transition-opacity duration-[120ms] group-hover/member:opacity-100 focus-visible:opacity-100"
+              onClick={() => run(`remove:${m.id}`, () => api.removeMember(agent.id, m.id))}
+            >
+              {t("team.remove")}
+            </Button>
+          </GroupRow>
+        ))}
+        <GroupRow className="min-h-[44px] text-accent" onClick={() => setAdding((open) => !open)}>
+          <PlusIcon />
+          <span className="flex-1 font-medium">{t("team.add")}</span>
+          <span className={`inline-flex transition-transform duration-[180ms] ${adding ? "rotate-90" : ""}`}>
+            <ChevronIcon />
+          </span>
+        </GroupRow>
+        {adding ? (
+          <div className="rise flex flex-col gap-0.5 bg-bg2 p-1.5">
+            {others.length === 0 ? <p className="px-2.5 py-2 text-small text-ink2">{t("team.noOthers")}</p> : null}
+            <div className="flex max-h-[320px] flex-col gap-0.5 overflow-y-auto">
+              {/* Those that can join first; the rest stay listed, saying why they cannot. */}
+              {[...others.filter((o) => !why(o)), ...others.filter((o) => why(o))].map((other) => {
+                const reason = why(other);
+                return (
+                  <div
+                    key={other.id}
+                    className={`flex min-h-[44px] items-center gap-3 rounded-control px-2.5 py-1.5 ${reason ? "opacity-55" : "hover:bg-bg3"}`}
+                  >
+                    <Avatar name={other.name} src={other.avatar} size={24} />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{other.name}</span>
+                      <span className="truncate text-caption text-ink2">
+                        {reason ?? firstLine(other.role) ?? other.harnessName}
+                      </span>
+                    </span>
+                    {reason ? null : (
+                      <Button
+                        small
+                        aria-label={t("team.joinLabel", { name: other.name })}
+                        disabled={busy !== null}
+                        onClick={() => run(`add:${other.id}`, () => api.addMember(agent.id, other.id))}
+                      >
+                        {t("team.join")}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {others.length ? <div className="mx-2.5 my-1 h-px bg-line" /> : null}
+            <button
+              type="button"
+              onClick={() => onNavigate({ kind: "new", lead: agent.slug })}
+              className="flex min-h-[40px] items-center gap-3 rounded-control px-2.5 text-left font-medium text-accent transition-colors duration-[120ms] hover:bg-bg3"
+            >
+              <PlusIcon />
+              {t("team.new")}
+            </button>
+            <p className="px-2.5 pt-0.5 pb-1.5 text-caption text-ink3">{t("team.addHint")}</p>
+          </div>
+        ) : null}
+      </Group>
+      {failure ? <p className="px-1 text-small text-red">{failure}</p> : null}
+    </Section>
+  );
+}
+
+/** The first line of a role, as a one-line description. */
+function firstLine(role: string): string | null {
+  return (
+    role
+      .split("\n")
+      .map((l) => l.replace(/^#+\s*/, "").trim())
+      .find(Boolean) ?? null
+  );
+}
+
 /** A failed load explains itself and offers a retry; it is not shown as an empty list. */
 function LoadProblem({ title, onRetry }: { title: string; onRetry: () => Promise<void> }) {
   const { t } = useI18n();
@@ -953,6 +1235,13 @@ function Work({
                 confirm={t("task.closeYes")}
                 run={() => api.closeTask(agentId, task.id)}
                 onDone={() => onDropped("tasks", task.id)}
+                detail={
+                  task.assignee
+                    ? task.agentId === agentId
+                      ? t("task.givenTo", { name: task.assignee })
+                      : t("task.givenBy", { name: task.lead ?? "" })
+                    : undefined
+                }
                 aside={
                   <span className="shrink-0 rounded-full bg-bg3 px-2 py-0.5 text-caption text-ink2">
                     {t(`task.${task.status}` as MessageKey)}
@@ -1775,8 +2064,9 @@ function ConversationRow({
         node.head.name ||
         t("chat.dm")
       : node.head.name || t(kind === "thread" ? "chat.thread" : "chat.group");
+  const team = node.platform === "team";
   const where = [
-    t(kind === "dm" ? "chat.dm" : kind === "thread" ? "chat.thread" : "chat.group"),
+    team ? t("team.chat") : t(kind === "dm" ? "chat.dm" : kind === "thread" ? "chat.thread" : "chat.group"),
     ...(node.threads.length ? [t("activity.threads", { count: String(node.threads.length) })] : []),
   ].join(" · ");
   const preview = node.own?.messages.length ? node.own.messages : (node.threads[0]?.messages ?? []);
@@ -1792,6 +2082,7 @@ function ConversationRow({
         expanded={expanded}
         preview={preview}
         dm={kind === "dm"}
+        team={team}
         onToggle={onToggle}
       />
       {expanded ? (
@@ -1848,6 +2139,7 @@ function ConversationHead({
   preview,
   thread = false,
   dm = false,
+  team = false,
   onToggle,
 }: {
   id: string;
@@ -1860,6 +2152,8 @@ function ConversationHead({
   preview: Activity[];
   thread?: boolean;
   dm?: boolean;
+  /** The agent's chat with its lead or a member (docs/spec.md 4.13). */
+  team?: boolean;
   onToggle: (key: string) => void;
 }) {
   const { t, locale } = useI18n();
@@ -1897,7 +2191,7 @@ function ConversationHead({
           ) : null}
           {need.held ? (
             <span className="shrink-0 whitespace-nowrap rounded-small border border-amber-line bg-amber-tint px-1.5 text-caption text-amber">
-              {t("agent.held")}
+              {team ? t("team.stopped") : t("agent.held")}
             </span>
           ) : null}
           <span className="shrink-0 whitespace-nowrap text-caption text-ink3">{relativeTime(latestAt, locale)}</span>
@@ -2098,7 +2392,7 @@ function ConversationMessages({
           {m.direction === "in" && m.state === "held" ? (
             <p className="flex items-center gap-1.5 text-caption text-amber">
               <StatusDot state="awaiting_approval" />
-              {t("agent.held")}
+              {conversation.platform === "team" ? t("team.stopped") : t("agent.held")}
             </p>
           ) : null}
           {m.direction === "in" && m.triggers && m.state === "ignored" ? (
