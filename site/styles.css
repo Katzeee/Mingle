@@ -100,6 +100,11 @@ h1,
 h2,
 h3 {
   margin: 0;
+  /* Even lines, no word left alone on the last one. */
+  text-wrap: balance;
+}
+.lead {
+  text-wrap: pretty;
 }
 .wrap {
   max-width: 1080px;
@@ -234,16 +239,24 @@ h3 {
   display: block;
 }
 
-/* Hero: words on the left, the product on the right. */
+/* Hero: one line of what it is, centered, then the product itself. */
 .hero {
-  padding: 72px 0 40px;
+  padding: 96px 0 40px;
   overflow: hidden;
 }
-.hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px 56px;
-  align-items: end;
+.hero-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.hero-head .lead {
+  max-width: 640px;
+  margin: 28px auto 0;
+}
+.hero-head .cta {
+  justify-content: center;
+  margin-top: 36px;
 }
 .eyebrow {
   margin: 0 0 14px;
@@ -252,8 +265,8 @@ h3 {
   font-weight: 500;
 }
 h1 {
-  font-size: clamp(40px, 5.4vw, 64px);
-  line-height: 1.06;
+  font-size: clamp(44px, 6.6vw, 80px);
+  line-height: 1.02;
   font-weight: 760;
   letter-spacing: -0.035em;
 }
@@ -262,7 +275,7 @@ h2 span {
   color: var(--ink3);
 }
 :lang(zh-CN) h1 {
-  font-size: clamp(34px, 4.2vw, 54px);
+  font-size: clamp(36px, 5vw, 62px);
   letter-spacing: -0.01em;
   line-height: 1.18;
 }
@@ -272,41 +285,6 @@ h2 span {
   line-height: 1.65;
   max-width: 680px;
   margin: 20px 0 0;
-}
-.hero .lead {
-  margin-top: 0;
-}
-.pairs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 28px;
-}
-.pairs li {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  background: var(--card);
-  font-size: 14px;
-  color: var(--ink2);
-}
-.pairs b {
-  color: var(--ink);
-  font-weight: 600;
-}
-.pairs .brain-icon,
-.pairs .brain-icon img {
-  width: 18px;
-  height: 18px;
-}
-.pairs .app-icon {
-  border-radius: 5px;
-}
-.pair-arrow {
-  color: var(--ink3);
 }
 .cta {
   display: flex;
@@ -327,7 +305,7 @@ h2 span {
   color: var(--ink);
 }
 .window.hero-shot {
-  margin-top: 64px;
+  margin-top: 72px;
 }
 
 /* A window around a screenshot */
@@ -1578,6 +1556,34 @@ html:not(.js) .phone-static .rx .chip {
   font-weight: 600;
 }
 
+/* Several things at once: words and a ruled list on the left, a group chat on the right. */
+.parallel .lines {
+  margin-top: 36px;
+}
+.parallel-phone {
+  width: 100%;
+  max-width: 380px;
+  height: 720px;
+  justify-self: center;
+}
+/* A reply that quotes what it answers, inside the bubble, as the chat apps draw one. */
+.qt {
+  margin: 0 0 6px;
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid var(--im-accent);
+  color: var(--im-ink2);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.qt b {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
 /* Brains: words on the left, a ruled list on the right. */
 .split {
   display: grid;
@@ -1630,6 +1636,9 @@ html:not(.js) .phone-static .rx .chip {
   margin: 0;
   padding: 14px 16px;
   overflow-x: auto;
+  scrollbar-width: none;
+  /* A long command scrolls; the edge fades instead of cutting a word in half. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
   font-size: 13.5px;
   line-height: 1.6;
 }
@@ -1826,9 +1835,6 @@ html:not(.js) .phone-static .rx .chip {
   }
 }
 @media (max-width: 960px) {
-  .hero-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
   .window.hero-shot {
     margin-top: 48px;
   }
@@ -1890,8 +1896,14 @@ html:not(.js) .phone-static .rx .chip {
   .hero {
     padding-top: 40px;
   }
-  .hero .lead {
+  .hero-head .lead {
     font-size: 17px;
+  }
+  :lang(zh-CN) h1 {
+    font-size: 30px;
+  }
+  .parallel-phone {
+    height: 680px;
   }
   .cta .btn {
     flex: 1 1 100%;

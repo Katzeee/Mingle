@@ -171,6 +171,7 @@ function Shell() {
       page = (
         <NewAgent
           first={agents.length === 0}
+          only={agents.length === 1 && !agents[0]?.remote ? agents[0] : undefined}
           taken={agents.map((a) => a.name)}
           onNavigate={navigate}
           onCreated={created}

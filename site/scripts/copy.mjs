@@ -5,10 +5,10 @@ export const copy = {
   en: {
     lang: "en",
     path: "/",
-    title: "Mingle: any agent, in any chat app",
+    title: "Mingle: one agent in every chat app",
     description:
-      "Mingle connects any coding agent you already use, like Claude Code, Codex or Cursor, to any chat app: WeChat, Feishu, Slack, Telegram and more, plus GitHub and iMessage. One agent with a name, a role and a memory, in all of them at once. It runs on your computer. There is no Mingle server.",
-    nav: { privacy: "No server", demo: "One agent", how: "Get started", handoff: "Handoff", cli: "CLI" },
+      "Mingle brings the coding agent you already use, like Claude Code or Codex, into WeChat, Feishu, Slack, Telegram and more, plus GitHub and iMessage: one agent with a name and a memory, in all of them at once, doing several things at a time. It runs on your computer. There is no Mingle server.",
+    nav: { demo: "One agent", parallel: "At once", how: "Get started", privacy: "No server", cli: "CLI" },
     download: "Download",
     downloadFor: {
       mac: "Download for Mac",
@@ -19,12 +19,33 @@ export const copy = {
     alsoFor: { mac: "macOS", windows: "Windows", linux: "Linux", pair: "{a} and {b}", intel: "Intel Mac" },
     installTerminal: "Install from a terminal",
     hero: {
-      title: "Any agent,<br><span>in any chat app.</span>",
-      lead: "Mingle brings the coding agent you already use, like Claude Code, Codex or Cursor, into WeChat, Feishu, Slack, Telegram and the rest of your chats, as one agent with a name, a role and a memory. It runs on your computer. There is no Mingle server.",
+      title: "One agent.<br><span>Every chat app.</span>",
+      lead: "The coding agent you already use, like Claude Code or Codex, in WeChat, Feishu, Slack, Telegram and the rest of your chats. One name, one memory, several things at once. On your own computer.",
       open: "Open source",
-      alt: "The Mingle console: four agents, and Alex connected to Telegram, Slack, Discord, WeChat and GitHub, with its recent messages, tasks and a reminder",
+      alt: "The Mingle console: Alex in Telegram, Slack, Discord, WeChat and GitHub, with its recent messages and two things under way",
     },
     logos: { harnesses: "Harnesses", apps: "Chat apps" },
+    parallel: {
+      eyebrow: "Several things at once",
+      title: "Works on the side.<br><span>Answers right away.</span>",
+      lead: "Ask for something that takes a while, like fixing a bug or comparing three vendors, and Alex works on it on the side while it keeps answering everyone else. When it's done, it replies under your message.",
+      points: [
+        ["Quick answers stay quick", "A question gets its answer in seconds, even while code is being written."],
+        ["Back where you asked", "The result arrives under the message that asked for it, from Alex."],
+        ["Follow-ups find the work", "Reply to it, and the same piece of work picks up where it left off."],
+        ["Nothing to set up", "No helpers to create and no settings. Up to three things run at once."],
+      ],
+      chat: {
+        group: "Launch team",
+        asker: "Maya",
+        ask: "@Alex the login button does nothing on Safari. Can you fix it?",
+        ack: "On it. I'll reply here when it's fixed.",
+        other: "Leo",
+        quick: "@Alex what time is standup tomorrow?",
+        answer: "10:30, in room 3.",
+        done: "Fixed: Safari blocked the form's default submit. PR #212 is ready for review.",
+      },
+    },
     chat: {
       group: "Weekend hikers",
       members: "5 members",
@@ -172,7 +193,7 @@ export const copy = {
         'Start with <a href="/llms.txt">llms.txt</a>. Inside Mingle, an agent gets its guide from <code>mingle manual</code>.',
     },
     end: {
-      title: "Any agent, in any chat app.",
+      title: "One agent. Every chat app.",
       lead: "Free and open source, on your own computer. For macOS, Windows and Linux.",
       github: "View on GitHub",
       installation: "See this release's notes for signing details and installation instructions.",
@@ -189,21 +210,42 @@ export const copy = {
   zh: {
     lang: "zh-CN",
     path: "/zh/",
-    title: "Mingle：任意 Agent，接入任意聊天软件",
+    title: "Mingle：一个 Agent，住进你所有的聊天软件",
     description:
-      "Mingle 把你已经在用的任意 coding agent，比如 Claude Code、Codex、Cursor，接入任意聊天软件：微信、飞书、Slack、Telegram 等，还有 GitHub 和 iMessage。一个有名字、有角色、有记忆的 Agent，同时出现在所有地方。在你自己的电脑上运行，没有 Mingle 服务器。",
-    nav: { privacy: "无服务器", demo: "一个 Agent", how: "怎么用", handoff: "交接", cli: "命令行" },
+      "Mingle 把你已经在用的 Claude Code、Codex 这样的 coding agent，接进微信、飞书、Slack、Telegram 等聊天软件，还有 GitHub 和 iMessage：一个有名字、有记忆的 Agent，同时出现在所有地方，还能同时做好几件事。在你自己的电脑上运行，没有 Mingle 服务器。",
+    nav: { demo: "一个 Agent", parallel: "同时做几件事", how: "怎么用", privacy: "无服务器", cli: "命令行" },
     download: "下载",
     downloadFor: { mac: "下载 Mac 版", windows: "下载 Windows 版", linux: "下载 Linux 版", any: "下载" },
     alsoFor: { mac: "macOS", windows: "Windows", linux: "Linux", pair: "{a} 与 {b}", intel: "Intel Mac" },
     installTerminal: "用终端安装",
     hero: {
-      title: "任意 Agent，<br><span>接入任意聊天软件。</span>",
-      lead: "Mingle 把你已经在用的 coding agent，比如 Claude Code、Codex、Cursor，接进微信、飞书、Slack、Telegram 等聊天软件，成为一个有名字、有角色、有记忆的 Agent。它在你自己的电脑上运行，没有 Mingle 服务器。",
+      title: "一个 Agent，<br><span>住进你所有的聊天软件。</span>",
+      lead: "你已经在用的 Claude Code、Codex 这样的 coding agent，住进微信、飞书、Slack、Telegram 等聊天软件。一个名字，一份记忆，能同时做好几件事。运行在你自己的电脑上。",
       open: "开源",
-      alt: "Mingle 控制台：四个 Agent，Alex 接入了微信、飞书、Telegram、钉钉和 GitHub，旁边是它最近的消息、任务和提醒",
+      alt: "Mingle 控制台：Alex 接入了微信、飞书、Telegram、钉钉和 GitHub，旁边是它最近的消息和正在做的两件事",
     },
     logos: { harnesses: "支持的 harness", apps: "支持的聊天软件" },
+    parallel: {
+      eyebrow: "同时做几件事",
+      title: "长活在旁边做，<br><span>问题马上回。</span>",
+      lead: "交给它一件要花时间的事，比如修一个 bug、对比三家供应商，Alex 会在旁边做，同时照样回复其他人。做完了，它回到你那条消息下面。",
+      points: [
+        ["简单的问题照样秒回", "哪怕它正在写代码，别人问一句也是几秒就有答复。"],
+        ["回到你问的地方", "结果出现在当初那条消息下面，还是 Alex 在回。"],
+        ["追问接着做", "回复它的结果，同一件事从停下的地方继续。"],
+        ["什么都不用配", "不用建帮手，也没有设置，最多同时做三件。"],
+      ],
+      chat: {
+        group: "发布小组",
+        asker: "李雷",
+        ask: "@Alex 登录按钮在 Safari 上点了没反应，帮忙修一下？",
+        ack: "收到，修好了在这里回你。",
+        other: "韩梅梅",
+        quick: "@Alex 明天站会几点？",
+        answer: "明天 10:30，在 3 号会议室。",
+        done: "修好了：Safari 拦了表单的默认提交。PR #212 等你看。",
+      },
+    },
     chat: {
       group: "周末徒步群",
       members: "5 位成员",
@@ -255,7 +297,7 @@ export const copy = {
     },
     agent: {
       eyebrow: "一个 Agent",
-      title: "像一个人，而不是一群机器人。",
+      title: "像一个人，<br>而不是一群机器人。",
       lead: "Alex 不是每个聊天软件里各自独立的机器人，而是同一个“人”：在它加入的每个聊天软件里，名字、头像、记忆都一样。你在一个软件里告诉它的事，到了另一个软件它也知道。没有 <code>/new</code>，也没有 <code>/switch</code>，唯一的命令是 <code>/stop</code>。",
       points: [
         ["跨软件记得事", "一个 Agent，一份记忆，加入的每个聊天软件都通用。"],
@@ -342,7 +384,7 @@ export const copy = {
         '从 <a href="/llms.txt">llms.txt</a> 开始。在 Mingle 里，Agent 通过 <code>mingle manual</code> 拿到自己的操作指南。',
     },
     end: {
-      title: "任意 Agent，接入任意聊天软件。",
+      title: "一个 Agent，住进你所有的聊天软件。",
       lead: "免费、开源，运行在你自己的电脑上。支持 macOS、Windows 和 Linux。",
       github: "在 GitHub 上查看",
       installation: "签名情况和安装说明见本版本的发布说明。",
