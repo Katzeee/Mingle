@@ -96,28 +96,6 @@ try {
   // Bots whose owner the platform did not report, waiting to be claimed with a code (docs/spec.md 4.7).
   const claimAgent = await admin("POST", "/v1/admin/agents", { name: "Iris", harness, role: "" });
 
-  // A team (docs/spec.md 4.13): Atlas leads Coder (at work) and Researcher; Lily leads Mia, so
-  // the picker shows why some agents cannot join.
-  const atlas = await admin("POST", "/v1/admin/agents", {
-    name: "Atlas",
-    harness,
-    role: "产品研发群的助理：回答问题，把要写代码或做调研的事交给团队。",
-  });
-  const coder = await admin("POST", "/v1/admin/agents", {
-    name: "Coder",
-    harness,
-    lead: atlas.id,
-    role: "Writes and reviews code for the product repository, and opens pull requests.",
-  });
-  const researcher = await admin("POST", "/v1/admin/agents", {
-    name: "Researcher",
-    harness,
-    lead: atlas.id,
-    role: "Compares vendors and summarises what it finds in a table.",
-  });
-  const lily = await admin("POST", "/v1/admin/agents", { name: "Lily", harness, role: "" });
-  await admin("POST", "/v1/admin/agents", { name: "Mia", harness, role: "", lead: lily.id });
-
   // Seed chats and history straight into the database.
   const db = new DatabaseSync(join(home, "mingle.db"));
   db.exec("PRAGMA busy_timeout = 5000");
@@ -231,6 +209,34 @@ try {
     alex.id,
     now,
     now,
+  );
+  // Work Alex does beside the conversation (docs/spec.md 4.13): one under way, one waiting its turn,
+  // one done today. Inserted after the daemon started, so nothing tries to run them.
+  const line = (id, title, state, status, from, chat, ago, summary = null) =>
+    insert(
+      "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?)",
+      id,
+      alex.id,
+      title,
+      status,
+      from,
+      chat,
+      state,
+      summary,
+      now - ago,
+      now - ago / 2,
+    );
+  line("t5", "整理香山北线、西山和八大处三条路线的爬升和交通对比表", "running", "in_progress", "m01", "c1", 720_000);
+  line("t6", "Draft the packing list for first-time hikers", "queued", "in_progress", "m03", "c2", 120_000);
+  line(
+    "t7",
+    "Check the bus timetable",
+    "idle",
+    "done",
+    "m0t3",
+    "c12",
+    3_000_000,
+    "Winter last bus 17:30 from the north gate; summer 19:00. Source: the park's notice board, checked today.",
   );
   insert(
     "INSERT INTO reminders (id, agent_id, body, rule, timezone, next_fire_at, created_at) VALUES ('r1', ?, '在群里提醒周六 7:30 香山公园北门集合，并确认人数', 'once', 'Asia/Shanghai', ?, ?)",
@@ -468,54 +474,6 @@ try {
   insert("UPDATE agents SET status = 'idle' WHERE id = ?", offAgent.id);
   insert("UPDATE agents SET status = 'idle' WHERE id = ?", doneAgent.id);
   insert("UPDATE agents SET status = 'idle', has_replied = 1 WHERE id = ?", lonelyAgent.id);
-  // The team's chats: Atlas handed Coder a bug from the product group; Coder is on it.
-  const teamOf = (agent) =>
-    db.prepare("SELECT id FROM connections WHERE agent_id = ? AND platform = 'team'").get(agent.id).id;
-  conn("n14", atlas.id, "feishu", "Atlas", "connected", null, "u1");
-  insert(
-    "INSERT INTO chats (id, connection_id, platform_id, kind, name, created_at, updated_at) VALUES ('c20','n14','oc_1','group','产品研发群',?,?)",
-    now,
-    now,
-  );
-  insert(
-    "INSERT INTO chats (id, connection_id, platform_id, kind, name, peer_id, created_at, updated_at) VALUES ('c21',?,?,'dm','Coder',?,?,?)",
-    teamOf(atlas),
-    coder.id,
-    coder.id,
-    now,
-    now,
-  );
-  insert(
-    "INSERT INTO chats (id, connection_id, platform_id, kind, name, peer_id, created_at, updated_at) VALUES ('c22',?,?,'dm','Atlas',?,?,?)",
-    teamOf(coder),
-    atlas.id,
-    atlas.id,
-    now,
-    now,
-  );
-  msg("m70", "c20", "in", "李雷", '@Atlas 登录页在 Safari 上点"登录"没反应，修一下', "replied", 1_320_000);
-  msg("m71", "c20", "out", null, "收到，交给 Coder 了，修好后我在这里说。", "sent", 1_310_000);
-  msg("m72", "c20", "in", "韩梅梅", "@Atlas 明天站会几点？", "replied", 900_000);
-  msg("m73", "c20", "out", null, "明天 10:30，在 3 号会议室。", "sent", 890_000);
-  const brief =
-    'Task t9: 修 Safari 登录按钮\n\n李雷在产品研发群报的：Safari 上点"登录"没反应。Safari 和 Chrome 都能登录、测试通过就算完成，开 PR 后把链接发我。';
-  msg("m74", "c21", "out", null, brief, "sent", 1_300_000);
-  msg("m75", "c22", "in", "Atlas", brief, "delivered", 1_300_000);
-  msg("m76", "c22", "out", null, "收到，在看。", "sent", 1_290_000);
-  msg("m77", "c21", "in", "Coder", "收到，在看。", "delivered", 1_290_000);
-  insert(
-    "INSERT INTO tasks (id, agent_id, title, status, assignee_id, from_message, from_chat, created_at, updated_at) VALUES ('t9', ?, '修 Safari 登录按钮', 'in_progress', ?, 'm70', 'c20', ?, ?)",
-    atlas.id,
-    coder.id,
-    now,
-    now,
-  );
-  insert("UPDATE agents SET status = 'idle', has_replied = 1 WHERE id = ?", atlas.id);
-  insert(
-    "UPDATE agents SET status = 'working', status_detail = 'Bash: pnpm test web/login', has_replied = 1 WHERE id = ?",
-    coder.id,
-  );
-  insert("UPDATE agents SET status = 'idle' WHERE id IN (?, ?)", researcher.id, lily.id);
   db.close();
 
   const pages = process.env.UI_REMOTE_ONLY
@@ -545,9 +503,6 @@ try {
         ["paused", `/a/${pausedAgent.slug}`],
         ["shared-wechat", `/a/${sharedAgent.slug}`],
         ["claim", `/a/${claimAgent.slug}`],
-        ["team-lead", `/a/${atlas.slug}`],
-        ["team-member", `/a/${coder.slug}`],
-        ["team-new", `/new?lead=${atlas.slug}`],
       ];
   const checkPlatformCounts = (dom, zh, expected) => {
     const buttons = [...dom.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map((match) => match[0]);
@@ -572,6 +527,8 @@ try {
     // Alex answered long ago (m02/m04): no onboarding card.
     agent: (dom, zh) => {
       assert.ok(dom.includes("Saturday") || dom.includes("周六晴"), "agent activity did not render");
+      assert.ok(dom.includes(zh ? "在做 2 件事" : "2 under way"), "work under way not counted");
+      assert.ok(dom.includes(zh ? "排队中" : "Queued"), "queued work not shown");
       assert.ok(!dom.includes(zh ? "上手" : "Getting started"), "answered agent still shows onboarding");
       assert.ok(
         new RegExp(`<button[^>]*>\\s*${zh ? "忽略" : "Ignore"}\\s*</button>`).test(dom),
@@ -627,18 +584,6 @@ try {
         "paused agent has no Resume",
       );
       assert.ok(!dom.includes(zh ? "正在回复" : "got it and is answering"), "paused agent shows replying");
-    },
-    // A lead: its team chat in the activity, its members in the panel; a member: whose team.
-    "team-lead": (dom, zh) => {
-      assert.ok(dom.includes("收到，在看。"), "team chat missing from the lead's activity");
-      assert.ok(dom.includes(zh ? "交给了 Coder" : "Coder is on it"), "task does not say who is on it");
-    },
-    "team-member": (dom, zh) => {
-      assert.ok(dom.includes(zh ? "给 Coder 派活" : "Gives Coder work"), "member page does not show its lead");
-      assert.ok(!dom.includes(zh ? "上手" : "Getting started"), "team member shows the chat-app onboarding");
-    },
-    "team-new": (dom, zh) => {
-      assert.ok(dom.includes(zh ? "加入 Atlas 的团队" : "Joins Atlas's team"), "new member form misses its team");
     },
     "no-bot": (dom, zh) => {
       assert.ok(dom.includes(zh ? "连接聊天软件" : "Connect a chat app"), "agent without a bot has no way to add one");
@@ -730,7 +675,6 @@ try {
     emptySlug: lonelyAgent.slug,
     pauseSlug: pauseAgent.slug,
     sharedSlug: sharedAgent.slug,
-    teamSlug: atlas.slug,
     envSecret: ENV_SECRET,
     chrome: CHROME,
     out: OUT,

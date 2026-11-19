@@ -12,6 +12,8 @@ export interface SendRequest {
   readonly files?: readonly string[] | undefined;
   /** Mingle's own word in the chat, not the agent's answer: it settles none of the chat's messages. */
   readonly notice?: boolean;
+  /** Sent by the line working on this task (docs/spec.md 4.13): replies to it go back to that line. */
+  readonly lineTaskId?: string | undefined;
 }
 
 export interface SendReport {
@@ -92,6 +94,7 @@ export class Outbox {
         body: chunk,
         replyTo: i === 0 ? (quoted?.id ?? null) : null,
         ...(request.notice ? { notice: true } : {}),
+        ...(request.lineTaskId ? { lineTaskId: request.lineTaskId } : {}),
       });
       const files = last && request.files?.length ? request.files.map((path) => ({ path })) : undefined;
       // The first piece of a reply goes into the live reply opened for that message, if any.

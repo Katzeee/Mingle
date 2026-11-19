@@ -1,0 +1,337 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import type { Harness, HarnessSession, TurnEnd } from "../harness/harness.ts";
+import type { Agent, Store, Task } from "../store/store.ts";
+
+/**
+ * Several things at once (docs/spec.md 4.13). An agent's main session talks with people; work that
+ * takes a while goes to a line: a session of the agent's own for that one task, beside the main
+ * one. A line is the same agent, so it answers in the chat as the agent, about its task only.
+ *
+ * Sessions open for a turn and close when it ends: an idle line costs nothing, and the next
+ * follow-up resumes the same conversation, or starts a new one with the brief when it cannot.
+ */
+
+/** Lines of one agent working at the same time; more wait their turn. */
+export const MAX_LINES = 3;
+
+export interface LineDeps {
+  readonly store: Store;
+  readonly harness: Harness;
+  /** Where the line works: its own directory, outside the agent's home. */
+  readonly dir: (agent: Agent, task: Task) => string;
+  /** The guide the line's session opens with. */
+  readonly manual: (agent: Agent, task: Task) => string;
+  /** Mingle's variables for this line: its own token, scoped to the task. */
+  readonly env: (agent: Agent, task: Task) => Record<string, string>;
+  /** The variables the owner set for the agent. */
+  readonly agentEnv: (agentId: string) => Promise<Record<string, string>> | undefined;
+  /** Told with the agent's next input: no turn of its own (like the owner's notes). */
+  readonly note: (agentId: string, body: string) => void;
+  /**
+   * Follow-ups handed to the line and not answered yet. Kept in the store, so what was handed over
+   * before a restart (or while the line waited for a free slot) still reaches it.
+   */
+  readonly unanswered: (task: Task) => { id: string; input: string }[];
+  readonly paused: (agentId: string) => boolean;
+  readonly log?: (line: string) => void;
+}
+
+interface Line {
+  readonly taskId: string;
+  readonly agentId: string;
+  /** Inputs waiting for the line's next turn. */
+  pending: string[];
+  /**
+   * Messages steered into the turn under way. One that lands as the turn ends can be taken and
+   * never acted on; if it is still unanswered when the turn ends, it goes in again as the next.
+   */
+  steered: Map<string, string>;
+  /** Messages already in `pending`, so a recovered follow-up is not handed over twice. */
+  pendingIds: Set<string>;
+  /**
+   * Not run since Mingle (re)started or the agent came back: its next turn picks up the follow-ups
+   * the store says are still unanswered, which the memory of the previous run took with it.
+   */
+  recovering: boolean;
+  session?: HarnessSession | undefined;
+  /** A turn is under way, or its session is opening. */
+  active: boolean;
+  /** Bumped whenever the line is let go, so a late event of an old session changes nothing. */
+  generation: number;
+}
+
+export class Lines {
+  private readonly lines = new Map<string, Line>();
+  private readonly deps: LineDeps;
+  private stopping = false;
+
+  constructor(deps: LineDeps) {
+    this.deps = deps;
+  }
+
+  /** Work that was under way when Mingle stopped, or when the agent was paused, goes on. */
+  restore(agentId?: string): void {
+    for (const task of this.deps.store.activeLines(agentId)) {
+      if (this.deps.paused(task.agentId)) continue;
+      if (task.lineState === "running") {
+        this.wake(
+          task.id,
+          "[mingle] Your work on this task was interrupted (Mingle restarted, or the owner paused and resumed you). Continue where you left off.",
+        );
+      } else this.schedule(task.agentId);
+    }
+  }
+
+  /** Start a new task's line, now or once a line is free. */
+  start(task: Task): void {
+    this.line(task).pending.push(this.brief(task));
+    this.schedule(task.agentId);
+  }
+
+  /** Hand the line something (`messageId`: the message it is): into the turn under way, or as its next. */
+  wake(taskId: string, input: string, messageId?: string): void {
+    const task = this.deps.store.taskById(taskId);
+    if (!task || task.lineState === "ended") return;
+    const line = this.line(task);
+    if (line.active && line.session) {
+      if (messageId) line.steered.set(messageId, input);
+      const session = line.session;
+      // Refused (the turn just ended, say): it waits for the line's next turn instead.
+      const later = () => {
+        if (line.session === session && line.active) return void line.pending.push(input);
+        this.wake(taskId, input, messageId);
+      };
+      void session.deliver(input, randomUUID()).then((r) => r.outcome === "rejected" && later(), later);
+      return;
+    }
+    if (messageId) {
+      if (line.pendingIds.has(messageId)) return;
+      line.pendingIds.add(messageId);
+    }
+    line.pending.push(input);
+    if (task.lineState !== "running") this.deps.store.updateLine(task.id, { lineState: "queued" });
+    this.schedule(task.agentId);
+  }
+
+  /** How many lines of this agent are working or waiting for a free line. */
+  busy(agentId: string): number {
+    return this.deps.store.activeLines(agentId).length;
+  }
+
+  /** The owner stopped one task: its line ends for good. */
+  async end(taskId: string): Promise<void> {
+    const line = this.lines.get(taskId);
+    this.lines.delete(taskId);
+    this.deps.store.updateLine(taskId, { lineState: "ended" });
+    if (line) await this.letGo(line, true);
+    const task = this.deps.store.taskById(taskId);
+    if (task) this.schedule(task.agentId);
+  }
+
+  /**
+   * `/stop`: every line of the agent stops its turn and waits; the next message handed to it wakes
+   * it. Queued ones stay queued.
+   */
+  async stopAll(agentId: string): Promise<boolean> {
+    let stopped = false;
+    for (const line of [...this.lines.values()].filter((l) => l.agentId === agentId)) {
+      if (!line.active) continue;
+      stopped = true;
+      line.pending = [];
+      line.pendingIds.clear();
+      await this.letGo(line, true);
+      this.deps.store.updateLine(line.taskId, { lineState: "idle" });
+    }
+    return stopped;
+  }
+
+  /** Paused or deleted: close the sessions, keep where each line stood for when it comes back. */
+  async suspend(agentId: string): Promise<void> {
+    for (const line of [...this.lines.values()].filter((l) => l.agentId === agentId)) {
+      this.lines.delete(line.taskId);
+      await this.letGo(line, true);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.stopping = true;
+    await Promise.all([...this.lines.values()].map((line) => this.letGo(line, false)));
+    this.lines.clear();
+  }
+
+  private line(task: Task): Line {
+    let line = this.lines.get(task.id);
+    if (!line) {
+      line = {
+        taskId: task.id,
+        agentId: task.agentId,
+        pending: [],
+        steered: new Map(),
+        pendingIds: new Set(),
+        recovering: true,
+        active: false,
+        generation: 0,
+      };
+      this.lines.set(task.id, line);
+    }
+    return line;
+  }
+
+  /** The brief a line starts from: the task, the message it came from, and what is asked. */
+  private brief(task: Task, previous?: string): string {
+    const parts = [
+      `[task=${task.id} from=${task.fromMessage ?? "-"} chat=${task.fromChat ?? "-"}] ${task.title}`,
+      task.brief ?? "",
+    ];
+    if (task.summary) parts.push(`What you reported last time:\n${task.summary}`);
+    if (previous) parts.push(previous);
+    return parts.filter(Boolean).join("\n\n");
+  }
+
+  /** Start the lines that have something to do, while there is room. */
+  private schedule(agentId: string): void {
+    if (this.stopping || this.deps.paused(agentId)) return;
+    const working = () => [...this.lines.values()].filter((l) => l.agentId === agentId && l.active).length;
+    const waiting = this.deps.store
+      .activeLines(agentId)
+      .map((task) => ({ task, line: this.line(task) }))
+      .filter(({ line }) => !line.active);
+    for (const { task, line } of waiting) {
+      if (working() >= MAX_LINES) break;
+      // Queued since a restart with nothing in hand: it starts from its brief again.
+      if (!line.pending.length) line.pending.push(this.brief(task));
+      void this.run(line);
+    }
+  }
+
+  private async run(line: Line): Promise<void> {
+    const { store } = this.deps;
+    const task = store.taskById(line.taskId);
+    const agent = task && store.agent(task.agentId);
+    if (!task || !agent) {
+      this.lines.delete(line.taskId);
+      return;
+    }
+    line.active = true;
+    const gen = ++line.generation;
+    store.updateLine(task.id, { lineState: "running", lineError: null });
+    let session: HarnessSession;
+    try {
+      session = await this.open(line, agent, task, gen);
+    } catch (error) {
+      if (gen !== line.generation) return;
+      this.failed(line, task, (error as Error).message);
+      return;
+    }
+    if (gen !== line.generation) {
+      await session.dispose().catch(() => {});
+      return;
+    }
+    line.session = session;
+    if (task.sessionId !== session.id) store.updateLine(task.id, { sessionId: session.id });
+    if (line.recovering) {
+      line.recovering = false;
+      for (const { id, input } of this.deps.unanswered(task)) {
+        if (!line.pendingIds.has(id)) line.pending.push(input);
+      }
+    }
+    // A new conversation instead of the old one: it starts from the brief, not from nothing.
+    const fresh = Boolean(task.sessionId) && !session.resumed;
+    const input = line.pending.join("\n\n");
+    line.pending = [];
+    line.pendingIds.clear();
+    const text = fresh ? this.brief(task, input) : input;
+    const result = await session.deliver(text, randomUUID()).catch((error: Error) => ({
+      outcome: "rejected" as const,
+      reason: error.message,
+    }));
+    if (result.outcome === "rejected" && gen === line.generation) {
+      this.failed(line, task, result.reason ?? "the harness refused the input");
+    }
+  }
+
+  private async open(line: Line, agent: Agent, task: Task, gen: number): Promise<HarnessSession> {
+    const dir = this.deps.dir(agent, task);
+    mkdirSync(dir, { recursive: true });
+    const own = (await this.deps.agentEnv(agent.id)) ?? {};
+    const options = {
+      harness: agent.harness,
+      model: agent.model,
+      cwd: dir,
+      appendSystemPrompt: this.deps.manual(agent, task),
+      env: { ...own, ...this.deps.env(agent, task) },
+    };
+    const events = {
+      onTurnStarted: () => {},
+      onActivity: () => {},
+      onTurnEnded: (outcome: TurnEnd) => {
+        if (gen === line.generation) void this.ended(line, outcome);
+      },
+    };
+    try {
+      return await this.deps.harness.open({ ...options, resume: task.sessionId }, events);
+    } catch (error) {
+      // The old conversation would not open: a new one, which starts from the brief.
+      if (!task.sessionId) throw error;
+      this.deps.log?.(`line ${task.id}: could not resume (${(error as Error).message}); starting over`);
+      // `resumed` is false on it, so the brief goes with the input.
+      return await this.deps.harness.open({ ...options, resume: null }, events);
+    }
+  }
+
+  /** A turn ended: the next input goes in, or the session closes until the next follow-up. */
+  private async ended(line: Line, outcome: TurnEnd): Promise<void> {
+    const { store } = this.deps;
+    const task = store.taskById(line.taskId);
+    if (!task) return;
+    if (outcome.kind === "failed") {
+      this.failed(line, task, outcome.reason ?? outcome.failure ?? "the turn failed");
+      return;
+    }
+    // What came in during the turn and is still unanswered: it may never have been seen.
+    for (const [id, input] of line.steered) {
+      if (store.message(id)?.state === "delivered") line.pending.push(input);
+    }
+    line.steered.clear();
+    if (line.pending.length && line.session) {
+      const input = line.pending.join("\n\n");
+      line.pending = [];
+      line.pendingIds.clear();
+      const gen = line.generation;
+      const result = await line.session.deliver(input, randomUUID()).catch((error: Error) => ({
+        outcome: "rejected" as const,
+        reason: error.message,
+      }));
+      // Refused: the line would wait for a turn that never comes. It stops with an error, which the
+      // main session hears about, and the next follow-up starts it again.
+      if (result.outcome === "rejected" && gen === line.generation) {
+        this.failed(line, task, result.reason ?? "the harness refused the input");
+      }
+      return;
+    }
+    await this.letGo(line, false);
+    if (store.taskById(line.taskId)?.lineState === "running") store.updateLine(line.taskId, { lineState: "idle" });
+    this.schedule(line.agentId);
+  }
+
+  private failed(line: Line, task: Task, why: string): void {
+    this.deps.log?.(`line ${task.id}: ${why}`);
+    this.deps.store.updateLine(task.id, { lineState: "error", lineError: why.slice(0, 300) });
+    this.deps.note(
+      task.agentId,
+      `[mingle] The work on task ${task.id} ("${task.title}") stopped with an error: ${why.slice(0, 300)}. Tell the person who asked, or start it again with task run.`,
+    );
+    void this.letGo(line, false).then(() => this.schedule(task.agentId));
+  }
+
+  private async letGo(line: Line, abort: boolean): Promise<void> {
+    line.generation++;
+    line.active = false;
+    const session = line.session;
+    line.session = undefined;
+    if (!session) return;
+    if (abort) await session.abort().catch(() => false);
+    await session.dispose().catch(() => {});
+  }
+}

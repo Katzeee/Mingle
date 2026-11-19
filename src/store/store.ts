@@ -39,8 +39,6 @@ export interface Agent {
   askAll: boolean;
   /** Give the agent a daily turn to tidy its memory while it is idle (docs/spec.md 4.5). */
   tidy: boolean;
-  /** The agent whose team this one is in (docs/spec.md 4.13), or null. */
-  leadId: string | null;
   createdAt: number;
 }
 
@@ -163,7 +161,12 @@ export interface Message {
   retryAt?: number | null;
   /** Outbound: Mingle's own words in the chat, not the agent's (docs/spec.md 4.7). */
   notice?: boolean;
+  /** The task whose line sent it, or a follow-up Mingle handed to that line (docs/spec.md 4.13). */
+  lineTaskId?: string | null;
 }
+
+/** Where a task's line is (docs/spec.md 4.13); null for a task that is only a note. */
+export type LineState = "queued" | "running" | "idle" | "ended" | "error";
 
 export interface Task {
   id: string;
@@ -172,8 +175,13 @@ export interface Task {
   status: TaskStatus;
   fromMessage: string | null;
   fromChat: string | null;
-  /** The team member doing it, when the lead gave it to one (docs/spec.md 4.13). */
-  assigneeId: string | null;
+  /** A task the agent works on in a line of its own (docs/spec.md 4.13). */
+  lineState: LineState | null;
+  sessionId: string | null;
+  brief: string | null;
+  /** What the line reported when it finished. */
+  summary: string | null;
+  lineError: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -330,18 +338,6 @@ export class Store {
     this.db.prepare("UPDATE agents SET ask_all = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
   }
 
-  /** Put an agent in a team, or take it out (null). Rules are checked by the caller (docs/spec.md 4.13). */
-  setLead(id: string, leadId: string | null): void {
-    this.db.prepare("UPDATE agents SET lead_id = ?, updated_at = ? WHERE id = ?").run(leadId, this.now(), id);
-  }
-
-  /** The members of an agent's team, oldest first. */
-  members(leadId: string): Agent[] {
-    return (this.db.prepare("SELECT * FROM agents WHERE lead_id = ? ORDER BY created_at").all(leadId) as Row[]).map(
-      toAgent,
-    );
-  }
-
   setTidy(id: string, on: boolean): void {
     this.db.prepare("UPDATE agents SET tidy = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
   }
@@ -481,30 +477,11 @@ export class Store {
     return row && toConnection(row);
   }
 
-  /** The agent's chat apps. The team's own link (docs/spec.md 4.13) is not one: see `teamConnection`. */
   connections(agentId?: string): Connection[] {
     const rows = agentId
-      ? this.db
-          .prepare("SELECT * FROM connections WHERE agent_id = ? AND platform != 'team' ORDER BY created_at")
-          .all(agentId)
-      : this.db.prepare("SELECT * FROM connections WHERE platform != 'team' ORDER BY created_at").all();
+      ? this.db.prepare("SELECT * FROM connections WHERE agent_id = ? ORDER BY created_at").all(agentId)
+      : this.db.prepare("SELECT * FROM connections ORDER BY created_at").all();
     return (rows as Row[]).map(toConnection);
-  }
-
-  /** The agent's link to its team's direct chats, created on first need (docs/spec.md 4.13). */
-  teamConnection(agentId: string, create = false): Connection | undefined {
-    const row = this.db.prepare("SELECT * FROM connections WHERE agent_id = ? AND platform = 'team'").get(agentId) as
-      | Row
-      | undefined;
-    if (row || !create) return row && toConnection(row);
-    const id = this.mint("connections", "n", 6);
-    const t = this.now();
-    this.db
-      .prepare(
-        "INSERT INTO connections (id, agent_id, platform, bot_id, state, created_at, updated_at) VALUES (?, ?, 'team', ?, 'connected', ?, ?)",
-      )
-      .run(id, agentId, agentId, t, t);
-    return this.connection(id);
   }
 
   updateConnection(
@@ -772,7 +749,7 @@ export class Store {
       .prepare(
         `SELECT m.*, n.platform, c.connection_id FROM messages m JOIN chats c ON c.id = m.chat_id
          JOIN connections n ON n.id = c.connection_id
-         WHERE n.agent_id = ? AND n.platform != 'team' AND m.state = 'held' ORDER BY m.created_at, m.rowid`,
+         WHERE n.agent_id = ? AND m.state = 'held' ORDER BY m.created_at, m.rowid`,
       )
       .all(agentId) as Row[];
     return rows.map((r) => {
@@ -998,14 +975,25 @@ export class Store {
     return shortId("f", 7);
   }
 
-  insertOutbound(input: { chatId: string; body: string; replyTo: string | null; notice?: boolean }): Message {
+  insertOutbound(input: {
+    chatId: string;
+    body: string;
+    replyTo: string | null;
+    notice?: boolean;
+    lineTaskId?: string | null;
+  }): Message {
     const id = this.mint("messages", "m", 5);
     this.db
       .prepare(
-        `INSERT INTO messages (id, chat_id, direction, body, reply_to, state, notice, created_at) VALUES (?, ?, 'out', ?, ?, 'pending', ?, ?)`,
+        `INSERT INTO messages (id, chat_id, direction, body, reply_to, state, notice, line_task_id, created_at) VALUES (?, ?, 'out', ?, ?, 'pending', ?, ?, ?)`,
       )
-      .run(id, input.chatId, input.body, input.replyTo, input.notice ? 1 : 0, this.now());
+      .run(id, input.chatId, input.body, input.replyTo, input.notice ? 1 : 0, input.lineTaskId ?? null, this.now());
     return this.message(id) as Message;
+  }
+
+  /** Hand an inbound message to a task's line (docs/spec.md 4.13). */
+  setMessageLine(id: string, taskId: string): void {
+    this.db.prepare("UPDATE messages SET line_task_id = ? WHERE id = ?").run(taskId, id);
   }
 
   setOutboundResult(id: string, state: OutboundState, platformId: string | null): void {
@@ -1322,10 +1310,20 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT m.* FROM messages m JOIN chats c ON c.id = m.chat_id JOIN connections n ON n.id = c.connection_id
-         WHERE n.agent_id = ? AND n.platform != 'team' AND m.direction = 'in' AND m.state = 'delivered'
+         WHERE n.agent_id = ? AND m.direction = 'in' AND m.state = 'delivered' AND m.line_task_id IS NULL
          ORDER BY m.created_at`,
       )
       .all(agentId) as Row[];
+    return rows.map(toMessage);
+  }
+
+  /** Follow-ups handed to a line and not answered yet (docs/spec.md 4.13), oldest first. */
+  lineInbox(taskId: string): Message[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM messages WHERE line_task_id = ? AND direction = 'in' AND state = 'delivered' ORDER BY created_at",
+      )
+      .all(taskId) as Row[];
     return rows.map(toMessage);
   }
 
@@ -1445,39 +1443,15 @@ export class Store {
 
   // ------------------------------------------------------------------- tasks
 
-  createTask(input: {
-    agentId: string;
-    title: string;
-    fromMessage: string | null;
-    fromChat: string | null;
-    assigneeId?: string | null;
-  }): Task {
+  createTask(input: { agentId: string; title: string; fromMessage: string | null; fromChat: string | null }): Task {
     const id = this.mint("tasks", "t", 3);
     const t = this.now();
     this.db
       .prepare(
-        "INSERT INTO tasks (id, agent_id, title, from_message, from_chat, assignee_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tasks (id, agent_id, title, from_message, from_chat, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, input.agentId, input.title, input.fromMessage, input.fromChat, input.assigneeId ?? null, t, t);
+      .run(id, input.agentId, input.title, input.fromMessage, input.fromChat, t, t);
     return this.task(input.agentId, id) as Task;
-  }
-
-  /** Tasks the agent's lead gave it (docs/spec.md 4.13). */
-  assignedTasks(assigneeId: string, all: boolean): Task[] {
-    const filter = all ? "" : "AND status IN ('todo', 'in_progress')";
-    return (
-      this.db
-        .prepare(`SELECT * FROM tasks WHERE assignee_id = ? ${filter} ORDER BY created_at`)
-        .all(assigneeId) as Row[]
-    ).map(toTask);
-  }
-
-  /** A task the agent may update: its own, or one its lead gave it. */
-  taskFor(agentId: string, id: string): Task | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM tasks WHERE id = ? AND (agent_id = ? OR assignee_id = ?)")
-      .get(id, agentId, agentId) as Row | undefined;
-    return row && toTask(row);
   }
 
   task(agentId: string, id: string): Task | undefined {
@@ -1495,12 +1469,105 @@ export class Store {
     return rows.map(toTask);
   }
 
-  /** Set the status of a task the agent owns or was given by its lead. */
+  /** A task with a line of its own, started at once or queued (docs/spec.md 4.13). */
+  createLineTask(input: {
+    agentId: string;
+    title: string;
+    fromMessage: string;
+    fromChat: string;
+    brief: string;
+  }): Task {
+    const id = this.mint("tasks", "t", 3);
+    const t = this.now();
+    this.db
+      .prepare(
+        "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, created_at, updated_at) VALUES (?, ?, ?, 'in_progress', ?, ?, 'queued', ?, ?, ?)",
+      )
+      .run(id, input.agentId, input.title, input.fromMessage, input.fromChat, input.brief, t, t);
+    return this.task(input.agentId, id) as Task;
+  }
+
+  /** A task by its ID alone, for the line that works on it. */
+  taskById(id: string): Task | undefined {
+    const row = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Row | undefined;
+    return row && toTask(row);
+  }
+
+  updateLine(
+    id: string,
+    patch: Partial<{ lineState: LineState; sessionId: string | null; summary: string; lineError: string | null }>,
+  ): void {
+    const columns: Record<string, string> = {
+      lineState: "line_state",
+      sessionId: "session_id",
+      summary: "summary",
+      lineError: "line_error",
+    };
+    const sets: string[] = [];
+    const values: (string | null)[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const column = columns[key];
+      if (!column || value === undefined) continue;
+      sets.push(`${column} = ?`);
+      values.push(value);
+    }
+    if (!sets.length) return;
+    this.db.prepare(`UPDATE tasks SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...values, this.now(), id);
+  }
+
+  /**
+   * The agent's tasks that have a line: those still under way, and those finished in the last day,
+   * for the console's "what it is doing" (docs/spec.md 4.13). Oldest first.
+   */
+  lineTasks(agentId: string, since: number): Task[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM tasks WHERE agent_id = ? AND line_state IS NOT NULL
+           AND (line_state IN ('queued', 'running') OR status IN ('todo', 'in_progress') OR updated_at >= ?)
+           ORDER BY created_at`,
+        )
+        .all(agentId, since) as Row[]
+    ).map(toTask);
+  }
+
+  /** Every task whose line has work under way or waiting for a free line, for restarts. */
+  activeLines(agentId?: string): Task[] {
+    const scope = agentId ? "AND agent_id = ?" : "";
+    return (
+      this.db
+        .prepare(`SELECT * FROM tasks WHERE line_state IN ('queued', 'running') ${scope} ORDER BY created_at`)
+        .all(...(agentId ? [agentId] : [])) as Row[]
+    ).map(toTask);
+  }
+
+  /** The line a follow-up belongs to: the task whose line sent `messageId`, or that it was started from. */
+  lineOfMessage(agentId: string, messageId: string): Task | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT t.* FROM tasks t WHERE t.agent_id = ? AND t.line_state IS NOT NULL AND (
+           t.id = (SELECT line_task_id FROM messages WHERE id = ?) OR t.from_message = ?)
+         ORDER BY t.created_at DESC LIMIT 1`,
+      )
+      .get(agentId, messageId, messageId) as Row | undefined;
+    return row && toTask(row);
+  }
+
+  /** The latest line started in this chat (a thread that is one conversation). */
+  lineOfChat(agentId: string, chatId: string): Task | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM tasks WHERE agent_id = ? AND line_state IS NOT NULL AND from_chat = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(agentId, chatId) as Row | undefined;
+    return row && toTask(row);
+  }
+
   setTaskStatus(agentId: string, id: string, status: TaskStatus): Task | undefined {
     this.db
-      .prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND (agent_id = ? OR assignee_id = ?)")
-      .run(status, this.now(), id, agentId, agentId);
-    return this.taskFor(agentId, id);
+      .prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND agent_id = ?")
+      .run(status, this.now(), id, agentId);
+    return this.task(agentId, id);
   }
 
   // --------------------------------------------------------------- reminders
@@ -1703,7 +1770,6 @@ function toAgent(r: Row): Agent {
     hasReplied: Number(r.has_replied) === 1,
     askAll: Number(r.ask_all) === 1,
     tidy: Number(r.tidy) === 1,
-    leadId: str(r.lead_id),
     createdAt: Number(r.created_at),
   };
 }
@@ -1793,6 +1859,7 @@ function toMessage(r: Row): Message {
     createdAt: Number(r.created_at),
     retryAt: r.retry_at == null ? null : Number(r.retry_at),
     ...(r.notice === 1 ? { notice: true } : {}),
+    ...(r.line_task_id ? { lineTaskId: String(r.line_task_id) } : {}),
   };
 }
 
@@ -1804,7 +1871,11 @@ function toTask(r: Row): Task {
     status: String(r.status) as TaskStatus,
     fromMessage: str(r.from_message),
     fromChat: str(r.from_chat),
-    assigneeId: str(r.assignee_id),
+    lineState: (str(r.line_state) as LineState | null) ?? null,
+    sessionId: str(r.session_id),
+    brief: str(r.brief),
+    summary: str(r.summary),
+    lineError: str(r.line_error),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };

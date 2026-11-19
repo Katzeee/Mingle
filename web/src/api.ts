@@ -59,9 +59,7 @@ export type Platform =
   | "discord"
   | "telegram"
   | "imessage"
-  | "github"
-  /** The direct chats between a lead and its team on this computer (docs/spec.md 4.13). */
-  | "team";
+  | "github";
 
 export interface ConnectionView {
   id: string;
@@ -172,11 +170,12 @@ export interface AgentView {
   /** The daily memory tidy-up while the agent is idle (docs/spec.md 4.5). */
   tidy: boolean;
   requests: AccessRequest[];
-  /** The agent whose team this one is in, or null (docs/spec.md 4.13). */
-  leadId: string | null;
-  /** Team chats Mingle stopped after too many turns with no person speaking. */
-  teamStops: { with: string; name: string; at: number }[];
+  /** Things under way at once besides talking: its lines working or waiting their turn (docs/spec.md 4.13). */
+  doing: number;
 }
+
+/** Where a piece of work an agent is doing on the side stands (docs/spec.md 4.13). */
+export type LineState = "running" | "queued" | "waiting" | "done" | "error" | "stopped";
 
 /** One chat app account in the agent's address book. */
 export interface ContactAccount {
@@ -238,6 +237,8 @@ export interface Activity {
   retryAt: number | null;
   files: string[];
   createdAt: number;
+  /** The work this message started, or the work it was handed to. */
+  line: { id: string; title: string; state: LineState; started: boolean } | null;
 }
 
 /** One chat in the activity, with its latest messages (oldest first) and what still needs the owner. */
@@ -374,14 +375,16 @@ export type OnboardingState =
 
 export interface Task {
   id: string;
-  agentId: string;
   title: string;
   status: string;
-  /** The team member doing it, when the lead gave it to one. */
-  assigneeId: string | null;
-  assignee: string | null;
-  /** Who gave it, when it was given to a team member. */
-  lead: string | null;
+  /** Worked on in a line of its own; null for a task that is only a note. */
+  line: LineState | null;
+  summary: string | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** The chat it came from. */
+  from: { name: string | null; platform: Platform | undefined } | null;
 }
 
 export interface Reminder {
@@ -424,14 +427,8 @@ export const api = {
     call<SetupState>("GET", `/v1/admin/platforms/${platform}/setup`, undefined, remote),
   setupAction: (platform: Platform, action: string, remote?: string) =>
     call<SetupState>("POST", `/v1/admin/platforms/${platform}/setup/${action}`, undefined, remote),
-  createAgent: (input: { name: string; role: string; harness: string; model?: string; lead?: string }) =>
+  createAgent: (input: { name: string; role: string; harness: string; model?: string }) =>
     call<AgentView>("POST", "/v1/admin/agents", input),
-  /** Put an agent in this agent's team (docs/spec.md 4.13). */
-  addMember: (id: string, member: string) => call<AgentView>("POST", `/v1/admin/agents/${id}/members`, { member }),
-  removeMember: (id: string, member: string) => call("DELETE", `/v1/admin/agents/${id}/members/${member}`),
-  /** Let a team chat that Mingle stopped go on. */
-  continueTeam: (id: string, other: string) =>
-    call<{ released: number }>("POST", `/v1/admin/agents/${id}/team/continue`, { with: other }),
   setAvatar: (id: string, image: Blob) => call<AgentView>("PUT", `/v1/admin/agents/${id}/avatar`, image),
   clearAvatar: (id: string) => call<AgentView>("DELETE", `/v1/admin/agents/${id}/avatar`),
   setRole: (id: string, role: string) => call("PUT", `/v1/admin/agents/${id}/role`, { role }),
