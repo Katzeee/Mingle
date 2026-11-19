@@ -90,6 +90,24 @@ describe("harness list", () => {
     expect(list[0]?.version).toBe("1.2.3");
   });
 
+  it("offers Devin as a usable harness on OAR 0.120.0", async () => {
+    const devin: Runtime = {
+      ...defaultRuntimes.require("devin"),
+      installation: async () => ({ kind: "available", via: "executable", command: "devin", version: "1.0.0" }),
+    };
+    const source = {
+      require: (id: string): Runtime => {
+        if (id !== "devin") throw new Error("not offered here");
+        return devin;
+      },
+      list: () => [devin],
+    };
+    const list = await oarHarness(source).available();
+    expect(list.map((h) => h.id)).toEqual(["devin"]);
+    expect(list[0]?.disabled).toBeUndefined();
+    expect(list[0]?.noEnv).toBeUndefined();
+  });
+
   /** CodeBuddy whose probe answers from `answers` in turn, found at a real file. */
   function flaky(answers: ("found" | "missed" | "timeout" | "refused")[]) {
     const command = join(cwd(), "codebuddy.cmd");
