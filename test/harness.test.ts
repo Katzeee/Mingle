@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,7 @@ import {
   UnsupportedOptionError,
 } from "@botiverse/oar";
 import { createSessionKernel } from "@botiverse/oar/kernel";
-import { eventsOf, usageOf } from "@botiverse/oar/observe";
+import { eventsOf, promptAndWait, usageOf } from "@botiverse/oar/observe";
 import { scriptedRuntime } from "@botiverse/oar/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { oarHarness, usageWindows } from "../src/harness/harness.ts";
@@ -707,4 +707,19 @@ describe("turn usage", () => {
       }
     },
   );
+});
+
+it("runs Devin ACP's full terminal command with the session environment", async () => {
+  const dir = cwd();
+  copyFileSync(new URL("./fixtures/devin-acp.cjs", import.meta.url), join(dir, "acp"));
+  const session = await defaultRuntimes
+    .require("devin")
+    .session({ kind: "available", via: "executable", command: process.execPath }, { cwd: dir, env: ENV });
+  try {
+    const result = await promptAndWait(session, "check the terminal", { timeoutMs: 3000 });
+    expect(result).toMatchObject({ kind: "ended", outcome: { kind: "completed" } });
+    expect(result.kind === "ended" && result.text.trim()).toBe("present");
+  } finally {
+    await session.dispose();
+  }
 });

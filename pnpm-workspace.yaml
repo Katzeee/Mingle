@@ -5,3 +5,6 @@ minimumReleaseAgeExclude:
 allowBuilds:
   "@google/genai": false
   protobufjs: false
+# Remove the Devin ACP terminal patch once OAR ships the fix.
+patchedDependencies:
+  "@botiverse/oar@0.120.0": patches/@botiverse__oar@0.120.0.patch

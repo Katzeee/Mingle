@@ -1,0 +1,13 @@
+diff --git a/dist/runtimes/devin/session.js b/dist/runtimes/devin/session.js
+index f5ffe5608e8841a7f8752b69b481cf1d05ce0c0a..0ac29ed131bae1821b168059a6152b1765d4086f 100644
+--- a/dist/runtimes/devin/session.js
++++ b/dist/runtimes/devin/session.js
+@@ -32,6 +32,8 @@ export function supportsDevinBypass(response) {
+ }
+ export const devinAcpProfile = {
+     args: () => devinAcpArgs(),
++    // Devin sends the full shell command in terminal/create without args.
++    terminalShellCommand: true,
+     resumeKeepsSessionCwd: true,
+     isResumeNotFound: (native) => native.code === -32_016 && asRecord(native.data)?.["cognition.ai/errorKind"] === "session_not_found",
+     capabilities: { queue: { durable: false }, attribution: "opaque" },
