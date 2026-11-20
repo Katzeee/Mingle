@@ -149,7 +149,7 @@ const HEARD_CHARS = 1200;
  * What was said in a group that hears everything, as it reaches the agent (docs/spec.md 4.2): the
  * stretch since it last spoke there, none of it addressed to it. It may answer, or say nothing.
  */
-export function formatHeard(store: Store, chat: Chat, messages: readonly Message[]): string {
+export function formatHeard(store: Store, chat: Chat, messages: readonly Message[], omitted = 0): string {
   const lines = messages
     .map((m) => {
       const chars = [...m.body];
@@ -163,8 +163,13 @@ export function formatHeard(store: Store, chat: Chat, messages: readonly Message
   const count = lines.length === 1 ? "1 message" : `${lines.length} messages`;
   // The pace is the group's: a thread's stretch names the group it belongs to.
   const hearId = chat.parentId ?? chat.id;
+  // Only the newest ones fit: say how many came before, and where to read them.
+  const earlier =
+    omitted > 0 && messages[0]
+      ? ` ${omitted === 1 ? "1 earlier message is" : `${omitted} earlier messages are`} not shown: \`message read ${chat.id} --before ${messages[0].id}\`.`
+      : "";
   return [
-    `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you. This group lets you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so. If this group is mostly not for you, hear it less: \`chat hear ${hearId} --every 1h\`, or \`--mute\` to hear nothing until someone there addresses you.`,
+    `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you.${earlier} This group lets you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so. If this group is mostly not for you, hear it less: \`chat hear ${hearId} --every 1h\`, or \`--mute\` to hear nothing until someone there addresses you.`,
     ...lines,
   ].join("\n\n");
 }

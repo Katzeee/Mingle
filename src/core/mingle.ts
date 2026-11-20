@@ -59,7 +59,7 @@ import { renderManual } from "./manual.ts";
 import { Outbox, type SendReport } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
 import { Remotes, type RemoteTransport } from "./remotes.ts";
-import { AgentRuntime, type FailureInfo } from "./runtime.ts";
+import { AgentRuntime, type FailureInfo, type TextTrack } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
 import { BotHops, trigger } from "./trigger.ts";
 
@@ -1801,14 +1801,49 @@ export class Mingle {
     const spoke = this.store.lastSpokeAt(chat.id);
     const from = spoke === undefined ? waiting.from : Math.max(waiting.from, spoke + 1);
     const messages = this.store.background(chat.id, from, HEAR_MESSAGES);
+    const omitted = messages.length < HEAR_MESSAGES ? 0 : this.store.backgroundCount(chat.id, from) - messages.length;
     // The agent spoke after all of it, or only bots are left: nothing new from a person.
     const person = messages.some(
       (m) => !(m.senderId && this.store.contactByPlatformId(chat.connectionId, m.senderId)?.isBot),
     );
     if (!person) return;
     this.unanswered.set(chat.id, this.unansweredIn(chat.id) + 1);
-    this.heardAt.set(chat.id, Date.now());
-    runtime.enqueueText(formatHeard(this.store, chat, messages));
+    const heardAt = Date.now();
+    this.heardAt.set(chat.id, heardAt);
+    runtime.enqueueText(
+      formatHeard(this.store, chat, messages, omitted),
+      this.timeStretch(waiting.agentId, chat.id, {
+        count: messages.length + omitted,
+        first: omitted > 0 ? from : (messages[0]?.createdAt ?? heardAt),
+        last: messages.at(-1)?.createdAt ?? heardAt,
+        heard: heardAt,
+      }),
+    );
+  }
+
+  /**
+   * Where the time of a heard stretch went (docs/spec.md 4.2), logged once its turn ends: first and
+   * last message, handed over, the turn starting, the agent speaking there. Only to the local log,
+   * to tune the pace from what really happened.
+   */
+  private timeStretch(
+    agentId: string,
+    chatId: string,
+    s: { count: number; first: number; last: number; heard: number },
+  ): TextTrack {
+    let turn: number | undefined;
+    const secs = (at: number) => `+${Math.round((at - s.first) / 1000)}s`;
+    return {
+      delivered: (at) => {
+        turn ??= at;
+      },
+      ended: () => {
+        const spoke = this.store.firstSpokeAt(chatId, s.heard);
+        this.log(
+          `${agentId}: heard ${chatId}: ${s.count} message${s.count === 1 ? "" : "s"}, first +0s, last ${secs(s.last)}, handed over ${secs(s.heard)}, turn ${turn === undefined ? "?" : secs(turn)}, ${spoke === undefined ? "did not speak" : `spoke ${secs(spoke)}`}`,
+        );
+      },
+    };
   }
 
   /**
