@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { ChatKind, Platform } from "../channels/channel.ts";
+import type { HearTier } from "../core/hearing.ts";
 import { shortId } from "../core/ids.ts";
 import { INBOUND, type InboundEvent } from "../core/inbound.ts";
 import { searchTerms } from "../core/terms.ts";
@@ -143,6 +144,8 @@ export interface Chat {
   listen: boolean;
   /** Groups only: how often what it hears reaches the agent, as the agent set it (docs/spec.md 4.2). */
   hearPace: HearPace;
+  /** Groups only: how fast it keeps up with a conversation there, as the owner chose; null follows the group's size. */
+  hearTier: HearTier | null;
   /** Direct chats only: the other person's ID on the platform, when known. */
   peerId: string | null;
 }
@@ -735,6 +738,10 @@ export class Store {
     this.db.prepare("UPDATE chats SET listen = ?, updated_at = ? WHERE id = ?").run(listen ? 1 : 0, this.now(), id);
   }
 
+  setChatHearTier(id: string, tier: HearTier | null): void {
+    this.db.prepare("UPDATE chats SET hear_tier = ?, updated_at = ? WHERE id = ?").run(tier, this.now(), id);
+  }
+
   setChatHearPace(id: string, pace: HearPace): void {
     this.db
       .prepare("UPDATE chats SET hear_pace = ?, hear_every_ms = ?, updated_at = ? WHERE id = ?")
@@ -1200,6 +1207,49 @@ export class Store {
       )
       .all(chatId, from, limit) as Row[];
     return rows.map(toMessage).reverse();
+  }
+
+  /**
+   * Like `background`, but the messages of `first` (the people in a conversation with the agent) come
+   * before the rest: theirs fill the limit first, the newest of the others the room left. Oldest first.
+   */
+  backgroundFor(chatId: string, from: number, first: ReadonlySet<string>, limit: number): Message[] {
+    if (first.size === 0) return this.background(chatId, from, limit);
+    const all = this.background(chatId, from, Number.MAX_SAFE_INTEGER);
+    if (all.length <= limit) return all;
+    const theirs = all.filter((m) => m.senderId !== null && first.has(m.senderId)).slice(-limit);
+    const keep = new Set(theirs);
+    const others = all.filter((m) => !keep.has(m));
+    for (const m of others.slice(Math.max(0, others.length - (limit - theirs.length)))) keep.add(m);
+    return all.filter((m) => keep.has(m));
+  }
+
+  /**
+   * What the agent said in this chat after `after` (Mingle's notices do not count), oldest first, and
+   * who sent the message each one quotes (docs/spec.md 4.2: whom it answered).
+   */
+  spokenSince(chatId: string, after: number): { createdAt: number; quotedSender: string | null }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT m.created_at AS at, q.sender_id AS quoted FROM messages m LEFT JOIN messages q ON q.id = m.reply_to
+         WHERE m.chat_id = ? AND m.direction = 'out' AND m.notice = 0 AND m.state IN ('sent', 'uncertain')
+         AND m.created_at > ? ORDER BY m.created_at, m.rowid`,
+      )
+      .all(chatId, after) as Row[];
+    return rows.map((r) => ({ createdAt: Number(r.at), quotedSender: str(r.quoted) }));
+  }
+
+  /** The people (not bots) who spoke in a group or its threads since `since` (docs/spec.md 4.2). */
+  activePeople(groupId: string, since: number): number {
+    const row = this.db
+      .prepare(
+        `SELECT count(DISTINCT m.sender_id) AS n FROM messages m JOIN chats c ON c.id = m.chat_id
+         LEFT JOIN contacts k ON k.connection_id = c.connection_id AND k.platform_id = m.sender_id
+         WHERE (c.id = ? OR c.parent_id = ?) AND m.direction = 'in' AND m.sender_id IS NOT NULL
+         AND m.created_at >= ? AND coalesce(k.is_bot, 0) = 0`,
+      )
+      .get(groupId, groupId, since) as Row;
+    return Number(row.n);
   }
 
   /** How many messages `background(chatId, from, …)` could return without a limit. */
@@ -1946,6 +1996,7 @@ function toChat(r: Row): Chat {
     access: access(r.access),
     listen: Number(r.listen ?? 0) === 1,
     hearPace: hearPace(r),
+    hearTier: r.hear_tier === "save" || r.hear_tier === "balanced" || r.hear_tier === "fast" ? r.hear_tier : null,
     peerId: str(r.peer_id),
   };
 }

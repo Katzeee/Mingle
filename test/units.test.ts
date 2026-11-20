@@ -85,6 +85,7 @@ describe("formatMessage", () => {
         access: null,
         listen: false,
         hearPace: { kind: "auto" as const },
+        hearTier: null,
         peerId: null,
       },
       "feishu",
@@ -123,6 +124,7 @@ describe("message header contacts", () => {
     access: null,
     listen: false,
     hearPace: { kind: "auto" as const },
+    hearTier: null,
     peerId: null,
   };
   const contact = {
