@@ -161,10 +161,17 @@ export function formatHeard(store: Store, chat: Chat, messages: readonly Message
     })
     .filter(Boolean);
   const count = lines.length === 1 ? "1 message" : `${lines.length} messages`;
+  // The pace is the group's: a thread's stretch names the group it belongs to.
+  const hearId = chat.parentId ?? chat.id;
   return [
-    `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you. Your owner set this group to let you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so.`,
+    `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you. Your owner set this group to let you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so. If this group is mostly not for you, hear it less: \`chat hear ${hearId} --every 1h\`, or \`--mute\` to hear nothing until someone there addresses you.`,
     ...lines,
   ].join("\n\n");
+}
+
+/** A group the agent muted, once someone addresses it there: heard at the usual pace again. */
+export function formatUnmuted(groupId: string): string {
+  return `[mingle] Someone in ${groupId} addressed you, so the mute you set there is over: you hear everything said there again, at the usual pace. To hear it less: \`chat hear ${groupId} --every 1h\` or \`--mute\`. This note needs no answer; answer whoever addressed you as usual.`;
 }
 
 /** Characters of a source message quoted in a reminder; the rest is one `message read` away. */

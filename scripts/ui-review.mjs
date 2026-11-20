@@ -126,7 +126,7 @@ try {
   conn("n4", long.id, "discord", "Wilhelmina#4242", "connected", null, null);
   conn("n9", alex.id, "telegram", "@alex_second_bot", "reconnecting", null, "u1");
   insert(
-    "INSERT INTO chats (id, connection_id, platform_id, kind, name, created_at, updated_at) VALUES ('c1','n1','-1','group','周末徒步 · 北京西山与香山常走路线交流群',?,?)",
+    "INSERT INTO chats (id, connection_id, platform_id, kind, name, listen, hear_pace, created_at, updated_at) VALUES ('c1','n1','-1','group','周末徒步 · 北京西山与香山常走路线交流群',1,'muted',?,?)",
     now,
     now,
   );

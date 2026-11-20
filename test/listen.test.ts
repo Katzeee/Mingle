@@ -17,11 +17,14 @@ describe("a group that hears everything", () => {
   let env: Record<string, string> = {};
 
   /** The agent answers what is addressed to it; what it only heard, it leaves be unless `speak`. */
-  async function setup(options: { speak?: boolean; hearing?: typeof hearing } = {}) {
+  async function setup(
+    options: { speak?: boolean; hearing?: typeof hearing; heard?: (chat: string) => Promise<void> } = {},
+  ) {
     current = await rig(
       async (t) => {
         env = t.options.env as Record<string, string>;
         if (t.input.includes("[mingle] Heard in")) {
+          if (options.heard) await options.heard(/Heard in (c\w+)/.exec(t.input)?.[1] as string);
           if (options.speak) {
             const chat = /Heard in (c\w+)/.exec(t.input)?.[1] as string;
             await runCli(env, ["message", "send", "--to", chat], "I know a shorter route.");
@@ -137,6 +140,120 @@ describe("a group that hears everything", () => {
     r.channel.receive({ text: "three", addressedToBot: false });
     await sleep(1_300);
     expect(r.turns).toHaveLength(2);
+  });
+
+  type Listed = { chat: { id: string }; hearing: { pace: string; everyMs?: number; slowedMs?: number } | null }[];
+  const hearingOf = async (r: Rig, chat: string) =>
+    ((await r.admin("GET", `/v1/admin/agents/${r.agentId}/conversations`)).json as Listed).find(
+      (c) => c.chat.id === chat,
+    )?.hearing;
+
+  it("lets the agent mute a group until someone addresses it there", async () => {
+    let muted: { code: number; stdout: string } | undefined;
+    const r = await setup({
+      heard: async (chat) => {
+        muted ??= await runCli(env, ["chat", "hear", chat, "--mute"]);
+      },
+    });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    r.channel.receive({ text: "lunch?", addressedToBot: false });
+    await until(() => muted);
+    expect(muted?.code).toBe(0);
+    expect(muted?.stdout).toContain("you hear nothing said here until someone @-mentions you");
+    expect(await hearingOf(r, chat)).toEqual({ pace: "muted" });
+    // Muted: what is said is kept, and does not reach the agent.
+    r.channel.receive({ text: "pizza again", addressedToBot: false });
+    await sleep(500);
+    expect(r.turns).toHaveLength(1);
+    expect(r.mingle.store.chatMessages(chat, 10).some((m) => m.body === "pizza again")).toBe(true);
+    // Addressed: the mute is over, the agent hears so with the message, and hears everything again.
+    r.channel.receive({ text: "@alex what do you think?" });
+    await until(() => r.turns.length === 2);
+    expect(r.turns[1]?.input).toContain(`[mingle] Someone in ${chat} addressed you, so the mute you set there is over`);
+    expect(await hearingOf(r, chat)).toEqual({ pace: "auto" });
+    await until(() => r.channel.sent.length === 1);
+    r.channel.receive({ text: "back to lunch", addressedToBot: false });
+    await until(() => r.turns.length === 3);
+    expect(r.turns[2]?.input).toContain("[mingle] Heard in");
+  });
+
+  it("lets the agent hear a group less often, within bounds, and the owner put it back", async () => {
+    const results: { code: number; stdout: string; stderr: string }[] = [];
+    const r = await setup({
+      heard: async (chat) => {
+        if (results.length > 0) return;
+        results.push(await runCli(env, ["chat", "hear", chat, "--every", "1m"]));
+        results.push(await runCli(env, ["chat", "hear", chat, "--every", "2h"]));
+        results.push(await runCli(env, ["chat", "info", chat]));
+      },
+    });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    r.channel.receive({ text: "one", addressedToBot: false });
+    await until(() => results.length === 3);
+    expect(results[0]?.code).not.toBe(0);
+    expect(results[0]?.stderr).toContain("every_out_of_range");
+    expect(results[1]?.stdout).toContain("at most once every 2h");
+    expect(results[2]?.stdout).toContain("hears everything: you hear what was said here at most once every 2h");
+    expect(await hearingOf(r, chat)).toEqual({ pace: "every", everyMs: 2 * 3_600_000 });
+    // Not again within two hours.
+    r.channel.receive({ text: "two", addressedToBot: false });
+    await sleep(600);
+    expect(r.turns).toHaveLength(1);
+    // The owner puts it back on the usual pace: the next stretch comes.
+    expect((await r.admin("DELETE", `/v1/admin/agents/${r.agentId}/chats/${chat}/hearing`)).json).toEqual({
+      pace: "auto",
+    });
+    r.channel.receive({ text: "three", addressedToBot: false });
+    await until(() => r.turns.length === 2);
+    expect(r.turns[1]?.input).toContain("three");
+  });
+
+  it("does not let the agent set a pace where the owner did not turn hearing on", async () => {
+    const r = await setup();
+    const chat = await groupOf(r);
+    r.channel.receive({ text: "@alex hi" });
+    await until(() => r.turns.length === 1);
+    const refused = await runCli(env, ["chat", "hear", chat, "--mute"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("not_hearing");
+    expect(await hearingOf(r, chat)).toBeNull();
+  });
+
+  it("hears a group less often while the agent leaves stretch after stretch unanswered", async () => {
+    const r = await setup({ hearing: { quietMs: 50, maxWaitMs: 2_000, gapMs: 150 } });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    const at: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      r.channel.receive({ text: `chatter ${i}`, addressedToBot: false });
+      await until(() => r.turns.length === i + 1);
+      at.push(Date.now());
+    }
+    // Three unanswered at the usual gap, then twice it, then four times.
+    expect((at[3] as number) - (at[2] as number)).toBeGreaterThanOrEqual(250);
+    expect((at[4] as number) - (at[3] as number)).toBeGreaterThanOrEqual(550);
+    expect((await hearingOf(r, chat))?.slowedMs).toBe(150 * 2 ** 3);
+    // Someone addressing it brings the usual pace back.
+    r.channel.receive({ text: "@alex still there?" });
+    await until(() => r.turns.length === 6);
+    expect(await hearingOf(r, chat)).toEqual({ pace: "auto" });
+  });
+
+  it("forgets the agent's pace when the owner turns hearing off", async () => {
+    const r = await setup({
+      heard: async (chat) => {
+        await runCli(env, ["chat", "hear", chat, "--mute"]);
+      },
+    });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    r.channel.receive({ text: "one", addressedToBot: false });
+    await until(() => r.mingle.store.chat(chat)?.hearPace.kind === "muted");
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: false });
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    expect(await hearingOf(r, chat)).toEqual({ pace: "auto" });
   });
 
   it("is set on groups only", async () => {

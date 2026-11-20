@@ -45,6 +45,8 @@ const OPTIONS = {
   every: { type: "string" },
   check: { type: "string" },
   once: { type: "boolean" },
+  mute: { type: "boolean" },
+  default: { type: "boolean" },
   for: { type: "string" },
   by: { type: "string" },
   chat: { type: "string" },
@@ -114,6 +116,28 @@ function adminClient() {
   const runtime = JSON.parse(readFileSync(paths.runtime, "utf8")) as { url: string; adminToken: string };
   return <T>(method: string, path: string, body?: unknown) =>
     request<T>(runtime.url, runtime.adminToken, method, path, body);
+}
+
+/** How often a group that hears everything reaches the agent (docs/spec.md 4.2). */
+interface Hearing {
+  pace: "auto" | "every" | "muted";
+  everyMs?: number;
+  slowedMs?: number;
+}
+
+function hearingText(h: Hearing): string {
+  if (h.pace === "muted")
+    return "you hear nothing said here until someone @-mentions you or replies to you; then the usual pace is back";
+  if (h.pace === "every")
+    return `you hear what was said here at most once every ${minutes(h.everyMs ?? 0)}, until you change it`;
+  if (h.slowedMs)
+    return `the usual pace, slowed to once every ${minutes(h.slowedMs)} because you left the last stretches unanswered`;
+  return "the usual pace: soon after people pause, at most every few minutes";
+}
+
+function minutes(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  return m % 60 === 0 ? `${m / 60}h` : `${m}m`;
 }
 
 interface ContactRow {
@@ -345,10 +369,12 @@ async function agentCommand(group: string, action: string | undefined, args: str
         kind: string;
         name: string | null;
         members: { id: string; name: string; profile: string | null; bot: boolean }[] | null;
+        hearing: Hearing | null;
       }>("GET", `/v1/agent/chats/${chat}`);
       print(info, () =>
         [
           `${info.id}  ${info.platform}  ${info.kind}  ${info.name ?? "-"}`,
+          ...(info.hearing ? [`hears everything: ${hearingText(info.hearing)}`] : []),
           info.members
             ? [
                 "members:",
@@ -359,6 +385,18 @@ async function agentCommand(group: string, action: string | undefined, args: str
             : "members: not available on this chat app",
         ].join("\n"),
       );
+      return true;
+    }
+    case "chat hear": {
+      const usage = "usage: mingle chat hear <chat-id> --every 1h | --mute | --default";
+      const chat = need(args[0], "chat_required", usage);
+      const given = [flags.every !== undefined, flags.mute, flags.default].filter(Boolean).length;
+      if (given !== 1)
+        throw new CliError("flags_conflict", `pass exactly one of --every, --mute and --default; ${usage}`);
+      const hearing = await call()<Hearing & { chat: string }>("PUT", `/v1/agent/chats/${chat}/hearing`, {
+        ...(flags.every !== undefined ? { every: flags.every } : flags.mute ? { mute: true } : { default: true }),
+      });
+      print(hearing, () => `${hearing.chat}: ${hearingText(hearing)}`);
       return true;
     }
     case "contact list": {
@@ -993,7 +1031,7 @@ For the owner:
 
 For agents (inside a session):
   mingle message reply <msg> | send --to <chat|contact> | read <chat> | search <words>
-  mingle chat list | info <chat>
+  mingle chat list | info <chat> | hear <chat> --every 1h | --mute | --default
   mingle contact list [name] | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
   mingle task create | run | tell | done | list | update
