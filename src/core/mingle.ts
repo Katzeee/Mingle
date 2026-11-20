@@ -297,7 +297,13 @@ export class Mingle {
     }
     this.store = new Store(options.paths.db);
     this.replies = new LiveReplies((line) => this.log(line));
-    this.outbox = new Outbox(this.store, (id) => this.live.get(id), options.retryDelaysMs, this.replies);
+    this.outbox = new Outbox(
+      this.store,
+      (id) => this.live.get(id),
+      options.retryDelaysMs,
+      this.replies,
+      (agentId, messageId) => this.runtimes.get(agentId)?.isQueued(messageId) ?? false,
+    );
     this.lines = new Lines({
       store: this.store,
       harness: options.harness,

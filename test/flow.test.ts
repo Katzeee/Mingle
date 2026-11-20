@@ -325,6 +325,64 @@ describe("message flow", () => {
     expect(current.turns.map((turn) => turn.input.includes("queued-for-next-turn"))).toEqual([false, true]);
   });
 
+  it("does not count a plain send as answering a message the harness only queued (MING-135)", async () => {
+    // A plain `message send` answers what the agent has seen in the chat. A message the harness
+    // queued behind the running turn is not seen yet: marked replied, a session refresh could no
+    // longer hand it back, and it would be lost with the old process.
+    const first = Promise.withResolvers<void>();
+    const logs: string[] = [];
+    let opens = 0;
+    current = await rig(
+      async (t) => {
+        const env = t.options.env as Record<string, string>;
+        if (t.input.includes("finish-current-turn")) {
+          await first.promise;
+          const chat = /chat=(c\w+)/.exec(t.input)?.[1] as string;
+          const result = await runCli(env, ["message", "send", "--to", chat], "working on it");
+          expect(result.code).toBe(0);
+          return;
+        }
+        for (const id of messageIds(t.input)) {
+          const result = await runCli(env, ["message", "reply", id], "done");
+          expect(result.code).toBe(0);
+        }
+      },
+      {
+        log: (line) => logs.push(line),
+        wrap: (harness) => ({
+          ...harness,
+          open: async (options, events) => {
+            const isOld = ++opens === 1;
+            const session = await harness.open(options, events);
+            return {
+              ...session,
+              deliver: (text, id) =>
+                isOld && text.includes("queued-for-next-turn")
+                  ? Promise.resolve({ outcome: "queued" as const })
+                  : session.deliver(text, id),
+            };
+          },
+        }),
+      },
+    );
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "finish-current-turn" });
+    let second: ReturnType<typeof channel.receive>;
+    try {
+      await until(() => current?.turns.length === 1);
+      second = channel.receive({ text: "queued-for-next-turn" });
+      await until(() => logs.some((line) => line.endsWith("(queued)")));
+      void mingle.runtime(agentId)?.refresh();
+    } finally {
+      first.resolve();
+    }
+    await until(() => channel.sent.length === 2);
+    expect(channel.sent[0]?.replyTo).toBeUndefined();
+    expect(channel.sent[1]?.replyTo).toBe(second.platformId);
+    expect(opens).toBe(2);
+    expect(current.turns.map((turn) => turn.input.includes("queued-for-next-turn"))).toEqual([false, true]);
+  });
+
   it("quotes what a reply answers, so a bare '已授权' reads in context (MING-103)", async () => {
     current = await rig(async (t) => {
       if (!t.input.includes("download")) return;

@@ -470,7 +470,7 @@ stateDiagram-v2
 
 - **终态**：`replied` 和 `ignored`。之后到达的任何事件（迟到的失败、重复的重试、忽略后才到的回复）都不改变它。
 - **非终态都有出路**：`held` 由 owner 在控制台允许或拒绝；`received`、`delivered` 由投递和本轮结束自己推进；`waiting` 到 `retry_at` 自己回到 `received`，等满次数后变为 `failed`；`failed`、`unanswered` 由 owner 在控制台重试或忽略，Agent 之后回复也能把它们结束。
-- **出错的消息被回复**：Agent 用 `message reply` 引用一条 `failed` 消息作答时，它变为 `replied`，因为发消息的人已经得到回答，不应再留在"出错未回复"里。`message send` 的普通发送只结束该聊天里 Agent 已经看到的消息（`delivered`、`unanswered`），不结束 `failed`：这条消息可能从未交到 Agent 手里，一条无关的发送不能把它从待处理里藏掉；也不结束还没投递的 `received`。
+- **出错的消息被回复**：Agent 用 `message reply` 引用一条 `failed` 消息作答时，它变为 `replied`，因为发消息的人已经得到回答，不应再留在"出错未回复"里。`message send` 的普通发送只结束该聊天里 Agent 已经看到的消息（`delivered`、`unanswered`），不结束 `failed`：这条消息可能从未交到 Agent 手里，一条无关的发送不能把它从待处理里藏掉；也不结束还没投递的 `received`。harness 排在当前轮之后的消息（`delivered … (queued)`）同样不算看到，普通发送不结束它：模型还没读到；若被标为 `replied`，重开会话时就不能再回到收件箱，会随旧进程丢失（MING-135）。
 - **先到先得**：重试、忽略、迟到的回复以任意顺序到达，第一个生效，后一个只有在它是前者结果的合法下一步时才生效。例如重试后再忽略不生效（消息已回到 `received`）；重试后、重新投递前 Agent 已经回复，投递时发现它不再是 `received`，不再投递。
 - 重试把消息放回 `received` 时清零提示标记，像新消息一样再走一遍。
 - **暂停**：Agent 被暂停时，还没回复的 `received`、`delivered`、`waiting` 变为 `ignored`；暂停期间收到的触发消息直接变为 `ignored`。`failed`、`unanswered` 不动，恢复后由 owner 重试或忽略（4.11）。
