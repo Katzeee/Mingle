@@ -29,6 +29,7 @@ func main() {
 	}
 	// The web console and native controls share the system's supported language.
 	mygo.App.SetLanguages("en", "zh-CN")
+	clearWebCachesAfterUpdate()
 	logs, _ := mygo.App.Path(mygo.PathLogs)
 	resources, _ := mygo.App.Path(mygo.PathResources)
 	d := newDaemon(resources, logs)
