@@ -1,6 +1,6 @@
 # RFC 0001 实现方案：群聊旁听 V2
 
-- 状态：已 CR（DIYGod，改动见第 12 节），实现中
+- 状态：已 CR（DIYGod，改动见第 12 节），实现中：A（#173）、B 已合并
 - 依据：[RFC 0001](0001-group-hearing-v2.md)（已接受）、[原型](0001-prototype.html)、`docs/spec.md` 4.2
 - 基线：`main` @ `9d92991`（#171）
 
@@ -378,3 +378,10 @@ A、B、C 都合并后一起发一个版本：A 单独发也安全，但发版�
 3. **不带引用的发言只算回了这一轮交给它的话里的在聊者**（2.6）。原来算"这个聊天所有在聊的人"，已经不说话的人会被一直拉回 E = 1。
 4. **steer 本身不扣令牌，补交按 fast 预留**；只在插入后 10 秒内这一轮就结束时补交（4.2、2.7）。原来 steer 白花也扣令牌，但它没多花一轮；补交反而免费，成了绕开桶的口子。harness 只报 `steered`、不报"读到了"，所以用"插得太晚"近似"没读到"。
 5. **测试**（第 9 节）：插入的集成测试单独成 `test/listen-steer.test.ts`；不做 `sim_impl.py`，改为在 `hearing.test.ts` 里用模拟器的场景参数做量级回归。
+
+## 13. 实现时的偏差（PR B）
+
+- runtime 的参数写成 `enqueueText(text, { track?, about?: { chatId, people }, steer?: boolean })`：`about` 是"这段里在聊的人"，旁听的每一段都带，`handling()` 靠它；`steer` 只决定插不插进去。比 4.1 的 `steer: { chatId, people }` 少一个"只带 people 不 steer"的特例。
+- harness 回 `queued` 的旁听段，`track.ended` 等到它真正跑的那一轮结束才调，不在当前这一轮结束时调：否则还没被读到就按"没开口"结算了。
+- steer 的一段等的时候有别人说话，整段改走 fast、在下一轮交，而不是只把那个人的话插进去：一段只有一种交法，`hear()` 不用拆段。
+

@@ -149,7 +149,13 @@ const HEARD_CHARS = 1200;
  * What was said in a group that hears everything, as it reaches the agent (docs/spec.md 4.2): the
  * stretch since it last spoke there, none of it addressed to it. It may answer, or say nothing.
  */
-export function formatHeard(store: Store, chat: Chat, messages: readonly Message[], omitted = 0): string {
+export function formatHeard(
+  store: Store,
+  chat: Chat,
+  messages: readonly Message[],
+  opts: { omitted?: number; live?: ReadonlySet<string> } = {},
+): string {
+  const omitted = opts.omitted ?? 0;
   const lines = messages
     .map((m) => {
       const chars = [...m.body];
@@ -168,6 +174,13 @@ export function formatHeard(store: Store, chat: Chat, messages: readonly Message
     omitted > 0 && messages[0]
       ? ` ${omitted === 1 ? "1 earlier message is" : `${omitted} earlier messages are`} not shown: \`message read ${chat.id} --before ${messages[0].id}\`.`
       : "";
+  const live = heardNames(store, chat, messages, opts.live);
+  if (live.length > 0) {
+    return [
+      `[mingle] Heard in ${chat.id}: ${count}. You are in a conversation here with ${listNames(live)}: what they say is likely meant for you even without an @.${earlier} Reply as you would in chat: if what you will do takes a moment, send a short line first, then one thought per message. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is still fine if it was not for you.${bursts(store, chat, messages)}`,
+      ...lines,
+    ].join("\n\n");
+  }
   return [
     `[mingle] Heard in ${chat.id}: ${count} said there, none addressed to you.${earlier} This group lets you hear everything; speak only when you have something worth adding, or someone there clearly means you. Answer one with \`message reply <msg>\`, or the group with \`message send --to ${chat.id}\`. Saying nothing is fine, and then do not send anything to say so. If this group is mostly not for you, hear it less: \`chat hear ${hearId} --every 1h\`, or \`--mute\` to hear nothing until someone there addresses you.`,
     ...lines,
@@ -204,4 +217,53 @@ export function formatReminder(
 /** A handoff as it reaches the agent (docs/spec.md 4.12): one header line, then the owner's text. */
 export function formatHandoff(handoff: Handoff): string {
   return `[handoff=${handoff.id} from=owner via=${handoff.via} time=${localTime(handoff.createdAt)}]\n${handoff.body.trim()}`;
+}
+
+/** How a heard message's sender is named: as the address book knows them, or as the chat app said. */
+function senderName(store: Store, chat: Chat, m: Message): string | null {
+  if (!m.senderId) return m.senderName;
+  const contact = store.contactByPlatformId(chat.connectionId, m.senderId);
+  return contactName(contact) ?? m.senderName ?? m.senderId;
+}
+
+/** The names of the people in a conversation with the agent, in the order they spoke in the stretch. */
+function heardNames(
+  store: Store,
+  chat: Chat,
+  messages: readonly Message[],
+  live: ReadonlySet<string> | undefined,
+): string[] {
+  if (!live || live.size === 0) return [];
+  const names = new Map<string, string>();
+  for (const m of messages) {
+    if (!m.senderId || !live.has(m.senderId) || names.has(m.senderId)) continue;
+    names.set(m.senderId, senderName(store, chat, m) ?? m.senderId);
+  }
+  return [...names.values()];
+}
+
+function listNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** A person who sent several messages in a row: answered once, not message by message. */
+const BURST = 3;
+
+function bursts(store: Store, chat: Chat, messages: readonly Message[]): string {
+  const runs: { name: string; count: number }[] = [];
+  let run: { id: string; m: Message; count: number } | undefined;
+  const close = () => {
+    if (run && run.count >= BURST) runs.push({ name: senderName(store, chat, run.m) ?? run.id, count: run.count });
+  };
+  for (const m of messages) {
+    const id = m.senderId ?? "";
+    if (run && run.id === id) run.count += 1;
+    else {
+      close();
+      run = { id, m, count: 1 };
+    }
+  }
+  close();
+  return runs.map((r) => ` ${r.name} sent ${r.count} messages in a row: answer them once, not each.`).join("");
 }

@@ -82,6 +82,35 @@ describe("message flow", () => {
     expect(current.turns[0]?.steered[0]).toContain('from="Li Si"');
   });
 
+  it("steers a text marked to steer into the running turn, keeps others for the next, and knows whom it handles", async () => {
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    current = await rig(async (t) => {
+      if (t.input.includes("note for later")) return;
+      started.resolve();
+      await release.promise;
+      for (const id of messageIds(t.input))
+        await runCli(t.options.env as Record<string, string>, ["message", "reply", id], "ok");
+    });
+    const { mingle, agentId, channel } = current;
+    channel.receive({ text: "plan the route" });
+    await started.promise;
+    const runtime = mingle.runtime(agentId);
+    const chat = mingle.store.agentChats(agentId)[0]?.id as string;
+    expect(runtime?.handling(chat, "u1")).toBe(true);
+    expect(runtime?.handling(chat, "u2")).toBe(false);
+    runtime?.enqueueText("note for later");
+    runtime?.enqueueText("a follow-up", { steer: true, about: { chatId: chat, people: ["u3"] } });
+    await until(() => current?.turns[0]?.steered.length === 1);
+    expect(current.turns[0]?.steered[0]).toContain("a follow-up");
+    expect(runtime?.handling(chat, "u3")).toBe(true);
+    release.resolve();
+    await until(() => current?.turns.length === 2);
+    expect(current.turns[1]?.input).toContain("note for later");
+    // A new turn: whom the last one was handling is forgotten.
+    expect(runtime?.handling(chat, "u1")).toBe(false);
+  });
+
   it("nudges once about unanswered messages, then marks them unanswered", async () => {
     current = await rig(async (t) => {
       // Ignore real messages; only answer when nudged.

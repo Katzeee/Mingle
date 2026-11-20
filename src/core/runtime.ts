@@ -149,9 +149,21 @@ export interface TextTrack {
   ended(at: number): void;
 }
 
+/** How a text input relates to a chat: the people in it whose words it carries, and whether it goes into a running turn. */
+export interface TextOptions {
+  readonly track?: TextTrack;
+  /** What was heard in a chat from these people: the turn it goes into is handling them there. */
+  readonly about?: { readonly chatId: string; readonly people: readonly string[] };
+  /**
+   * Steered into the running turn like a chat message, rather than waiting for the next one
+   * (docs/rfc/0001 3.5): only a follow-up from someone that turn is handling.
+   */
+  readonly steer?: boolean;
+}
+
 type Pending =
   | { readonly kind: "message"; readonly id: string }
-  | { readonly kind: "text"; readonly text: string; readonly track?: TextTrack }
+  | ({ readonly kind: "text"; readonly text: string } & TextOptions)
   /** The one reminder about messages the agent has not answered; checked again when delivered. */
   | { readonly kind: "nudge"; readonly ids: readonly string[] }
   | { readonly kind: "handoff"; readonly id: string };
@@ -204,6 +216,10 @@ export class AgentRuntime {
   private turnRevision: number | undefined;
   /** Text inputs handed to the harness whose turn has not ended yet. */
   private tracked: TextTrack[] = [];
+  /** Text inputs the harness queued behind the running turn: theirs is the turn after it. */
+  private trackedNext: TextTrack[] = [];
+  /** Whom the inputs of the running turn came from, chat by chat (`chat\nsender`), for `handling()`. */
+  private handled = new Set<string>();
   private unblockTimer: NodeJS.Timeout | undefined;
   /** When the agent last finished work, or Mingle last saw it busy: how long the session sat. */
   private idleSince: number;
@@ -318,9 +334,17 @@ export class AgentRuntime {
   }
 
   /** Input that is not a chat message: a reminder firing, or a note from Mingle itself. */
-  enqueueText(text: string, track?: TextTrack): void {
-    this.pending.push(track ? { kind: "text", text, track } : { kind: "text", text });
+  enqueueText(text: string, opts: TextOptions = {}): void {
+    this.pending.push({ kind: "text", text, ...opts });
     this.schedule();
+  }
+
+  /**
+   * Whether the turn running now is handling what `senderId` said in `chatId`: a message of theirs
+   * there, or what was heard from them there, went into it. Not what the harness queued behind it.
+   */
+  handling(chatId: string, senderId: string): boolean {
+    return this.running && this.handled.has(`${chatId}\n${senderId}`);
   }
 
   /** What the owner handed over from another conversation (docs/spec.md 4.12): an input of its own. */
@@ -462,11 +486,13 @@ export class AgentRuntime {
 
   private async flush(): Promise<void> {
     if (this.pending.length === 0 || this.disposed) return;
-    // While a turn runs, only chat messages are steered in. Reminders and notes wait for the
-    // next turn: steered at the very end of a turn they could be accepted and never acted on.
-    // (A message in that position is still caught by the unanswered check after the turn.)
-    const taken = this.running ? this.pending.filter((p) => p.kind === "message") : this.pending.slice();
-    this.pending = this.running ? this.pending.filter((p) => p.kind !== "message") : [];
+    // While a turn runs, only chat messages are steered in, and follow-ups heard from someone that
+    // turn is handling. Reminders and notes wait for the next turn: steered at the very end of a
+    // turn they could be accepted and never acted on. (A message in that position is still caught
+    // by the unanswered check after the turn; a follow-up, by Mingle handing it over again.)
+    const steers = (p: Pending) => p.kind === "message" || (p.kind === "text" && p.steer === true);
+    const taken = this.running ? this.pending.filter(steers) : this.pending.slice();
+    this.pending = this.running ? this.pending.filter((p) => !steers(p)) : [];
     // A message settled while it waited (answered, or queued twice) is not delivered again.
     // A reminder names only what is still unanswered: the agent may have answered meanwhile (a
     // background command finished and woke it), and a stale reminder makes it answer twice.
@@ -559,12 +585,23 @@ export class AgentRuntime {
     );
     this.deps.store.markHandoffsDelivered(batch.flatMap((p) => (p.kind === "handoff" ? [p.id] : [])));
     const at = this.now();
+    const queued = result.outcome === "queued";
     for (const p of batch) {
       if (p.kind !== "text" || !p.track) continue;
       p.track.delivered(at);
-      this.tracked.push(p.track);
+      (queued ? this.trackedNext : this.tracked).push(p.track);
     }
-    if (result.outcome === "queued") for (const id of messageIds) this.queued.add(id);
+    if (queued) for (const id of messageIds) this.queued.add(id);
+    else {
+      for (const id of messageIds) {
+        const m = this.deps.store.message(id);
+        if (m?.senderId) this.handled.add(`${m.chatId}\n${m.senderId}`);
+      }
+      for (const p of batch) {
+        if (p.kind !== "text" || !p.about) continue;
+        for (const person of p.about.people) this.handled.add(`${p.about.chatId}\n${person}`);
+      }
+    }
     this.deps.log?.(`${this.agentId}: delivered ${messageIds.join(",") || "note"} (${result.outcome})`);
   }
 
@@ -1082,6 +1119,9 @@ export class AgentRuntime {
   private ended(): void {
     const at = this.now();
     for (const track of this.tracked.splice(0)) track.ended(at);
+    // What the harness queued behind this turn runs as the next one.
+    this.tracked = this.trackedNext.splice(0);
+    this.handled.clear();
     this.running = false;
     this.clearStall();
     this.deps.store.setTurnAt(this.agentId, null);
