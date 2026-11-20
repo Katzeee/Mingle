@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.6
+
+- On Feishu, Slack, and Discord, your agent can keep a long task's questions and progress in a thread. Reply there without another @mention to add details or ask it to stop. The result comes back to the group chat.
+- The agent's task list shows the latest progress even on chat apps without threads. Closing a task now stops the work, and the same message no longer starts duplicate tasks.
+- Long tasks start with the request and the messages just before it, so the agent can pick up the context without asking you to repeat it.
+
 ## 0.4.5
 
 - Your agent now hears what is said in the groups it is allowed in — including groups it was already in — wherever the chat app delivers those messages, not only when someone @-mentions it. You can turn this off for any conversation.

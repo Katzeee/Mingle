@@ -220,18 +220,20 @@ describe("lines in threads", () => {
         if (t.input.includes("weather")) await runCli(env(t), ["message", "reply", id], "Sunny on Saturday.");
       }
     });
-    const { channel } = current;
+    const { agentId, channel, mingle } = current;
     channel.threads = true;
     channel.receive({ text: "@Alex weather on Saturday?" });
-    await until(() => channel.sent.some((m) => m.text === "Sunny on Saturday."));
-    const answer = channel.sent.find((m) => m.text === "Sunny on Saturday.");
+    const answer = await until(() => channel.sent.find((m) => m.text === "Sunny on Saturday."));
+    // Wait for the turn to finish: a follow-up sent mid-turn is steered into the
+    // running session, while this test checks thread routing of a new message.
+    await until(() => !mingle.runtime(agentId)?.busy);
     // "Reply in thread" on the agent's answer: a thread chat of its own, quoting a message in the group.
     channel.receive({
       text: "And Sunday?",
       addressedToBot: false,
-      replyTo: answer?.platformId as string,
+      replyTo: answer.platformId,
       chat: {
-        platformId: `-100:${answer?.platformId}`,
+        platformId: `-100:${answer.platformId}`,
         kind: "thread",
         parent: { platformId: "-100" },
         followUp: true,
