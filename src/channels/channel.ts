@@ -435,10 +435,12 @@ export interface ChannelConnection {
  * the group's earlier messages.
  * `bot_messages`: what other bots send in the bot's groups. Feishu only; other platforms do not
  * report it.
+ * `doc_comments`: comments in documents shared with the bot, so people can @ it there and it answers
+ * in the comment thread (Feishu, docs/spec.md 6.8).
  * `member_profiles`: the department and title of the people the bot meets, so the agent knows who
  * is who in the organization (Feishu).
  */
-export type PermissionId = "group_messages" | "bot_messages" | "member_profiles";
+export type PermissionId = "group_messages" | "bot_messages" | "doc_comments" | "member_profiles";
 
 export interface BotPermission {
   readonly id: PermissionId;
