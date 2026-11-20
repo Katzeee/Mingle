@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.4
+
+- @mention your agent in a Feishu document comment and it can answer in the same thread. For an existing bot, open its Feishu permissions and scan again to enable Document comments.
+- On Windows, Mingle now clears stale web caches after an update to prevent a blank window, without clearing cookies, local storage, or preferences.
+
 ## 0.4.3
 
 - Making a new agent when you already have one? The New agent page now reminds you that one agent can join all your chat apps and work on several things at once. If you have exactly one agent, it links straight to connecting it to another chat app.
