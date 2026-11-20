@@ -192,6 +192,52 @@ describe("lines", () => {
     expect(mingle.store.task(agentId, task)?.status).toBe("closed");
   });
 
+  it("brings the conversation to a line, starts one line per message, and stops it when the task is closed", async () => {
+    let started = 0;
+    let brief = "";
+    let frontEnv: Record<string, string> | undefined;
+    let from = "";
+    current = await rig(async (t) => {
+      if (isLine(t)) {
+        started++;
+        if (!brief) brief = t.input;
+        await new Promise(() => {}); // works until stopped
+        return;
+      }
+      frontEnv = env(t);
+      const id = messageIds(t.input).at(-1);
+      if (id && t.input.includes("migrate")) {
+        from = id;
+        await runCli(env(t), ["task", "run", "Migrate", "--from", id], "Move the table.");
+      }
+    });
+    const { channel, mingle, agentId } = current;
+    channel.receive({ text: "The orders table is the one in Postgres, not MySQL" });
+    channel.receive({ text: "@Alex migrate it please" });
+    await until(() => started === 1 && brief);
+    // The brief carries the message itself and what came before it, not only their IDs.
+    expect(brief).toContain("Move the table.");
+    expect(brief).toContain("migrate it please");
+    expect(brief).toContain("the one in Postgres, not MySQL");
+    expect(brief).toContain(`--around ${from}`);
+
+    // A second line for the same message is refused: the follow-up goes to the first.
+    const again = await runCli(frontEnv as Record<string, string>, ["task", "run", "Migrate", "--from", from], "x");
+    expect(again.code).not.toBe(0);
+    expect(again.stderr + again.stdout).toContain("already_running");
+    expect(mingle.store.activeLines(agentId)).toHaveLength(1);
+
+    // "Drop it": the main session closes the task, and the line stops at once.
+    const task = mingle.store.activeLines(agentId)[0]?.id as string;
+    const closed = await runCli(frontEnv as Record<string, string>, ["task", "update", task, "--status", "closed"]);
+    expect(closed.code).toBe(0);
+    await until(() => mingle.store.task(agentId, task)?.lineState === "ended");
+    expect(mingle.store.task(agentId, task)?.status).toBe("closed");
+    // Once closed, the same message may start a line again.
+    const restart = await runCli(frontEnv as Record<string, string>, ["task", "run", "Migrate", "--from", from], "x");
+    expect(restart.code).toBe(0);
+  });
+
   it("keeps a follow-up that waits for a free line across a restart", async () => {
     const quickInputs: string[] = [];
     let runs = 0;

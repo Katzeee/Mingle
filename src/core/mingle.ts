@@ -29,6 +29,7 @@ import {
   type Reminder,
   Store,
   type Task,
+  type TaskStatus,
 } from "../store/store.ts";
 import { VERSION } from "../version.ts";
 import { CLAIM_ATTEMPTS, CLAIM_TTL_MS, claimAttempt, claimCode, gate } from "./access.ts";
@@ -62,6 +63,8 @@ import { AgentRuntime, type FailureInfo } from "./runtime.ts";
 import { nextFire } from "./schedule.ts";
 import { BotHops, trigger } from "./trigger.ts";
 
+/** Messages before the one a line works for that its brief carries (docs/spec.md 4.13). */
+const LINE_SOURCE_BEFORE = 10;
 export interface OnboardingSession {
   readonly id: string;
   readonly agentId: string;
@@ -270,6 +273,7 @@ export class Mingle {
           .lineInbox(task.id)
           .map((m) => ({ id: m.id, input: renderMessage(this.store, m, { agentName: agent?.name ?? "" }) }));
       },
+      source: (task) => this.lineSource(task),
       paused: (id) => this.paused.has(id) || this.deleting.has(id),
       log: (line) => this.log(line),
     });
@@ -2333,6 +2337,22 @@ export class Mingle {
     return task && task.status !== "closed" && task.lineState !== "ended" ? task : undefined;
   }
 
+  /**
+   * What a line reads first, after its brief: the message it works for and the messages before it in
+   * that chat (at most `LINE_SOURCE_BEFORE`), as the agent would have seen them.
+   */
+  private lineSource(task: Task): string {
+    const message = task.fromMessage ? this.store.message(task.fromMessage) : undefined;
+    const agent = this.store.agent(task.agentId);
+    if (!message || !agent) return "";
+    const render = (m: Message) => renderMessage(this.store, m, { agentName: agent.name });
+    const before = this.store.chatMessages(message.chatId, LINE_SOURCE_BEFORE, message.id).map(render).filter(Boolean);
+    const parts = [`The message this work is for:\n${render(message)}`];
+    if (before.length) parts.unshift(`What was said before it in that chat, oldest first:\n${before.join("\n")}`);
+    parts.push(`For more, read the chat: "$MINGLE_CLI" message read ${message.chatId} --around ${message.id}`);
+    return parts.join("\n\n");
+  }
+
   /** Hand a message to a task's line, waking it; finished work picks up again. */
   private handToLine(task: Task, messageId: string): void {
     this.store.setMessageLine(messageId, task.id);
@@ -2350,6 +2370,14 @@ export class Mingle {
   runTask(agentId: string, input: { title: string; from: string; brief: string }): Task {
     const message = this.store.agentMessage(agentId, input.from);
     if (!message) throw notFound("message", input.from);
+    // One message, one line: a second would answer the same person beside the first, as the same agent.
+    const running = this.store.lineFromMessage(agentId, message.id);
+    if (running)
+      throw new MingleError(
+        "already_running",
+        `${running.id} already works on ${message.id} ("${running.title}"); pass what is new on with: task tell ${running.id} --from ${message.id}`,
+        409,
+      );
     const task = this.store.createLineTask({
       agentId,
       title: input.title,
@@ -2381,6 +2409,20 @@ export class Mingle {
     if (task.status !== "in_progress") this.store.setTaskStatus(agentId, task.id, "in_progress");
     this.lines.wake(task.id, parts.join("\n\n"));
     return this.store.task(agentId, task.id) as Task;
+  }
+
+  /**
+   * The agent sets a task's status. Closing a task whose line is still on it stops the line, as the
+   * console's "stop" does: someone said to drop it, so nothing more should arrive in the chat.
+   */
+  setTaskStatus(agentId: string, taskId: string, status: TaskStatus): Task {
+    const before = this.store.task(agentId, taskId);
+    if (!before) throw notFound("task", taskId);
+    if (status === "closed" && before.lineState && before.lineState !== "ended") {
+      void this.lines.end(before.id);
+      this.log(`${this.store.agent(agentId)?.name ?? agentId}: closed task ${before.id}; its line stops`);
+    }
+    return this.store.setTaskStatus(agentId, before.id, status) as Task;
   }
 
   /** A line finished its task: the summary reaches the main session with its next input. */
