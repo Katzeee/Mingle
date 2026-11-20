@@ -170,6 +170,42 @@ export interface HearingView {
   readonly everyMs?: number;
   /** `auto` while unanswered stretches have lengthened the gap: the gap now. */
   readonly slowedMs?: number;
+  /** How fast it keeps up with a conversation, as the owner chose; null follows the group's size. */
+  readonly tier: HearTier | null;
+  /** The tier the group's size gives it. */
+  readonly defaultTier: HearTier;
+  /** `auto`: the people it is in a conversation with now, by name, most engaged first. */
+  readonly live: string[];
+  /** Other names that count as calling it there. */
+  readonly aliases: string[];
+}
+
+/** What else a group may call the agent (docs/spec.md 4.2): a few short names, so a word cannot become a trigger for everything. */
+export const ALIAS_MAX = 8;
+export const ALIAS_CHARS = { min: 2, max: 16 } as const;
+
+/** Aliases as stored: trimmed, each once (ignoring case), the agent's own names left out. */
+export function cleanAliases(list: readonly string[], own: readonly (string | null | undefined)[]): string[] {
+  const taken = new Set(own.flatMap((n) => (n ? [n.trim().toLowerCase()] : [])));
+  const out: string[] = [];
+  for (const raw of list) {
+    const alias = raw.trim().replace(/\s+/g, " ");
+    const chars = [...alias].length;
+    if (chars < ALIAS_CHARS.min || chars > ALIAS_CHARS.max) {
+      throw new MingleError(
+        "alias_invalid",
+        `give a name of ${ALIAS_CHARS.min} to ${ALIAS_CHARS.max} characters, the way people in the group call you`,
+      );
+    }
+    const key = alias.toLowerCase();
+    if (taken.has(key)) continue;
+    taken.add(key);
+    out.push(alias);
+  }
+  if (out.length > ALIAS_MAX) {
+    throw new MingleError("too_many_aliases", `a group can have at most ${ALIAS_MAX} names; remove one first`);
+  }
+  return out;
 }
 
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
@@ -1697,7 +1733,7 @@ export class Mingle {
       senderId,
       at: message.createdAt,
       now,
-      named: nameIn(message.body, [agent?.name, connection.botName]),
+      named: nameIn(message.body, [agent?.name, connection.botName, ...group.aliases]),
       owner,
       tier: this.tierOf(group, now),
       ...(group.hearPace.kind === "every" ? { everyMs: group.hearPace.ms } : {}),
@@ -1720,7 +1756,11 @@ export class Mingle {
 
   /** How fast a group keeps up with a conversation: the owner's choice, or else by its size. */
   private tierOf(group: Chat, now: number): HearTier {
-    if (group.hearTier) return group.hearTier;
+    return group.hearTier ?? this.defaultTierOf(group, now);
+  }
+
+  /** The tier a group's size gives it: people who spoke there in the last week, counted once an hour. */
+  private defaultTierOf(group: Chat, now: number): HearTier {
     let active = this.active.get(group.id);
     if (!active || now - active.at > ACTIVE_TTL_MS) {
       active = { n: this.store.activePeople(group.id, now - ACTIVE_WINDOW_MS), at: now };
@@ -1753,11 +1793,67 @@ export class Mingle {
   }
 
   /** A group's pace as set, and the gap in force while unanswered stretches slowed it. */
-  hearingView(group: Chat): HearingView {
-    if (group.hearPace.kind === "muted") return { pace: "muted" };
-    if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms };
+  hearingView(group: Chat, now = Date.now()): HearingView {
+    const base = {
+      tier: group.hearTier,
+      defaultTier: this.defaultTierOf(group, now),
+      live: [] as string[],
+      aliases: group.aliases,
+    };
+    if (group.hearPace.kind === "muted") return { pace: "muted", ...base };
+    if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms, ...base };
+    const live = this.book.live(group.id, now).map((id) => {
+      const contact = this.store.contactByPlatformId(group.connectionId, id);
+      return (contact && contactName(contact)) ?? contact?.name ?? id;
+    });
     const gap = this.book.gap(group.id);
-    return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap } : { pace: "auto" };
+    return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap, ...base, live } : { pace: "auto", ...base, live };
+  }
+
+  /**
+   * The owner picks how fast a group keeps up with a conversation (docs/spec.md 4.2): `save`,
+   * `balanced` or `fast`, or null to follow the group's size. The owner's one knob on what it costs.
+   */
+  setHearTier(idOrSlug: string, chatId: string, tier: HearTier | null): HearingView {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    this.store.setChatHearTier(chat.id, tier);
+    this.log(`${agent.name}: owner set ${chat.id} to keep up ${tier ?? "by its size"}`);
+    return this.hearingView(this.store.chat(chat.id) ?? chat);
+  }
+
+  /** The owner sets every other name a group calls the agent by, at once. */
+  setAliases(idOrSlug: string, chatId: string, aliases: readonly string[]): HearingView {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    this.store.setChatAliases(chat.id, cleanAliases(aliases, this.ownNames(agent.id, chat)));
+    return this.hearingView(this.store.chat(chat.id) ?? chat);
+  }
+
+  /**
+   * The agent adds or removes a name the group calls it by (`chat alias`). A thread stands for its
+   * group. It only helps a call be heard as one: what that costs stays within the owner's tier.
+   */
+  alias(agentId: string, chatId: string, alias: string, add: boolean): { chat: Chat; aliases: string[] } {
+    const chat = this.store.agentChat(agentId, chatId);
+    if (!chat || chat.kind === "dm") throw notFound("chat", chatId);
+    const group = (chat.parentId ? this.store.chat(chat.parentId) : chat) ?? chat;
+    const [name] = cleanAliases([alias], []);
+    const key = (name ?? "").toLowerCase();
+    const rest = group.aliases.filter((a) => a.toLowerCase() !== key);
+    const next = add ? cleanAliases([...group.aliases, alias], this.ownNames(agentId, group)) : rest;
+    this.store.setChatAliases(group.id, next);
+    this.log(`${agentId}: ${add ? "added" : "removed"} the name "${name}" in ${group.id}`);
+    return { chat: this.store.chat(group.id) ?? group, aliases: next };
+  }
+
+  /** The names a group calls the agent by anyway: its own and its bot's. */
+  private ownNames(agentId: string, group: Chat): string[] {
+    return [this.store.agent(agentId)?.name, this.store.connection(group.connectionId)?.botName].filter(
+      (n): n is string => Boolean(n),
+    );
   }
 
   /**

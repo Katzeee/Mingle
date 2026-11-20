@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
+import { eventually, messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
 
 /**
  * How a group wakes the agent beyond @-mentions (docs/spec.md 4.2): a group the owner set to hear
@@ -249,11 +249,31 @@ describe("a group that hears everything", () => {
     expect(r.turns).toHaveLength(2);
   });
 
-  type Listed = { chat: { id: string }; hearing: { pace: string; everyMs?: number; slowedMs?: number } | null }[];
-  const hearingOf = async (r: Rig, chat: string) =>
+  type View = {
+    pace: string;
+    everyMs?: number;
+    slowedMs?: number;
+    tier: string | null;
+    defaultTier: string;
+    live: string[];
+    aliases: string[];
+  };
+  type Listed = { chat: { id: string }; hearing: View | null }[];
+  const viewOf = async (r: Rig, chat: string) =>
     ((await r.admin("GET", `/v1/admin/agents/${r.agentId}/conversations`)).json as Listed).find(
       (c) => c.chat.id === chat,
     )?.hearing;
+  /** The pace part of a group's hearing, as the agent set it. */
+  const hearingOf = async (r: Rig, chat: string) => {
+    const view = await viewOf(r, chat);
+    if (!view) return view;
+    const { pace, everyMs, slowedMs } = view;
+    return {
+      pace,
+      ...(everyMs !== undefined ? { everyMs } : {}),
+      ...(slowedMs !== undefined ? { slowedMs } : {}),
+    };
+  };
 
   it("lets the agent mute a group until someone addresses it there", async () => {
     let muted: { code: number; stdout: string } | undefined;
@@ -313,7 +333,7 @@ describe("a group that hears everything", () => {
     await sleep(600);
     expect(r.turns).toHaveLength(1);
     // The owner puts it back on the usual pace: the next stretch comes.
-    expect((await r.admin("DELETE", `/v1/admin/agents/${r.agentId}/chats/${chat}/hearing`)).json).toEqual({
+    expect((await r.admin("DELETE", `/v1/admin/agents/${r.agentId}/chats/${chat}/hearing`)).json).toMatchObject({
       pace: "auto",
     });
     r.channel.receive({ text: "three", addressedToBot: false });
@@ -365,6 +385,76 @@ describe("a group that hears everything", () => {
     await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: false });
     await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
     expect(await hearingOf(r, chat)).toEqual({ pace: "auto" });
+  });
+
+  it("lets the owner pick how fast a group keeps up, or leave it to the group's size", async () => {
+    const r = await setup();
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    // One person has spoken there: a small group, fast by default.
+    expect(await viewOf(r, chat)).toMatchObject({ tier: null, defaultTier: "fast", live: [], aliases: [] });
+    const path = `/v1/admin/agents/${r.agentId}/chats/${chat}/hearing`;
+    expect((await r.admin("PUT", path, { tier: "save" })).json).toMatchObject({ tier: "save", defaultTier: "fast" });
+    expect(r.mingle.store.chat(chat)?.hearTier).toBe("save");
+    const bad = await r.admin("PUT", path, { tier: "turbo" });
+    expect(bad.status).toBe(400);
+    expect(JSON.stringify(bad.json)).toContain("tier_invalid");
+    expect((await r.admin("PUT", path, { tier: null })).json).toMatchObject({ tier: null });
+  });
+
+  it("takes another name as a call, from the owner or the agent, and keeps it when hearing goes off", async () => {
+    const results: { code: number; stdout: string; stderr: string }[] = [];
+    const r = await setup({
+      speak: true,
+      hearing: { quietMs: 150, maxWaitMs: 2_000, gapMs: 60_000 },
+      heard: async (chat) => {
+        if (results.length > 0) return;
+        results.push(await runCli(env, ["chat", "alias", chat, "add", "trail", "buddy"]));
+        results.push(await runCli(env, ["chat", "alias", chat, "add", "x"]));
+        results.push(await runCli(env, ["chat", "alias", chat, "add", "Alex"]));
+        results.push(await runCli(env, ["chat", "info", chat]));
+      },
+    });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    r.channel.receive({ text: "lunch anyone?", addressedToBot: false });
+    await until(() => results.length === 4);
+    expect(results[0]?.stdout).toContain("also called trail buddy");
+    expect(results[1]?.stderr).toContain("alias_invalid");
+    // Its own name always counts: not stored again.
+    expect(results[2]?.stdout).toContain("also called trail buddy");
+    expect(results[3]?.stdout).toContain("keeps up with a conversation: fast, by the group's size");
+    expect(results[3]?.stdout).toContain("also called here: trail buddy");
+    await until(() => r.turns.length === 1);
+    // Called by that name, past the gap of a minute: fast.
+    r.channel.receive({
+      text: "Trail Buddy, which way?",
+      addressedToBot: false,
+      sender: { id: "u9", name: "Wang Fang", isBot: false },
+    });
+    await until(() => r.turns.length === 2, 5_000);
+    expect(r.turns[1]?.input).toContain("You are in a conversation here with");
+    // The owner replaces the names; too many is refused.
+    const path = `/v1/admin/agents/${r.agentId}/chats/${chat}/aliases`;
+    expect((await r.admin("PUT", path, { aliases: ["guide", " guide ", "向导"] })).json).toMatchObject({
+      aliases: ["guide", "向导"],
+    });
+    const many = await r.admin("PUT", path, { aliases: Array.from({ length: 9 }, (_, i) => `name ${i}`) });
+    expect(JSON.stringify(many.json)).toContain("too_many_aliases");
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: false });
+    expect(r.mingle.store.chat(chat)?.aliases).toEqual(["guide", "向导"]);
+    const removed = await runCli(env, ["chat", "alias", chat, "remove", "guide"]);
+    expect(removed.stdout).toContain("also called 向导");
+  });
+
+  it("says whom it is in a conversation with", async () => {
+    const r = await setup({ speak: true, hearing: { quietMs: 150, maxWaitMs: 2_000, gapMs: 60_000 } });
+    const chat = await groupOf(r);
+    await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
+    r.channel.receive({ text: "which way to the top?", addressedToBot: false });
+    await until(() => r.channel.sent.length === 1);
+    await eventually(async () => (await viewOf(r, chat))?.live.length === 1);
+    expect((await viewOf(r, chat))?.live).toEqual(["Zhang San"]);
   });
 
   it("lets go of a stretch it was about to hear when it stops", async () => {

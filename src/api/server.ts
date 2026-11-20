@@ -313,6 +313,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ chat: chat.id, ...view });
   });
 
+  /**
+   * The agent adds or removes a name a group calls it by (docs/spec.md 4.2): `{ "alias": "小跟班" }`.
+   * A thread stands for its group.
+   */
+  for (const method of ["post", "delete"] as const) {
+    app[method]("/v1/agent/chats/:id/aliases", async (c) => {
+      const { alias } = await c.req.json<{ alias?: unknown }>();
+      if (typeof alias !== "string") throw new MingleError("alias_invalid", 'send { "alias": "<name>" }');
+      const { chat, aliases } = mingle.alias(c.get("agent").id, c.req.param("id"), alias, method === "post");
+      return c.json({ chat: chat.id, aliases });
+    });
+  }
+
   const contactView = (k: Contact & { platform: Platform; owner: boolean }) => ({
     id: k.id,
     platform: k.platform,
@@ -1149,6 +1162,25 @@ export function createApi(mingle: Mingle): Hono<Env> {
       throw new MingleError("listen_invalid", 'send { "listen": true } or { "listen": false }');
     mingle.setListen(c.req.param("id"), c.req.param("chatId"), listen);
     return c.json({ listen });
+  });
+
+  /**
+   * The owner picks how fast a group keeps up with a conversation (docs/spec.md 4.2):
+   * `{ "tier": "save" | "balanced" | "fast" | null }`, null following the group's size.
+   */
+  app.put("/v1/admin/agents/:id/chats/:chatId/hearing", async (c) => {
+    const { tier } = await c.req.json<{ tier?: unknown }>();
+    if (tier !== null && tier !== "save" && tier !== "balanced" && tier !== "fast")
+      throw new MingleError("tier_invalid", 'send { "tier": "save" }, "balanced", "fast" or null');
+    return c.json(mingle.setHearTier(c.req.param("id"), c.req.param("chatId"), tier));
+  });
+
+  /** The owner sets the other names a group calls the agent by: `{ "aliases": ["小跟班"] }`, all at once. */
+  app.put("/v1/admin/agents/:id/chats/:chatId/aliases", async (c) => {
+    const { aliases } = await c.req.json<{ aliases?: unknown }>();
+    if (!Array.isArray(aliases) || !aliases.every((a) => typeof a === "string"))
+      throw new MingleError("alias_invalid", 'send { "aliases": ["<name>", …] }');
+    return c.json(mingle.setAliases(c.req.param("id"), c.req.param("chatId"), aliases));
   });
 
   /** The owner puts a group back on Mingle's own pace, whatever the agent set (docs/spec.md 4.2). */
