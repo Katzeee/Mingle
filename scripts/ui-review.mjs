@@ -227,6 +227,11 @@ try {
       now - ago / 2,
     );
   line("t5", "整理香山北线、西山和八大处三条路线的爬升和交通对比表", "running", "in_progress", "m01", "c1", 720_000);
+  // How far it is: the first line of what it last said in its thread, long enough to truncate.
+  insert(
+    "UPDATE tasks SET progress = ? WHERE id = 't5'",
+    "西山和八大处的爬升数据已经齐了，香山北线还在核对公交末班车时间和北门开放时间，整理好后发到群里",
+  );
   line("t6", "Draft the packing list for first-time hikers", "queued", "in_progress", "m03", "c2", 120_000);
   line(
     "t7",

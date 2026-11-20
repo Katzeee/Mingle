@@ -56,7 +56,7 @@ import { Lines } from "./lines.ts";
 import { BACKOFF_MS, type LinkEffect, type LinkEvent, type LinkState, step, stored } from "./link.ts";
 import { accessText, botBrakeNote, LiveReplies, pausedNote, stopNote } from "./live.ts";
 import { renderManual } from "./manual.ts";
-import { Outbox } from "./outbox.ts";
+import { Outbox, type SendReport } from "./outbox.ts";
 import type { Paths } from "./paths.ts";
 import { Remotes, type RemoteTransport } from "./remotes.ts";
 import { AgentRuntime, type FailureInfo } from "./runtime.ts";
@@ -65,6 +65,8 @@ import { BotHops, trigger } from "./trigger.ts";
 
 /** Messages before the one a line works for that its brief carries (docs/spec.md 4.13). */
 const LINE_SOURCE_BEFORE = 10;
+/** How much of its thread a line reads when its old conversation could not be resumed (docs/spec.md 4.13). */
+const LINE_THREAD_RECENT = 30;
 export interface OnboardingSession {
   readonly id: string;
   readonly agentId: string;
@@ -274,6 +276,7 @@ export class Mingle {
           .map((m) => ({ id: m.id, input: renderMessage(this.store, m, { agentName: agent?.name ?? "" }) }));
       },
       source: (task) => this.lineSource(task),
+      thread: (task) => this.lineThread(task),
       paused: (id) => this.paused.has(id) || this.deleting.has(id),
       log: (line) => this.log(line),
     });
@@ -1503,7 +1506,12 @@ export class Mingle {
     if (knownBot && !owner && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
     // The owner is a person, whatever was marked.
     const bot = !owner && contact.isBot;
-    const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
+    // A reply in a thread to a message in the chat it hangs off (a Feishu thread under the group's
+    // message, docs/spec.md 4.13): the message it quotes is in the parent chat.
+    const quoted = inbound.replyTo
+      ? (this.store.messageByPlatformId(chat.id, inbound.replyTo) ??
+        (parent ? this.store.messageByPlatformId(parent.id, inbound.replyTo) : undefined))
+      : undefined;
     const replyTo = quoted?.id ?? null;
     // A message from before the bot joined is the group's past: kept for reading, never answered.
     const decision = inbound.earlier
@@ -2329,11 +2337,9 @@ export class Mingle {
 
   /** The line a message about earlier work belongs to: by what it replies to, or the thread it is in. */
   private lineFor(agentId: string, chat: Chat, quoted: Message | undefined) {
-    const task = quoted
-      ? this.store.lineOfMessage(agentId, quoted.id)
-      : chat.kind === "thread"
-        ? this.store.lineOfChat(agentId, chat.id)
-        : undefined;
+    const task =
+      (quoted ? this.store.lineOfMessage(agentId, quoted.id) : undefined) ??
+      (chat.kind === "thread" ? this.store.lineOfChat(agentId, chat.id) : undefined);
     return task && task.status !== "closed" && task.lineState !== "ended" ? task : undefined;
   }
 
@@ -2350,7 +2356,35 @@ export class Mingle {
     const parts = [`The message this work is for:\n${render(message)}`];
     if (before.length) parts.unshift(`What was said before it in that chat, oldest first:\n${before.join("\n")}`);
     parts.push(`For more, read the chat: "$MINGLE_CLI" message read ${message.chatId} --around ${message.id}`);
+    parts.push(this.lineWhere(task));
     return parts.join("\n\n");
+  }
+
+  /** Where the line talks about its work (docs/spec.md 4.13): its thread, one about to open, or nowhere. */
+  private lineWhere(task: Task): string {
+    if (task.threadChat)
+      return `[mingle] This work has a thread: ${task.threadChat}. "message send" goes there; talk there as the work goes, and reply to ${task.fromMessage} only with the result.`;
+    return this.canOpenThread(task)
+      ? `[mingle] Your first "message send" opens a thread under ${task.fromMessage} for this work; talk there as the work goes, and reply to ${task.fromMessage} only with the result.`
+      : '[mingle] This chat has no threads: do not post progress in it. Say how far you are with "$MINGLE_CLI" task status instead; message send only to ask the person something.';
+  }
+
+  /** A reply to the message this work is for can open a thread under it (docs/spec.md 4.13). */
+  canOpenThread(task: Task): boolean {
+    if (task.threadChat) return false;
+    const chat = task.fromChat ? this.store.chat(task.fromChat) : undefined;
+    return Boolean(chat?.kind === "group" && this.live.get(chat.connectionId)?.capabilities().threads);
+  }
+
+  /** What was said in the line's thread lately, for a line that starts its conversation over. */
+  private lineThread(task: Task): string {
+    const agent = this.store.agent(task.agentId);
+    if (!task.threadChat || !agent) return "";
+    const said = this.store
+      .chatMessages(task.threadChat, LINE_THREAD_RECENT)
+      .map((m) => renderMessage(this.store, m, { agentName: agent.name }))
+      .filter(Boolean);
+    return said.length ? `What was said in this work's thread lately, oldest first:\n${said.join("\n")}` : "";
   }
 
   /** Hand a message to a task's line, waking it; finished work picks up again. */
@@ -2378,12 +2412,15 @@ export class Mingle {
         `${running.id} already works on ${message.id} ("${running.title}"); pass what is new on with: task tell ${running.id} --from ${message.id}`,
         409,
       );
+    // Asked in a thread already (a Slack thread, a Discord thread, a document comment): the work happens there.
+    const chat = this.store.chat(message.chatId);
     const task = this.store.createLineTask({
       agentId,
       title: input.title,
       fromMessage: message.id,
       fromChat: message.chatId,
       brief: input.brief,
+      threadChat: chat?.kind === "thread" ? chat.id : null,
     });
     this.log(`${this.store.agent(agentId)?.name ?? agentId}: line ${task.id} for ${message.id}`);
     this.lines.start(task);
@@ -2412,13 +2449,44 @@ export class Mingle {
   }
 
   /**
+   * Something went out about a line's work (docs/spec.md 4.13): the thread it opened is where the
+   * work goes on, and what the line said there is how far it is.
+   */
+  lineSpoke(taskId: string, report: SendReport, how: { progress: boolean }): void {
+    const task = this.store.taskById(taskId);
+    if (!task) return;
+    if (report.thread && !task.threadChat) {
+      this.store.updateLine(task.id, { threadChat: report.thread });
+      this.log(`line ${task.id}: talks in thread ${report.thread}`);
+    }
+    const said = report.messages[0]?.body;
+    if (how.progress && said) this.store.updateLine(task.id, { progress: firstLine(said) });
+  }
+
+  /** A line says how far it is, where it has no thread to say it in: the console shows it. */
+  taskProgress(agentId: string, taskId: string, text: string): Task {
+    const task = this.store.task(agentId, taskId);
+    if (!task) throw notFound("task", taskId);
+    this.store.updateLine(task.id, { progress: firstLine(text) });
+    return this.store.task(agentId, task.id) as Task;
+  }
+
+  /**
    * The agent sets a task's status. Closing a task whose line is still on it stops the line, as the
    * console's "stop" does: someone said to drop it, so nothing more should arrive in the chat.
    */
-  setTaskStatus(agentId: string, taskId: string, status: TaskStatus): Task {
+  setTaskStatus(agentId: string, taskId: string, status: TaskStatus, byLine = false): Task {
     const before = this.store.task(agentId, taskId);
     if (!before) throw notFound("task", taskId);
-    if (status === "closed" && before.lineState && before.lineState !== "ended") {
+    if (byLine) {
+      // Told to stop in its thread: it said where it got to and stops after this turn, not mid-command.
+      this.lines.release(before.id);
+      this.store.addOwnerNote(
+        agentId,
+        `[mingle] Task ${before.id} (${quoteNote(before.title)}) was stopped: someone asked its line to stop, and it said in the chat how far it got.`,
+      );
+      this.log(`${this.store.agent(agentId)?.name ?? agentId}: line ${before.id} closed its task when told to stop`);
+    } else if (status === "closed" && before.lineState && before.lineState !== "ended") {
       void this.lines.end(before.id);
       this.log(`${this.store.agent(agentId)?.name ?? agentId}: closed task ${before.id}; its line stops`);
     }
@@ -2495,6 +2563,12 @@ function imageType(bytes: Uint8Array): "png" | "jpg" | "webp" | undefined {
   if (starts([0xff, 0xd8, 0xff])) return "jpg";
   if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "webp";
   return undefined;
+}
+
+/** A line's progress as the console shows it: the first line of what it said, at most 120 characters. */
+function firstLine(text: string): string {
+  const line = text.trim().split("\n", 1)[0]?.trim() ?? "";
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
 /** A reminder or task in an owner note: one line, short enough to recognise. */

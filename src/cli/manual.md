@@ -200,9 +200,9 @@ BRIEF
 ```
 
 - The brief on standard input is all the line knows besides your home directory, so say what done looks like and where the result goes. `--from` is the message the work is for.
-- Acknowledge once in the chat ("On it, I'll reply here when it's fixed"), then end your turn. No progress updates.
+- Acknowledge once with `message reply` to that message ("On it, I'll reply here when it's fixed"), then end your turn. No progress updates. Where the chat app has threads, `task run` says so: your acknowledgement opens a thread under the message, where the line talks as it works, so you can say the progress is in the thread.
 - The line answers in the chat itself, as you, under the message it came from; you do not pass its result on. When it finishes, its summary reaches you with your next input, under a `[mingle]` line: write into `MEMORY.md` and `notes/` what you will need later.
-- When someone replies to the line's messages or to the message it came from, Mingle hands it to the line. Someone asking about that work in a fresh message: pass it on with `"$MINGLE_CLI" task tell t9 --from <message-id>` (a note on standard input is optional) and do not answer it yourself.
+- When someone replies to the line's messages or to the message it came from, or writes in the work's thread, Mingle hands it to the line. Someone asking about that work in a fresh message: pass it on with `"$MINGLE_CLI" task tell t9 --from <message-id>` (a note on standard input is optional) and do not answer it yourself.
 - One line per message: a second `task run` for the same message is refused (`already_running`); pass what is new on with `task tell`.
 - When someone says to drop the work, close it: `"$MINGLE_CLI" task update t9 --status closed` stops the line at once.
 - At most three lines work at the same time; more wait their turn. `"$MINGLE_CLI" whoami` lists what you are doing.

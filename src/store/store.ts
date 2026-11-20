@@ -193,6 +193,13 @@ export interface Task {
   /** What the line reported when it finished. */
   summary: string | null;
   lineError: string | null;
+  /**
+   * The thread the line talks in (docs/spec.md 4.13): opened under the message it works for, or the
+   * thread that message was already in. Null where there is none.
+   */
+  threadChat: string | null;
+  /** How far the line is, in one line: the latest it said in its thread or reported with `task status`. */
+  progress: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -1010,6 +1017,11 @@ export class Store {
     return this.message(id) as Message;
   }
 
+  /** The message went somewhere else than the chat it was sent to: the thread a reply opened under it. */
+  setMessageChat(id: string, chatId: string): void {
+    this.db.prepare("UPDATE messages SET chat_id = ? WHERE id = ?").run(chatId, id);
+  }
+
   /** Hand an inbound message to a task's line (docs/spec.md 4.13). */
   setMessageLine(id: string, taskId: string): void {
     this.db.prepare("UPDATE messages SET line_task_id = ? WHERE id = ?").run(taskId, id);
@@ -1095,12 +1107,19 @@ export class Store {
   }
 
   chatMessages(chatId: string, limit: number, before?: string): Message[] {
-    const anchor = before ? (this.message(before)?.createdAt ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+    // Before the anchor in the order stored: one stored in the same millisecond still came first.
+    const anchor = before
+      ? (this.db.prepare("SELECT created_at, rowid FROM messages WHERE id = ?").get(before) as
+          | { created_at: number; rowid: number }
+          | undefined)
+      : undefined;
+    const at = anchor ? Number(anchor.created_at) : Number.MAX_SAFE_INTEGER;
+    const row = anchor ? Number(anchor.rowid) : Number.MAX_SAFE_INTEGER;
     const rows = this.db
       .prepare(
-        "SELECT * FROM messages WHERE chat_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        "SELECT * FROM messages WHERE chat_id = ? AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT ?",
       )
-      .all(chatId, anchor, limit) as Row[];
+      .all(chatId, at, at, row, limit) as Row[];
     return rows.map(toMessage).reverse();
   }
 
@@ -1495,14 +1514,26 @@ export class Store {
     fromMessage: string;
     fromChat: string;
     brief: string;
+    /** The thread the work happens in from the start: the message was already in one. */
+    threadChat?: string | null;
   }): Task {
     const id = this.mint("tasks", "t", 3);
     const t = this.now();
     this.db
       .prepare(
-        "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, created_at, updated_at) VALUES (?, ?, ?, 'in_progress', ?, ?, 'queued', ?, ?, ?)",
+        "INSERT INTO tasks (id, agent_id, title, status, from_message, from_chat, line_state, brief, thread_chat, created_at, updated_at) VALUES (?, ?, ?, 'in_progress', ?, ?, 'queued', ?, ?, ?, ?)",
       )
-      .run(id, input.agentId, input.title, input.fromMessage, input.fromChat, input.brief, t, t);
+      .run(
+        id,
+        input.agentId,
+        input.title,
+        input.fromMessage,
+        input.fromChat,
+        input.brief,
+        input.threadChat ?? null,
+        t,
+        t,
+      );
     return this.task(input.agentId, id) as Task;
   }
 
@@ -1514,13 +1545,22 @@ export class Store {
 
   updateLine(
     id: string,
-    patch: Partial<{ lineState: LineState; sessionId: string | null; summary: string; lineError: string | null }>,
+    patch: Partial<{
+      lineState: LineState;
+      sessionId: string | null;
+      summary: string;
+      lineError: string | null;
+      threadChat: string;
+      progress: string;
+    }>,
   ): void {
     const columns: Record<string, string> = {
       lineState: "line_state",
       sessionId: "session_id",
       summary: "summary",
       lineError: "line_error",
+      threadChat: "thread_chat",
+      progress: "progress",
     };
     const sets: string[] = [];
     const values: (string | null)[] = [];
@@ -1586,14 +1626,20 @@ export class Store {
     return row && toTask(row);
   }
 
-  /** The latest line started in this chat (a thread that is one conversation). */
+  /** The latest line whose thread this chat is, or that was started in it (docs/spec.md 4.13). */
   lineOfChat(agentId: string, chatId: string): Task | undefined {
     const row = this.db
       .prepare(
-        "SELECT * FROM tasks WHERE agent_id = ? AND line_state IS NOT NULL AND from_chat = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM tasks WHERE agent_id = ? AND line_state IS NOT NULL AND (thread_chat = ? OR from_chat = ?) ORDER BY created_at DESC LIMIT 1",
       )
-      .get(agentId, chatId) as Row | undefined;
+      .get(agentId, chatId, chatId) as Row | undefined;
     return row && toTask(row);
+  }
+
+  /** The line still working for this message that has no thread yet, so a reply to it can open one. */
+  threadlessLine(agentId: string, messageId: string): Task | undefined {
+    const task = this.lineFromMessage(agentId, messageId);
+    return task && !task.threadChat ? task : undefined;
   }
 
   setTaskStatus(agentId: string, id: string, status: TaskStatus): Task | undefined {
@@ -1916,6 +1962,8 @@ function toTask(r: Row): Task {
     brief: str(r.brief),
     summary: str(r.summary),
     lineError: str(r.line_error),
+    threadChat: str(r.thread_chat),
+    progress: str(r.progress),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };

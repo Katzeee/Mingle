@@ -221,6 +221,28 @@ describe("slack connection", () => {
     await connection.close();
   });
 
+  it("also shows a line's result in the channel, from its thread (docs/spec.md 4.13)", async () => {
+    const http = fakeHttp({
+      "auth.test": auth,
+      "apps.connections.open": () => ({ url: "wss://x" }),
+      "chat.postMessage": () => ({ ts: "9.0" }),
+    });
+    const ws = fakeSocket();
+    const connection = await slackChannel({ fetch: http.fetchImpl, createSocket: () => ws.socket }).connect(
+      { botToken: "xoxb-1", appToken: "xapp-1", name: "Alex" },
+      { onMessage: () => {}, onState: () => {}, onMembership: () => {} },
+    );
+    ws.push({ type: "hello" });
+    const chat = { platformId: "C1:2.0", kind: "thread" as const, parent: { platformId: "C1" } };
+    await connection.send({ chat, text: "Looking.", replyTo: "2.0" });
+    await connection.send({ chat, text: "Done: PR #3.", replyTo: "2.0", inChat: true });
+    const posts = http.calls.filter((c) => c.method === "chat.postMessage").map((c) => c.body);
+    expect(posts[0]).toMatchObject({ channel: "C1", thread_ts: "2.0" });
+    expect(posts[0]?.reply_broadcast).toBeUndefined();
+    expect(posts[1]).toMatchObject({ channel: "C1", thread_ts: "2.0", reply_broadcast: true });
+    await connection.close();
+  });
+
   it("turns a /stop slash command in a DM into an inbound message, once", async () => {
     const http = fakeHttp({
       "auth.test": auth,

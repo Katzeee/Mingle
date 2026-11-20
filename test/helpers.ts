@@ -57,6 +57,8 @@ export class FakeChannel implements Channel {
   opensDirect: "none" | "chat" | "user" = "none";
   /** Whether the bot can write first to a user by their ID (messageUser), as Feishu and Slack can. */
   messagesUsers = false;
+  /** Can open a thread under a message by replying into it, as Feishu and Discord can (docs/spec.md 4.13). */
+  threads = false;
   /** Department and title the platform reports for each user, where member profiles are on. */
   profiles = new Map<string, string>();
   /** How many times a group's member list was read. */
@@ -105,13 +107,28 @@ export class FakeChannel implements Channel {
         fileUpload: true,
         fileDownload: false,
         listMembers: channel.members.length > 0,
+        ...(channel.threads ? { threads: true as const } : {}),
         maxTextLength: 4096,
       }),
       send: async (message) => {
         const platformId = String(this.seq++);
         this.sent.push({ ...message, platformId });
         const byUser = this.opensDirect === "user" && message.chat.platformId.startsWith("user:");
-        return { kind: "sent", platformId, ...(byUser ? { chat: `dm-${message.chat.platformId.slice(5)}` } : {}) };
+        const thread =
+          this.threads && message.inThread && message.replyTo && message.chat.kind === "group"
+            ? {
+                platformId: `${message.chat.platformId}:${message.replyTo}`,
+                kind: "thread" as const,
+                parent: { platformId: message.chat.platformId },
+                followUp: true as const,
+              }
+            : undefined;
+        return {
+          kind: "sent",
+          platformId,
+          ...(byUser ? { chat: `dm-${message.chat.platformId.slice(5)}` } : {}),
+          ...(thread ? { thread } : {}),
+        };
       },
       // Read when used: tests set opensDirect after the bot has connected.
       get openDirect() {

@@ -99,8 +99,20 @@ const CAPABILITIES: Capabilities = {
   fileDownload: true,
   listMembers: true,
   mentions: true,
+  // "Reply in thread" (im.v1.message.reply, reply_in_thread) opens a thread under a group message.
+  threads: true,
   maxTextLength: 8000,
 };
+
+/**
+ * A thread in a group (docs/spec.md 4.13): `<chat_id>:<root message id>`. Feishu sends into it by
+ * replying to a message in it with reply_in_thread; the root is one that always is.
+ */
+export function groupThread(platformId: string): { chat: string; root: string } | undefined {
+  if (platformId.startsWith("doc:")) return undefined;
+  const at = platformId.indexOf(":");
+  return at > 0 ? { chat: platformId.slice(0, at), root: platformId.slice(at + 1) } : undefined;
+}
 
 /**
  * Feishu turns a card's streaming mode off ten minutes after it was last turned on (error 300309
@@ -518,17 +530,36 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             if (result.kind === "sent") shown.add(message.chat.platformId, result.platformId);
             return result;
           }
-          const opts = message.replyTo ? { replyTo: message.replyTo } : {};
+          const inGroupThread = groupThread(message.chat.platformId);
+          const chatId = inGroupThread?.chat ?? message.chat.platformId;
+          // Into a thread: a reply in it. Opening one: a reply in a thread under the message. The
+          // outcome for the whole chat: a message of its own, as a reply to a message with a thread
+          // under it lands in that thread (Feishu's reply_in_thread notes).
+          const opts = inGroupThread
+            ? { replyTo: message.replyTo ?? inGroupThread.root, replyInThread: true }
+            : message.replyTo && message.inChat
+              ? {}
+              : message.replyTo
+                ? { replyTo: message.replyTo, ...(message.inThread ? { replyInThread: true } : {}) }
+                : {};
+          const opened: ChatRef | undefined =
+            !inGroupThread && message.replyTo && message.inThread && !message.inChat
+              ? {
+                  platformId: `${message.chat.platformId}:${message.replyTo}`,
+                  kind: "thread",
+                  parent: {
+                    platformId: message.chat.platformId,
+                    ...(message.chat.name ? { name: message.chat.name } : {}),
+                  },
+                  followUp: true,
+                }
+              : undefined;
           let textId = "";
           try {
             let last = "";
             if (message.text)
               last = textId = (
-                await channel.send(
-                  message.chat.platformId,
-                  { markdown: postMentions(message.text, message.mentions) },
-                  opts,
-                )
+                await channel.send(chatId, { markdown: postMentions(message.text, message.mentions) }, opts)
               ).messageId;
             for (const file of message.files ?? []) {
               const source = await readFile(file.path);
@@ -536,7 +567,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
               const input = IMAGE_EXTENSIONS.has(extname(name).toLowerCase())
                 ? { image: { source } }
                 : { file: { source, fileName: name } };
-              last = (await channel.send(message.chat.platformId, input, opts)).messageId;
+              last = (await channel.send(chatId, input, opts)).messageId;
             }
             // Sent to a person by their open_id (openDirect): learn the direct chat's own ID.
             if (message.chat.platformId.startsWith("ou_")) {
@@ -546,7 +577,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
                 .catch(() => undefined);
               if (chat) return { kind: "sent", platformId: last, chat };
             }
-            return { kind: "sent", platformId: last };
+            return { kind: "sent", platformId: last, ...(opened ? { thread: opened } : {}) };
           } catch (error) {
             return withTextSent(sendFailure(error), textId);
           }
@@ -611,7 +642,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             let pageToken: string | undefined;
             for (let page = 0; page < 10; page++) {
               const response = await channel.rawClient.im.v1.chatMembers.get({
-                path: { chat_id: chat.platformId },
+                path: { chat_id: groupThread(chat.platformId)?.chat ?? chat.platformId },
                 params: { member_id_type: "open_id", page_size: 100, ...(pageToken ? { page_token: pageToken } : {}) },
               });
               for (const item of response.data?.items ?? []) {
@@ -626,7 +657,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
             const bots = await (async () =>
               raw.request<{ data?: { items?: { bot_id?: string; bot_name?: string }[] } }>({
                 method: "GET",
-                url: `/open-apis/im/v1/chats/${encodeURIComponent(chat.platformId)}/members/bots`,
+                url: `/open-apis/im/v1/chats/${encodeURIComponent(groupThread(chat.platformId)?.chat ?? chat.platformId)}/members/bots`,
               }))().catch(() => undefined);
             for (const item of bots?.data?.items ?? []) {
               if (item.bot_id) members.push({ id: item.bot_id, name: item.bot_name ?? "", isBot: true });
@@ -727,13 +758,24 @@ export function toInbound(
     .filter((m) => m.openId && !m.isBot && m.openId !== bot.id)
     .map((m) => ({ id: m.openId as string, name: m.name ?? "", isBot: false }));
 
+  // A message in a group's thread: the thread is a chat of its own, under the group, and one
+  // conversation (docs/spec.md 4.13). Its root is the message the thread was opened under.
+  const chat: ChatRef =
+    !dm && message.threadId
+      ? {
+          platformId: `${message.chatId}:${message.rootId ?? message.messageId}`,
+          kind: "thread",
+          parent: { platformId: message.chatId, ...(chatName ? { name: chatName } : {}) },
+          followUp: true,
+        }
+      : {
+          platformId: message.chatId,
+          kind: dm ? "dm" : "group",
+          ...(dm ? (message.senderName ? { name: message.senderName } : {}) : chatName ? { name: chatName } : {}),
+        };
   return {
     platformId: message.messageId,
-    chat: {
-      platformId: message.chatId,
-      kind: dm ? "dm" : "group",
-      ...(dm ? (message.senderName ? { name: message.senderName } : {}) : chatName ? { name: chatName } : {}),
-    },
+    chat,
     // An empty name means unknown; the console labels such senders without showing the open_id.
     sender: { id: message.senderId, name: message.senderName ?? "", isBot },
     text,

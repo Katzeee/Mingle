@@ -142,11 +142,15 @@ export async function replyText(
   return { text: text.replace(/[ \t]{2,}/g, " ").trim(), mentioned, mentions };
 }
 
-/** The thread's chat: named after the document and the text the comment is on. */
+/**
+ * The thread's chat: named after the document and the text the comment is on. One conversation
+ * about one passage: once the agent answered there, what people reply in it is addressed to it,
+ * without an @ each time (docs/spec.md 6.8).
+ */
 export function threadChat(thread: CommentThread, title: string | undefined, quote: string | undefined): ChatRef {
   const doc = title || "Feishu document";
   const on = quote ? ` · “${cut(oneLine(quote), NAME_QUOTE_CHARS)}”` : "";
-  return { platformId: threadId(thread), kind: "thread", name: `${doc}${on}` };
+  return { platformId: threadId(thread), kind: "thread", name: `${doc}${on}`, followUp: true };
 }
 
 /**
