@@ -6,7 +6,12 @@ const pace = { quietMs: 20_000, maxWaitMs: 60_000, gapMs: 120_000 };
 const book = () => new HearingBook(() => pace);
 const at = (s: number) => s * 1000;
 
-function say(b: HearingBook, who: string, t: number, o: { named?: boolean; chat?: string; tier?: HearTier } = {}) {
+function say(
+  b: HearingBook,
+  who: string,
+  t: number,
+  o: { named?: boolean; chat?: string; tier?: HearTier; handling?: boolean } = {},
+) {
   return b.observe({
     chatId: o.chat ?? "c1",
     groupId: "c1",
@@ -16,6 +21,7 @@ function say(b: HearingBook, who: string, t: number, o: { named?: boolean; chat?
     named: o.named ?? false,
     owner: false,
     tier: o.tier ?? "fast",
+    ...(o.handling !== undefined ? { handling: o.handling } : {}),
   });
 }
 
@@ -221,6 +227,74 @@ describe("the pace of a group that hears everything", () => {
 });
 
 describe("telling who is meant", () => {
+  it("steers a follow-up from the person the running turn is handling into it, for free", () => {
+    const b = book();
+    b.addressed("c1", "c1", "u1", at(0));
+    const plan = say(b, "u1", at(5), { handling: true });
+    expect(plan).toEqual({ lane: "steer", dueAt: at(7), reset: true });
+    // Still handling them when it is due: it goes into that turn, holding no token and keeping no gap.
+    const r = b.handOver("c1", at(7), undefined, (id) => id === "u1");
+    if (!r || !("stretch" in r)) throw new Error("not handed over");
+    expect(r.stretch).toMatchObject({ lane: "steer", reserved: false });
+    // Not answered: like an unanswered fast stretch, the person counts it.
+    b.settle(r.stretch, false, at(30));
+    b.settle(handOver(b, say(b, "u1", at(31)).dueAt), false, at(50));
+    expect(say(b, "u1", at(51)).lane).toBe("slow");
+  });
+
+  it("does not steer in what anyone else says, and takes the follow-up out of the turn once they do", () => {
+    const b = book();
+    b.addressed("c1", "c1", "u1", at(0));
+    // Someone the turn is not handling: never steered, they ride along with u1's next stretch.
+    expect(say(b, "u2", at(1), { handling: false }).lane).toBe("ride");
+    b.drop("c1");
+    expect(say(b, "u1", at(5), { handling: true }).lane).toBe("steer");
+    // Someone else joins the follow-up before it goes: it all waits for a turn of its own.
+    expect(say(b, "u2", at(6), { handling: false }).lane).toBe("ride");
+    const s = handOver(b, at(7));
+    expect(s).toMatchObject({ lane: "fast", reserved: true });
+  });
+
+  it("starts a turn of its own for a follow-up whose turn ended before it was due", () => {
+    const b = book();
+    b.addressed("c1", "c1", "u1", at(0));
+    say(b, "u1", at(5), { handling: true });
+    const r = b.handOver("c1", at(7), undefined, () => false);
+    if (!r || !("stretch" in r)) throw new Error("not handed over");
+    expect(r.stretch).toMatchObject({ lane: "fast", reserved: true });
+  });
+
+  it("hands a follow-up steered in too late over again once, holding tokens like a fast stretch", () => {
+    const b = book();
+    b.addressed("c1", "c1", "u1", at(0));
+    say(b, "u1", at(5), { handling: true });
+    const r = b.handOver("c1", at(7), undefined, () => true);
+    if (!r || !("stretch" in r)) throw new Error("not handed over");
+    expect(b.late(at(7), at(9))).toBe(true);
+    expect(b.late(at(7), at(30))).toBe(false);
+    expect(b.resend(r.stretch, at(9))).toBe(at(9));
+    const again = handOver(b, at(9));
+    expect(again).toMatchObject({ lane: "fast", reserved: true, from: at(5) });
+    // Only a steered stretch is handed over again: the fast one is settled as usual.
+    expect(b.resend(again, at(12))).toBeUndefined();
+  });
+
+  it("does not hand a late follow-up over at once when the group's tokens ran out", () => {
+    const b = new HearingBook(() => pace, { tiers: { ...ENGAGE.tiers, fast: { cap: 1, refillMs: 3_600_000 } } });
+    b.addressed("c1", "c1", "u1", at(0));
+    say(b, "u1", at(5), { handling: true });
+    const r = b.handOver("c1", at(7), undefined, () => true);
+    if (!r || !("stretch" in r)) throw new Error("not handed over");
+    // Someone else's fast stretch spent the one token meanwhile.
+    b.spoke("c2", "c1", ["u2"], at(7));
+    say(b, "u2", at(7), { chat: "c2" });
+    handOver(b, at(9), "c2");
+    b.resend(r.stretch, at(9));
+    const later = b.handOver("c1", at(9));
+    expect(later).toEqual({ dueAt: expect.any(Number) });
+    expect((later as { dueAt: number }).dueAt).toBeGreaterThan(at(9));
+  });
+
   it("finds a name as a word in Latin script and anywhere in others", () => {
     expect(nameIn("Alex, which way?", ["Alex"])).toBe(true);
     expect(nameIn("alexander said so", ["Alex"])).toBe(false);

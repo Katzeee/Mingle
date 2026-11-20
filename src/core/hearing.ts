@@ -66,6 +66,10 @@ export interface Engage {
   readonly rideHoldMs: number;
   /** Unanswered calls in a row after which a person no longer counts as in a conversation. */
   readonly ignoredMax: number;
+  /** A follow-up steered into the turn handling its sender waits at most this long for more. */
+  readonly steerQuietMs: number;
+  /** A turn that ends this soon after a follow-up was steered in may not have read it: handed over again once. */
+  readonly steerLateMs: number;
   readonly person: Bucket;
   readonly tiers: Readonly<Record<HearTier, Bucket>>;
 }
@@ -79,6 +83,8 @@ export const ENGAGE: Engage = {
   fastMaxWaitMs: 15_000,
   rideHoldMs: 240_000,
   ignoredMax: 2,
+  steerQuietMs: 2_000,
+  steerLateMs: 10_000,
   person: { cap: 3, refillMs: 600_000 },
   tiers: {
     save: { cap: 2, refillMs: 1_200_000 },
@@ -88,10 +94,11 @@ export const ENGAGE: Engage = {
 };
 
 /**
- * How a stretch travels: `fast` someone in a conversation moves the clock; `ride` waits for the
- * next stretch while someone else is in one; `slow` Mingle's own pace (V1).
+ * How a stretch travels: `fast` someone in a conversation moves the clock; `steer` someone the
+ * running turn is handling adds to it, and it goes into that turn; `ride` waits for the next
+ * stretch while someone else is in one; `slow` Mingle's own pace (V1).
  */
-export type Lane = "fast" | "ride" | "slow";
+export type Lane = "fast" | "steer" | "ride" | "slow";
 
 export interface Plan {
   readonly lane: Lane;
@@ -183,6 +190,8 @@ export class HearingBook {
     tier: HearTier;
     /** The gap the agent set with `chat hear --every`: no fast lane then, only slower. */
     everyMs?: number;
+    /** The running turn is handling what this person said in this chat (docs/rfc/0001 3.5). */
+    handling?: boolean;
   }): Plan {
     const { now } = o;
     const chat = this.chat(o.chatId, o.groupId);
@@ -213,7 +222,19 @@ export class HearingBook {
     pending.heard.add(o.senderId);
     pending.last = o.senderId;
     const every = o.everyMs !== undefined;
-    if (!every && this.inConversation(group, person, now)) {
+    // Someone else spoke into a follow-up waiting to go into the running turn: theirs is not
+    // steered in, so the stretch goes as a stretch of its own, after the turn.
+    if (pending.lane === "steer" && [...pending.heard].some((id) => id !== o.senderId)) pending.lane = "fast";
+    const live = !every && this.inConversation(group, person, now);
+    // Adding to what the running turn is handling, and nothing else waits: it goes into that turn.
+    if (live && o.handling && pending.heard.size === 1 && (pending.lane === "steer" || pending.lane === "slow")) {
+      pending.fastSince ??= now;
+      pending.engaged.add(o.senderId);
+      pending.lane = "steer";
+      pending.dueAt = Math.min(now + this.engage.steerQuietMs, pending.fastSince + this.engage.fastMaxWaitMs);
+      return { lane: "steer", dueAt: pending.dueAt, reset: true };
+    }
+    if (live) {
       const e = this.e(person, now);
       pending.fastSince ??= now;
       pending.engaged.add(o.senderId);
@@ -225,7 +246,7 @@ export class HearingBook {
       return { lane: "fast", dueAt: pending.dueAt, reset: true };
     }
     // Someone is in a conversation: this line goes with their next stretch and does not push it back.
-    if (pending.lane === "fast" || pending.lane === "ride") {
+    if (pending.lane !== "slow") {
       return { lane: "ride", dueAt: pending.dueAt, reset: false };
     }
     const slow = this.slowDue(chat, pending, now, o.everyMs);
@@ -242,11 +263,29 @@ export class HearingBook {
    * The timer is up: the stretch goes to the agent. A fast one holds a token of the group and of each
    * person who made it fast; when the group has none left meanwhile, it waits at the slow pace instead.
    */
-  handOver(chatId: string, now: number, everyMs?: number): { stretch: Stretch } | { dueAt: number } | undefined {
+  handOver(
+    chatId: string,
+    now: number,
+    everyMs?: number,
+    handling?: (senderId: string) => boolean,
+  ): { stretch: Stretch } | { dueAt: number } | undefined {
     const chat = this.chats.get(chatId);
     const pending = chat?.pending;
     if (!chat || !pending) return undefined;
     const group = this.groups.get(chat.groupId);
+    if (pending.lane === "steer") {
+      // Steered into a turn already running, it costs no turn: no token, and the gap stands.
+      if (everyMs === undefined && [...pending.engaged].every((id) => handling?.(id))) {
+        chat.pending = undefined;
+        chat.handed = {
+          engaged: new Set([...(chat.handed?.engaged ?? []), ...pending.engaged]),
+          last: pending.last,
+        };
+        return { stretch: this.stretchOf(chat, pending, false) };
+      }
+      // That turn ended meanwhile: this one starts a turn of its own.
+      pending.lane = "fast";
+    }
     let reserved = false;
     if (pending.lane === "fast" && group) {
       if (this.groupTokens(group, now) < 1) {
@@ -265,25 +304,51 @@ export class HearingBook {
     }
     chat.pending = undefined;
     chat.heardAt = now;
-    if (pending.lane !== "fast") chat.unanswered += 1;
+    if (pending.lane === "slow" || pending.lane === "ride") chat.unanswered += 1;
     chat.handed = { engaged: new Set(pending.engaged), last: pending.last };
-    return {
-      stretch: {
-        chatId,
-        groupId: chat.groupId,
-        from: pending.from,
-        lane: pending.lane,
-        engaged: new Set(pending.engaged),
-        heard: new Set(pending.heard),
-        reserved,
-      },
+    return { stretch: this.stretchOf(chat, pending, reserved) };
+  }
+
+  /**
+   * A follow-up steered in so late that its turn ended before it could have been read (within
+   * `steerLateMs`), and the agent did not speak there since: handed over once more, at once, as a
+   * fast stretch that holds tokens like any other. Nothing to settle for the steered one.
+   */
+  resend(stretch: Stretch, now: number): number | undefined {
+    const chat = this.chats.get(stretch.chatId);
+    if (!chat || stretch.lane !== "steer") return undefined;
+    chat.handed = undefined;
+    const pending: Pending = chat.pending ?? {
+      from: stretch.from,
+      since: now,
+      lane: "fast",
+      dueAt: now,
+      engaged: new Set(),
+      heard: new Set(),
+      last: [...stretch.engaged].at(-1) ?? "",
     };
+    chat.pending = {
+      ...pending,
+      from: Math.min(pending.from, stretch.from),
+      fastSince: now,
+      lane: "fast",
+      dueAt: now,
+      engaged: new Set([...pending.engaged, ...stretch.engaged]),
+      heard: new Set([...pending.heard, ...stretch.heard]),
+    };
+    return now;
+  }
+
+  /** Whether the turn a steered stretch went into ended too soon after it to have read it. */
+  late(deliveredAt: number, endedAt: number): boolean {
+    return endedAt - deliveredAt < this.engage.steerLateMs;
   }
 
   /** A stretch handed over that turned out to hold nothing to hear: as if it never went. */
   cancel(stretch: Stretch, now: number): void {
     const chat = this.chats.get(stretch.chatId);
-    if (chat && stretch.lane !== "fast") chat.unanswered = Math.max(0, chat.unanswered - 1);
+    if (chat && (stretch.lane === "slow" || stretch.lane === "ride"))
+      chat.unanswered = Math.max(0, chat.unanswered - 1);
     this.refund(stretch, now);
   }
 
@@ -302,7 +367,7 @@ export class HearingBook {
       const person = group.people.get(id);
       if (person) this.setE(person, this.e(person, now) * this.engage.damp, now);
     }
-    if (stretch.lane === "fast") {
+    if (stretch.lane === "fast" || stretch.lane === "steer") {
       for (const id of stretch.engaged) {
         const person = group.people.get(id);
         if (person) person.ignored += 1;
@@ -379,6 +444,18 @@ export class HearingBook {
   }
 
   // ------------------------------------------------------------------ internals
+
+  private stretchOf(chat: ChatHearing, pending: Pending, reserved: boolean): Stretch {
+    return {
+      chatId: chat.id,
+      groupId: chat.groupId,
+      from: pending.from,
+      lane: pending.lane,
+      engaged: new Set(pending.engaged),
+      heard: new Set(pending.heard),
+      reserved,
+    };
+  }
 
   private slowDue(chat: ChatHearing, pending: Pending, now: number, everyMs?: number): number {
     const p = this.pace();

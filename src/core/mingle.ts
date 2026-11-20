@@ -1690,16 +1690,18 @@ export class Mingle {
     const now = Date.now();
     this.syncSpoken(chat.id, group.id);
     const agent = this.store.agent(connection.agentId);
+    const senderId = message.senderId ?? contact.platformId;
     const plan = this.book.observe({
       chatId: chat.id,
       groupId: group.id,
-      senderId: message.senderId ?? contact.platformId,
+      senderId,
       at: message.createdAt,
       now,
       named: nameIn(message.body, [agent?.name, connection.botName]),
       owner,
       tier: this.tierOf(group, now),
       ...(group.hearPace.kind === "every" ? { everyMs: group.hearPace.ms } : {}),
+      handling: this.runtimes.get(connection.agentId)?.handling(chat.id, senderId) ?? false,
     });
     const waiting = this.hearing.get(chat.id);
     // A line that rides along leaves the stretch's time as it was.
@@ -1837,7 +1839,12 @@ export class Mingle {
       return;
     }
     const now = Date.now();
-    const handed = this.book.handOver(chatId, now, group.hearPace.kind === "every" ? group.hearPace.ms : undefined);
+    const handed = this.book.handOver(
+      chatId,
+      now,
+      group.hearPace.kind === "every" ? group.hearPace.ms : undefined,
+      (senderId) => runtime.handling(chatId, senderId),
+    );
     if (!handed) return;
     // Fast, but the group's budget ran out meanwhile: it waits at the usual pace.
     if ("dueAt" in handed) {
@@ -1867,16 +1874,18 @@ export class Mingle {
           quotes: m.replyTo !== null,
         }),
     ).length;
-    runtime.enqueueText(
-      formatHeard(this.store, chat, messages, omitted),
-      this.timeStretch(waiting.agentId, chat.id, stretch, {
+    const live = stretch.lane === "fast" || stretch.lane === "steer" ? stretch.engaged : undefined;
+    runtime.enqueueText(formatHeard(this.store, chat, messages, { omitted, ...(live ? { live } : {}) }), {
+      track: this.timeStretch(waiting.agentId, chat.id, stretch, {
         count: messages.length + omitted,
         first: omitted > 0 ? from : (messages[0]?.createdAt ?? now),
         last: messages.reduce((at, m) => Math.max(at, m.createdAt), 0) || now,
         heard: now,
         cues,
       }),
-    );
+      about: { chatId: chat.id, people: [...stretch.engaged] },
+      steer: stretch.lane === "steer",
+    });
   }
 
   /**
@@ -1896,10 +1905,19 @@ export class Mingle {
       delivered: (at) => {
         turn ??= at;
       },
-      ended: () => {
+      ended: (at) => {
         this.syncSpoken(chatId, stretch.groupId);
         const spoke = this.store.firstSpokeAt(chatId, s.heard);
         const lastSpoke = spoke === undefined ? undefined : this.store.lastSpokeAt(chatId);
+        // Steered in as the turn was ending, and not answered: it may never have been read.
+        if (stretch.lane === "steer" && spoke === undefined && this.book.late(turn ?? at, at)) {
+          const dueAt = this.book.resend(stretch, Date.now());
+          if (dueAt !== undefined && !this.paused.has(agentId)) {
+            this.log(`${agentId}: heard ${chatId} steer: the turn ended ${secs(at)}, handing it over again`);
+            this.hearAt(agentId, chatId, dueAt, Date.now());
+            return;
+          }
+        }
         this.book.settle(stretch, spoke !== undefined, Date.now());
         const people = stretch.heard.size;
         this.log(
