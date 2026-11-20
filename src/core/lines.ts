@@ -33,6 +33,11 @@ export interface LineDeps {
    * before a restart (or while the line waited for a free slot) still reaches it.
    */
   readonly unanswered: (task: Task) => { id: string; input: string }[];
+  /**
+   * The message the work is for, with what was said before it in that chat: the brief is written by
+   * the main session, and the line should not have to go and find the conversation it came from.
+   */
+  readonly source?: (task: Task) => string;
   readonly paused: (agentId: string) => boolean;
   readonly log?: (line: string) => void;
   /**
@@ -201,6 +206,7 @@ export class Lines {
     const parts = [
       `[task=${task.id} from=${task.fromMessage ?? "-"} chat=${task.fromChat ?? "-"}] ${task.title}`,
       task.brief ?? "",
+      this.deps.source?.(task) ?? "",
     ];
     if (task.summary) parts.push(`What you reported last time:\n${task.summary}`);
     if (previous) parts.push(previous);

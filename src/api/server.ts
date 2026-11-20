@@ -479,9 +479,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!TASK_STATUSES.includes(status)) {
       throw new MingleError("invalid_status", `use one of: ${TASK_STATUSES.join(", ")}`);
     }
-    const task = store.setTaskStatus(agent.id, c.req.param("id"), status);
-    if (!task) throw notFound("task", c.req.param("id"));
-    return c.json(task);
+    return c.json(mingle.setTaskStatus(agent.id, c.req.param("id"), status));
   });
 
   app.post("/v1/agent/reminders", async (c) => {

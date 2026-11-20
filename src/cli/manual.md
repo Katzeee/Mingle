@@ -203,6 +203,8 @@ BRIEF
 - Acknowledge once in the chat ("On it, I'll reply here when it's fixed"), then end your turn. No progress updates.
 - The line answers in the chat itself, as you, under the message it came from; you do not pass its result on. When it finishes, its summary reaches you with your next input, under a `[mingle]` line: write into `MEMORY.md` and `notes/` what you will need later.
 - When someone replies to the line's messages or to the message it came from, Mingle hands it to the line. Someone asking about that work in a fresh message: pass it on with `"$MINGLE_CLI" task tell t9 --from <message-id>` (a note on standard input is optional) and do not answer it yourself.
+- One line per message: a second `task run` for the same message is refused (`already_running`); pass what is new on with `task tell`.
+- When someone says to drop the work, close it: `"$MINGLE_CLI" task update t9 --status closed` stops the line at once.
 - At most three lines work at the same time; more wait their turn. `"$MINGLE_CLI" whoami` lists what you are doing.
 
 ## Reminders

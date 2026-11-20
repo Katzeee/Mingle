@@ -1572,6 +1572,20 @@ export class Store {
     return row && toTask(row);
   }
 
+  /**
+   * A line still on the work for `messageId`: queued, running or waiting for more. Not one that was
+   * stopped, closed or stopped with an error (that one is started again with a new line).
+   */
+  lineFromMessage(agentId: string, messageId: string): Task | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE agent_id = ? AND from_message = ? AND line_state IN ('queued', 'running', 'idle')
+           AND status != 'closed' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(agentId, messageId) as Row | undefined;
+    return row && toTask(row);
+  }
+
   /** The latest line started in this chat (a thread that is one conversation). */
   lineOfChat(agentId: string, chatId: string): Task | undefined {
     const row = this.db
