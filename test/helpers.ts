@@ -16,6 +16,7 @@ import type {
   ReactionState,
   Trust,
 } from "../src/channels/channel.ts";
+import type { Engage } from "../src/core/hearing.ts";
 import type { InboundEvent } from "../src/core/inbound.ts";
 import { Mingle } from "../src/core/mingle.ts";
 import { resolvePaths } from "../src/core/paths.ts";
@@ -309,6 +310,8 @@ export async function rig(
     remoteTransport?: import("../src/core/remotes.ts").RemoteTransport;
     /** Pacing of a group that hears everything (`MingleOptions.hearing`). */
     hearing?: { quietMs: number; maxWaitMs: number; gapMs: number };
+    /** Engagement in a group that hears everything (`MingleOptions.engage`). */
+    engage?: Partial<Engage>;
     /** The agent's role; a hiking helper unless a test needs another. */
     role?: string;
   } = {},
@@ -361,6 +364,7 @@ export async function rig(
     retryDelaysMs: [10],
     reconnectDelaysMs: [30],
     ...(options.hearing ? { hearing: options.hearing } : {}),
+    ...(options.engage ? { engage: options.engage } : {}),
     // MINGLE_E2E_LOG=1 prints what Mingle logs, to see why a real harness did not answer.
     ...(process.env.MINGLE_E2E_LOG ? { log: (line: string) => console.log(`[mingle] ${line}`) } : {}),
     ...(options.log ? { log: options.log } : {}),

@@ -50,6 +50,18 @@ import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } f
 import { MingleError, notFound } from "./errors.ts";
 import { formatHeard, formatReminder, formatUnmuted, renderMessage } from "./format.ts";
 import { checkHandoff, handoffPrompt } from "./handoff.ts";
+import {
+  cueIn,
+  defaultTier,
+  type Engage,
+  HEAR_GAP_MS,
+  HEAR_MAX_WAIT_MS,
+  HEAR_QUIET_MS,
+  HearingBook,
+  type HearTier,
+  nameIn,
+  type Stretch,
+} from "./hearing.ts";
 import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
 import { Lines } from "./lines.ts";
@@ -125,6 +137,8 @@ export interface MingleOptions {
   readonly reconnectDelaysMs?: readonly number[];
   /** How a group that hears everything paces what it hands the agent; the `HEAR_*` defaults otherwise. */
   readonly hearing?: { readonly quietMs: number; readonly maxWaitMs: number; readonly gapMs: number };
+  /** Engagement in a group that hears everything (docs/spec.md 4.2); `ENGAGE` from hearing.ts otherwise. */
+  readonly engage?: Partial<Engage>;
   readonly log?: (line: string) => void;
 }
 
@@ -132,24 +146,19 @@ export interface MingleOptions {
 /** How long a group's member list stays fresh before an active group is read again. */
 const ROSTER_TTL_MS = 6 * 60 * 60_000;
 
-/**
- * A group that hears everything (docs/spec.md 4.2): what people say there reaches the agent a
- * stretch at a time, once the group has been quiet for `HEAR_QUIET_MS`, or `HEAR_MAX_WAIT_MS` into a
- * conversation that does not pause; never sooner than `HEAR_GAP_MS` after the last stretch from
- * that chat, and at most `HEAR_MESSAGES` messages a stretch (the rest is a `message read` away).
- */
-export const HEAR_QUIET_MS = 20_000;
-export const HEAR_MAX_WAIT_MS = 60_000;
-export const HEAR_GAP_MS = 120_000;
+export {
+  HEAR_BACKOFF_AFTER,
+  HEAR_BACKOFF_MAX_MS,
+  HEAR_GAP_MS,
+  HEAR_MAX_WAIT_MS,
+  HEAR_QUIET_MS,
+} from "./hearing.ts";
+
+/** Messages a heard stretch hands over at most; the rest is a `message read` away (docs/spec.md 4.2). */
 const HEAR_MESSAGES = 30;
-/**
- * Left to Mingle's own pace, a group whose stretches the agent keeps leaving unanswered is heard less
- * often: after `HEAR_BACKOFF_AFTER` in a row, each further one doubles the gap, up to
- * `HEAR_BACKOFF_MAX_MS`. The agent speaking there, someone addressing it or the owner speaking
- * brings the usual gap back. Only later, never lost: what was said waits for the next stretch.
- */
-export const HEAR_BACKOFF_AFTER = 3;
-export const HEAR_BACKOFF_MAX_MS = 30 * 60_000;
+/** How long a group's count of active people (its default tier) is kept before it is counted again. */
+const ACTIVE_TTL_MS = 60 * 60_000;
+const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** The gaps an agent may set for a group itself: no more often than Mingle's own pace, at most a week. */
 export const HEAR_EVERY_MIN_MS = HEAR_GAP_MS;
 export const HEAR_EVERY_MAX_MS = 7 * 24 * 60 * 60_000;
@@ -199,14 +208,17 @@ export class Mingle {
   /** Turns other bots started in each chat since a person last spoke there (docs/spec.md 4.2). */
   private readonly botHops = new BotHops();
   /**
-   * Chats that hear everything with a stretch waiting to reach the agent: from which message on,
-   * since when it waits, and the timer. In memory: after a restart the next message starts anew.
+   * Chats that hear everything with a stretch waiting to reach the agent: the timer that hands it
+   * over. What the stretch holds and when it is due is in `book`. In memory: after a restart the
+   * next message starts anew.
    */
-  private readonly hearing = new Map<string, { agentId: string; from: number; since: number; timer: NodeJS.Timeout }>();
-  /** When each chat last handed the agent a stretch it heard. */
-  private readonly heardAt = new Map<string, number>();
-  /** Stretches each chat handed the agent in a row without it speaking there since. In memory. */
-  private readonly unanswered = new Map<string, number>();
+  private readonly hearing = new Map<string, { agentId: string; timer: NodeJS.Timeout }>();
+  /** The pace of every group that hears everything (docs/spec.md 4.2). */
+  private readonly book: HearingBook;
+  /** Up to when the agent's own messages in each chat have been told to `book`. */
+  private readonly spokeSynced = new Map<string, number>();
+  /** Each group's count of people active in the last week, for its default tier, and when it was counted. */
+  private readonly active = new Map<string, { n: number; at: number }>();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -236,6 +248,7 @@ export class Mingle {
 
   constructor(options: MingleOptions) {
     this.options = options;
+    this.book = new HearingBook(() => this.pace(), options.engage);
     this.remotes = new Remotes(options.paths.home, options.remoteTransport);
     for (const dir of [
       options.paths.home,
@@ -1573,8 +1586,6 @@ export class Mingle {
         .catch((error) => this.log(`bot brake note failed: ${(error as Error).message}`));
     }
     if (decision === "background" && !bot && (parent ?? chat).listen) {
-      // The owner speaking there is a sign the group matters: heard at the usual pace again.
-      if (owner) this.unanswered.delete(chat.id);
       this.overhear(connection, chat, parent ?? chat, contact, owner, message);
     }
     if (!triggers || verdict === "drop") return; // Background, or someone the owner refused.
@@ -1619,8 +1630,10 @@ export class Mingle {
       );
       return;
     }
+    // Addressed: in a conversation with the agent, and heard at the usual pace again.
+    if ((parent ?? chat).kind === "group")
+      this.book.addressed(chat.id, (parent ?? chat).id, inbound.sender.id, Date.now());
     // Addressed where it chose to hear nothing: back to the usual pace, and it may choose again.
-    this.unanswered.delete(chat.id);
     const place = parent ?? chat;
     if (place.kind === "group" && place.listen && place.hearPace.kind === "muted") {
       this.store.setChatHearPace(place.id, { kind: "auto" });
@@ -1674,51 +1687,74 @@ export class Mingle {
     if (verdict !== "deliver") return;
     // The agent chose to hear nothing here until someone addresses it: kept as background only.
     if (group.hearPace.kind === "muted") return;
-    const pace = this.pace();
     const now = Date.now();
-    const waiting = this.hearing.get(chat.id);
-    if (waiting) clearTimeout(waiting.timer);
-    const since = waiting?.since ?? now;
-    const due = Math.max(
-      Math.min(now + pace.quietMs, since + pace.maxWaitMs),
-      (this.heardAt.get(chat.id) ?? 0) + this.gap(chat, group),
-    );
-    const timer = setTimeout(() => this.hear(chat.id), Math.max(0, due - now));
-    timer.unref?.();
-    this.hearing.set(chat.id, {
-      agentId: connection.agentId,
-      from: waiting?.from ?? message.createdAt,
-      since,
-      timer,
+    this.syncSpoken(chat.id, group.id);
+    const agent = this.store.agent(connection.agentId);
+    const plan = this.book.observe({
+      chatId: chat.id,
+      groupId: group.id,
+      senderId: message.senderId ?? contact.platformId,
+      at: message.createdAt,
+      now,
+      named: nameIn(message.body, [agent?.name, connection.botName]),
+      owner,
+      tier: this.tierOf(group, now),
+      ...(group.hearPace.kind === "every" ? { everyMs: group.hearPace.ms } : {}),
     });
+    const waiting = this.hearing.get(chat.id);
+    // A line that rides along leaves the stretch's time as it was.
+    if (waiting && !plan.reset) return;
+    this.hearAt(connection.agentId, chat.id, plan.dueAt, now);
+  }
+
+  /** (Re)set the timer that hands a chat's stretch to the agent. */
+  private hearAt(agentId: string, chatId: string, dueAt: number, now: number): void {
+    const waiting = this.hearing.get(chatId);
+    if (waiting) clearTimeout(waiting.timer);
+    const timer = setTimeout(() => this.hear(chatId), Math.max(0, dueAt - now));
+    timer.unref?.();
+    this.hearing.set(chatId, { agentId, timer });
+  }
+
+  /** How fast a group keeps up with a conversation: the owner's choice, or else by its size. */
+  private tierOf(group: Chat, now: number): HearTier {
+    if (group.hearTier) return group.hearTier;
+    let active = this.active.get(group.id);
+    if (!active || now - active.at > ACTIVE_TTL_MS) {
+      active = { n: this.store.activePeople(group.id, now - ACTIVE_WINDOW_MS), at: now };
+      this.active.set(group.id, active);
+    }
+    return defaultTier(active.n);
+  }
+
+  /**
+   * Tell `book` what the agent said in a chat since it was last told, and whom that answered
+   * (docs/spec.md 4.2): read from what was sent, so any way of sending counts.
+   */
+  private syncSpoken(chatId: string, groupId: string): void {
+    const after = this.spokeSynced.get(chatId);
+    if (after === undefined) {
+      // What it said before this chat was heard at all answers no stretch.
+      this.spokeSynced.set(chatId, this.store.lastSpokeAt(chatId) ?? 0);
+      return;
+    }
+    let last = after;
+    for (const said of this.store.spokenSince(chatId, after)) {
+      this.book.spoke(chatId, groupId, this.book.answered(chatId, said.quotedSender), said.createdAt);
+      last = said.createdAt;
+    }
+    this.spokeSynced.set(chatId, last);
   }
 
   private pace(): { quietMs: number; maxWaitMs: number; gapMs: number } {
     return this.options.hearing ?? { quietMs: HEAR_QUIET_MS, maxWaitMs: HEAR_MAX_WAIT_MS, gapMs: HEAR_GAP_MS };
   }
 
-  /** Stretches this chat handed over in a row that the agent has not spoken after. */
-  private unansweredIn(chatId: string): number {
-    const heard = this.heardAt.get(chatId);
-    const spoke = this.store.lastSpokeAt(chatId);
-    if (heard === undefined || (spoke !== undefined && spoke >= heard)) return 0;
-    return this.unanswered.get(chatId) ?? 0;
-  }
-
-  /** The least time between two stretches from this chat (a group or one of its threads). */
-  private gap(chat: Chat, group: Chat): number {
-    const base = this.pace().gapMs;
-    if (group.hearPace.kind === "every") return Math.max(base, group.hearPace.ms);
-    const unanswered = this.unansweredIn(chat.id);
-    if (unanswered < HEAR_BACKOFF_AFTER) return base;
-    return Math.min(base * 2 ** (unanswered - HEAR_BACKOFF_AFTER + 1), HEAR_BACKOFF_MAX_MS);
-  }
-
   /** A group's pace as set, and the gap in force while unanswered stretches slowed it. */
   hearingView(group: Chat): HearingView {
     if (group.hearPace.kind === "muted") return { pace: "muted" };
     if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms };
-    const gap = this.gap(group, group);
+    const gap = this.book.gap(group.id);
     return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap } : { pace: "auto" };
   }
 
@@ -1771,14 +1807,13 @@ export class Mingle {
         .filter((c) => c.parentId === groupId)
         .map((c) => c.id),
     ];
-    for (const id of ids) {
-      this.unanswered.delete(id);
-      if (drop) this.unhear(id);
-    }
+    this.book.forget(ids, drop);
+    if (drop) for (const id of ids) this.unhear(id);
   }
 
   /** Drop the stretch a chat was waiting to hand over. */
   private unhear(chatId: string): void {
+    this.book.drop(chatId);
     const waiting = this.hearing.get(chatId);
     if (!waiting) return;
     clearTimeout(waiting.timer);
@@ -1797,26 +1832,49 @@ export class Mingle {
     const group = chat?.parentId ? this.store.chat(chat.parentId) : chat;
     const runtime = this.runtimes.get(waiting.agentId);
     // Turned off, paused or gone meanwhile: nothing to hear.
-    if (!chat || !group?.listen || !runtime || this.paused.has(waiting.agentId)) return;
+    if (!chat || !group?.listen || !runtime || this.paused.has(waiting.agentId)) {
+      this.book.drop(chatId);
+      return;
+    }
+    const now = Date.now();
+    const handed = this.book.handOver(chatId, now, group.hearPace.kind === "every" ? group.hearPace.ms : undefined);
+    if (!handed) return;
+    // Fast, but the group's budget ran out meanwhile: it waits at the usual pace.
+    if ("dueAt" in handed) {
+      this.hearAt(waiting.agentId, chatId, handed.dueAt, now);
+      return;
+    }
+    const { stretch } = handed;
     const spoke = this.store.lastSpokeAt(chat.id);
-    const from = spoke === undefined ? waiting.from : Math.max(waiting.from, spoke + 1);
-    const messages = this.store.background(chat.id, from, HEAR_MESSAGES);
+    const from = spoke === undefined ? stretch.from : Math.max(stretch.from, spoke + 1);
+    // Those in a conversation with the agent are never the ones left out.
+    const messages = this.store.backgroundFor(chat.id, from, stretch.engaged, HEAR_MESSAGES);
     const omitted = messages.length < HEAR_MESSAGES ? 0 : this.store.backgroundCount(chat.id, from) - messages.length;
     // The agent spoke after all of it, or only bots are left: nothing new from a person.
     const person = messages.some(
       (m) => !(m.senderId && this.store.contactByPlatformId(chat.connectionId, m.senderId)?.isBot),
     );
-    if (!person) return;
-    this.unanswered.set(chat.id, this.unansweredIn(chat.id) + 1);
-    const heardAt = Date.now();
-    this.heardAt.set(chat.id, heardAt);
+    if (!person) {
+      this.book.cancel(stretch, now);
+      return;
+    }
+    const cues = messages.filter(
+      (m) =>
+        !(m.senderId && stretch.engaged.has(m.senderId)) &&
+        cueIn(m.body, {
+          at: m.createdAt,
+          ...(spoke !== undefined ? { agentSpokeAt: spoke } : {}),
+          quotes: m.replyTo !== null,
+        }),
+    ).length;
     runtime.enqueueText(
       formatHeard(this.store, chat, messages, omitted),
-      this.timeStretch(waiting.agentId, chat.id, {
+      this.timeStretch(waiting.agentId, chat.id, stretch, {
         count: messages.length + omitted,
-        first: omitted > 0 ? from : (messages[0]?.createdAt ?? heardAt),
-        last: messages.at(-1)?.createdAt ?? heardAt,
-        heard: heardAt,
+        first: omitted > 0 ? from : (messages[0]?.createdAt ?? now),
+        last: messages.reduce((at, m) => Math.max(at, m.createdAt), 0) || now,
+        heard: now,
+        cues,
       }),
     );
   }
@@ -1829,7 +1887,8 @@ export class Mingle {
   private timeStretch(
     agentId: string,
     chatId: string,
-    s: { count: number; first: number; last: number; heard: number },
+    stretch: Stretch,
+    s: { count: number; first: number; last: number; heard: number; cues: number },
   ): TextTrack {
     let turn: number | undefined;
     const secs = (at: number) => `+${Math.round((at - s.first) / 1000)}s`;
@@ -1838,9 +1897,13 @@ export class Mingle {
         turn ??= at;
       },
       ended: () => {
+        this.syncSpoken(chatId, stretch.groupId);
         const spoke = this.store.firstSpokeAt(chatId, s.heard);
+        const lastSpoke = spoke === undefined ? undefined : this.store.lastSpokeAt(chatId);
+        this.book.settle(stretch, spoke !== undefined, Date.now());
+        const people = stretch.heard.size;
         this.log(
-          `${agentId}: heard ${chatId}: ${s.count} message${s.count === 1 ? "" : "s"}, first +0s, last ${secs(s.last)}, handed over ${secs(s.heard)}, turn ${turn === undefined ? "?" : secs(turn)}, ${spoke === undefined ? "did not speak" : `spoke ${secs(spoke)}`}`,
+          `${agentId}: heard ${chatId} ${stretch.lane}: ${s.count} message${s.count === 1 ? "" : "s"} from ${people} ${people === 1 ? "person" : "people"} (${stretch.engaged.size} engaged), first +0s, last ${secs(s.last)}, handed over ${secs(s.heard)}, turn ${turn === undefined ? "?" : secs(turn)}, ${spoke === undefined ? "did not speak" : `spoke ${secs(spoke)}, last spoke ${secs(lastSpoke ?? spoke)}`}, cues ${s.cues}`,
         );
       },
     };

@@ -13,6 +13,11 @@ describe("a group that hears everything", () => {
   });
 
   const hearing = { quietMs: 150, maxWaitMs: 2_000, gapMs: 0 };
+  /** A person's turn ends within a quarter second here, so the fast lane is fast in test time too. */
+  const engage = {
+    turnEnd: { k: 2, minMs: 100, maxMs: 300, defaultMs: 200, samples: 20, gapCapMs: 30_000 },
+    fastMaxWaitMs: 1_000,
+  };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let env: Record<string, string> = {};
 
@@ -38,7 +43,7 @@ describe("a group that hears everything", () => {
         }
         for (const id of messageIds(t.input)) await runCli(env, ["message", "reply", id], "ok");
       },
-      { hearing: options.hearing ?? hearing, ...(options.log ? { log: options.log } : {}) },
+      { hearing: options.hearing ?? hearing, engage, ...(options.log ? { log: options.log } : {}) },
     );
     return current;
   }
@@ -149,8 +154,57 @@ describe("a group that hears everything", () => {
     r.channel.receive({ text: "which way to the top?", addressedToBot: false });
     await until(() => lines.some((l) => l.includes(": heard c")));
     expect(lines.find((l) => l.includes(": heard c"))).toMatch(
-      /: heard c\w+: 1 message, first \+0s, last \+0s, handed over \+\d+s, turn \+\d+s, spoke \+\d+s$/,
+      /: heard c\w+ slow: 1 message from 1 person \(0 engaged\), first \+0s, last \+0s, handed over \+\d+s, turn \+\d+s, spoke \+\d+s, last spoke \+\d+s, cues 0$/,
     );
+  });
+
+  it("keeps up with someone it is in a conversation with, without the gap between stretches", async () => {
+    const lines: string[] = [];
+    // A gap of a minute: only the fast lane can hand the second stretch over within the test.
+    const r = await setup({
+      speak: true,
+      hearing: { quietMs: 150, maxWaitMs: 2_000, gapMs: 60_000 },
+      log: (line) => lines.push(line),
+    });
+    r.channel.receive({ text: "which way to the top?", addressedToBot: false });
+    await until(() => r.channel.sent.length === 1);
+    await until(() => lines.some((l) => / heard c\w+ slow: /.test(l)));
+    // The agent answered them: what they say next is meant for it, and reaches it at their pace.
+    r.channel.receive({ text: "and how long does it take?", addressedToBot: false });
+    await until(() => r.turns.length === 2, 5_000);
+    expect(r.turns[1]?.input).toContain("and how long does it take?");
+    await until(() => lines.some((l) => / heard c\w+ fast: /.test(l)));
+  });
+
+  it("lets others ride along while someone is in a conversation, and goes fast for its name", async () => {
+    const r = await setup({ speak: true, hearing: { quietMs: 150, maxWaitMs: 2_000, gapMs: 60_000 } });
+    const alex = r.mingle.store.agent(r.agentId)?.name as string;
+    r.channel.receive({
+      text: `${alex}, which way to the top?`,
+      addressedToBot: false,
+      sender: { id: "u9", name: "Wang Fang", isBot: false },
+    });
+    // Called by name with no gap behind it: fast from the first line.
+    await until(() => r.turns.length === 1, 5_000);
+    await until(() => r.channel.sent.length === 1);
+    r.channel.receive({
+      text: "lunch anyone?",
+      addressedToBot: false,
+      sender: { id: "u2", name: "Li Si", isBot: false },
+    });
+    await sleep(600);
+    // Chatter does not get a turn of its own while Wang Fang is in a conversation with the agent.
+    expect(r.turns).toHaveLength(1);
+    r.channel.receive({
+      text: "is it steep?",
+      addressedToBot: false,
+      sender: { id: "u9", name: "Wang Fang", isBot: false },
+    });
+    await until(() => r.turns.length === 2, 5_000);
+    // It rides along with her next stretch, hers first.
+    const input = r.turns[1]?.input ?? "";
+    expect(input).toContain("is it steep?");
+    expect(input).toContain("lunch anyone?");
   });
 
   it("does not start a stretch for another bot", async () => {
