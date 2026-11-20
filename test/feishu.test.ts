@@ -577,6 +577,7 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: false },
         { id: "bot_messages", granted: false },
+        { id: "doc_comments", granted: false },
         { id: "member_profiles", granted: false, optional: true },
       ]);
       granted = new Map([[GROUP_MESSAGES_SCOPE, true]]);
@@ -586,6 +587,7 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: true },
         { id: "bot_messages", granted: false },
+        { id: "doc_comments", granted: false },
         { id: "member_profiles", granted: false, optional: true },
       ]);
       // Member profiles stay off until asked for, and read nothing while off.
@@ -599,11 +601,12 @@ describe("feishu group messages permission", () => {
       expect(await connection.permissions?.()).toEqual([
         { id: "group_messages", granted: true },
         { id: "bot_messages", granted: true },
+        { id: "doc_comments", granted: false },
         { id: "member_profiles", granted: false, optional: true },
       ]);
       clock.at += 20_000;
       granted = new Map([...granted, ...PROFILE_SCOPES.map((p) => [p, true] as const)]);
-      expect((await connection.permissions?.())?.[2]).toEqual({ id: "member_profiles", granted: true, optional: true });
+      expect((await connection.permissions?.())?.[3]).toEqual({ id: "member_profiles", granted: true, optional: true });
       // A department outside the app's contact range is left out.
       expect(await connection.profile?.("ou_2")).toBe("产品部 · 产品经理");
       await connection.close();

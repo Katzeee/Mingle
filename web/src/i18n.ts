@@ -588,6 +588,8 @@ const en = {
   "permission.name.bot_messages": "Messages from other bots",
   "permission.about.bot_messages":
     "Everything other bots and agents say in its groups, not only the messages that @ it.",
+  "permission.name.doc_comments": "Document comments",
+  "permission.about.doc_comments": "Answers when someone @-mentions it in a document's comments.",
   "permission.name.member_profiles": "Member profiles",
   "permission.about.member_profiles": "Reads people's department and title, so {name} knows who is who.",
   "permission.on": "On",
@@ -1361,6 +1363,8 @@ const zh: Record<MessageKey, string> = {
   "permission.about.group_messages": "看得到每个人在群里发的消息，不只是 @ 它的。",
   "permission.name.bot_messages": "其他机器人发的消息",
   "permission.about.bot_messages": "看得到其他机器人和 Agent 在群里发的消息，不只是 @ 它的。",
+  "permission.name.doc_comments": "文档评论",
+  "permission.about.doc_comments": "在文档评论里被 @ 时，在评论里回复。",
   "permission.name.member_profiles": "成员资料",
   "permission.about.member_profiles": "读取成员的部门和职务，让{name}认得谁是谁。",
   "permission.on": "已开启",

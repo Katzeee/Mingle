@@ -93,7 +93,7 @@ export interface ConnectionView {
  * every message in its groups, not only the ones that @ it. `bot_messages`: what other bots send in
  * its groups (Feishu only). `grant.steps` picks the instructions.
  */
-export type PermissionId = "group_messages" | "bot_messages" | "member_profiles";
+export type PermissionId = "group_messages" | "bot_messages" | "doc_comments" | "member_profiles";
 
 export interface BotPermission {
   id: PermissionId;

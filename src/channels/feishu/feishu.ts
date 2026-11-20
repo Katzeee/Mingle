@@ -22,6 +22,16 @@ import type {
 } from "../channel.ts";
 import { withTextSent } from "../channel.ts";
 import { type Mention, renderMentions } from "../mention.ts";
+import {
+  type CommentThread,
+  commentInbound,
+  DOC_COMMENT_EVENT,
+  DOC_COMMENT_SCOPES,
+  DOC_META_SCOPE,
+  parseThread,
+  ShownReplies,
+  sendReply,
+} from "./comments.ts";
 
 /**
  * Feishu (and Lark) through the official SDK: QR app registration, then a
@@ -63,6 +73,9 @@ export const FEISHU_SCOPES = [
   "im:chat:readonly",
   // Display names of people who message the bot; Feishu events carry only their open_id.
   "contact:user.base:readonly",
+  // A document is a group too: @ the bot in a comment and it answers in the thread (docs/spec.md 6.8).
+  ...DOC_COMMENT_SCOPES,
+  DOC_META_SCOPE,
 ];
 
 /**
@@ -273,6 +286,9 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
       /** Reaction IDs of the processing emoji, so it can be swapped for DONE. */
       const reactions = new Map<string, string>();
       const userNames = new Map<string, string | undefined>();
+      /** Replies of each document comment thread the agent has been shown (docs/spec.md 6.8). */
+      const shown = new ShownReplies();
+      const docMetas = new Map<string, Promise<{ title?: string; url?: string }>>();
 
       const userName = async (openId: string): Promise<string | undefined> => {
         if (!userNames.has(openId) && channel) {
@@ -300,6 +316,30 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           chatNames.set(chatId, name);
         }
         return chatNames.get(chatId);
+      };
+
+      /** A document's title and link, read once per run. Without the metadata scope, neither. */
+      const docMeta = (thread: CommentThread): Promise<{ title?: string; url?: string }> => {
+        let meta = docMetas.get(thread.fileToken);
+        if (!meta) {
+          const client = channel?.rawClient;
+          meta = client
+            ? client.drive.v1.meta
+                .batchQuery({
+                  data: {
+                    request_docs: [{ doc_token: thread.fileToken, doc_type: thread.fileType as "docx" }],
+                    with_url: true,
+                  },
+                })
+                .then((r) => {
+                  const found = r.data?.metas?.[0];
+                  return { ...(found?.title ? { title: found.title } : {}), ...(found?.url ? { url: found.url } : {}) };
+                })
+                .catch(() => ({}))
+            : Promise.resolve({});
+          docMetas.set(thread.fileToken, meta);
+        }
+        return meta;
       };
 
       /** The group's latest messages, kept as background. Needs every-group-message access; without it, nothing. */
@@ -372,6 +412,18 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           // Like a person who joins: scroll up and see what was said before (docs/spec.md 4.2).
           await readEarlier(instance, event.chatId, name);
         });
+        // An @ in a document's comments, or a new reply in a thread the bot is part of (docs/spec.md 6.8).
+        instance.on("comment", async (event) => {
+          const inbound = await commentInbound({
+            event,
+            bot,
+            client: instance.rawClient,
+            shown,
+            name: userName,
+            meta: docMeta,
+          }).catch(() => undefined);
+          if (inbound) events.onMessage(inbound);
+        });
         instance.on("reconnecting", () => events.onState({ kind: "reconnecting", attempt: 1 }));
         instance.on("reconnected", () => events.onState({ kind: "connected" }));
         await instance.connect();
@@ -405,6 +457,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           return [
             { id: "group_messages", granted: granted.get(GROUP_MESSAGES_SCOPE) === true },
             { id: "bot_messages", granted: BOT_MESSAGES_SCOPES.every((s) => granted.get(s) === true) },
+            { id: "doc_comments", granted: DOC_COMMENT_SCOPES.every((s) => granted.get(s) === true) },
             {
               id: "member_profiles",
               granted: PROFILE_SCOPES.every((scope) => granted.get(scope) === true),
@@ -459,6 +512,12 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
 
         async send(message: OutboundMessage): Promise<SendResult> {
           if (!channel) return { kind: "failed", code: "forbidden", retryable: false };
+          const thread = parseThread(message.chat.platformId);
+          if (thread) {
+            const result = await sendReply(channel.rawClient, thread, message);
+            if (result.kind === "sent") shown.add(message.chat.platformId, result.platformId);
+            return result;
+          }
           const opts = message.replyTo ? { replyTo: message.replyTo } : {};
           let textId = "";
           try {
@@ -493,8 +552,9 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           }
         },
 
-        async react(_chat: ChatRef, platformMessageId: string, state: ReactionState) {
-          if (!channel) return;
+        async react(chat: ChatRef, platformMessageId: string, state: ReactionState) {
+          // A comment reply has no reaction a bot can add: the answer itself shows it was heard.
+          if (!channel || parseThread(chat.platformId)) return;
           // Feishu's own emoji: OnIt while working, DONE once answered, ERROR on failure.
           const previous = reactions.get(platformMessageId);
           if (previous) {
@@ -507,8 +567,10 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
           if (id && state === "processing") reactions.set(platformMessageId, id);
         },
 
-        async startLive(_chat: ChatRef, options: LiveOptions): Promise<LiveReply> {
+        async startLive(chat: ChatRef, options: LiveOptions): Promise<LiveReply> {
           if (!channel) throw new Error("the Feishu connection is not ready");
+          // A comment thread takes no cards: the answer goes out as a reply of its own.
+          if (parseThread(chat.platformId)) throw new Error("a document comment cannot be a live reply");
           const card = await openCard(channel.rawClient, options.replyTo, options.initial);
           const mention = options.mention ? `<at id=${options.mention}></at> ` : "";
           return {
@@ -543,7 +605,7 @@ export function feishuChannel(options: FeishuOptions = {}): Channel {
         },
 
         async listMembers(chat: ChatRef) {
-          if (!channel) return [];
+          if (!channel || parseThread(chat.platformId)) return [];
           const members: { id: string; name: string; isBot: boolean }[] = [];
           try {
             let pageToken: string | undefined;
@@ -892,7 +954,7 @@ function officialApi(): FeishuApi {
             }),
         addons: {
           scopes: { tenant: [...scopes] },
-          events: { items: { tenant: ["im.message.receive_v1", "im.chat.member.bot.added_v1"] } },
+          events: { items: { tenant: ["im.message.receive_v1", "im.chat.member.bot.added_v1", DOC_COMMENT_EVENT] } },
         },
         onQRCodeReady,
       });

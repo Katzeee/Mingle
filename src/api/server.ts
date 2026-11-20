@@ -1304,7 +1304,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       /** Optional permissions to turn on while re-authorizing that bot. */
       adding?: PermissionId[];
     }>();
-    const known: readonly PermissionId[] = ["group_messages", "bot_messages", "member_profiles"];
+    const known: readonly PermissionId[] = ["group_messages", "bot_messages", "doc_comments", "member_profiles"];
     const session = mingle.startOnboarding(
       c.req.param("id"),
       platform,
