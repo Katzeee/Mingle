@@ -1,6 +1,6 @@
 # RFC 0001 实现方案：群聊旁听 V2
 
-- 状态：待 CR
+- 状态：已 CR（DIYGod，改动见第 12 节），实现中
 - 依据：[RFC 0001](0001-group-hearing-v2.md)（已接受）、[原型](0001-prototype.html)、`docs/spec.md` 4.2
 - 基线：`main` @ `9d92991`（#171）
 
@@ -48,6 +48,7 @@ export const TURN_END = { k: 2, minMs: 3_000, maxMs: 12_000, defaultMs: 8_000, s
 export const FAST_MAX_WAIT_MS = 15_000;
 export const RIDE_HOLD_MS = 240_000;          // 有人在聊时，闲聊最多压 4 分钟
 export const STEER_QUIET_MS = 2_000;          // 补充插进正在跑的一轮前，最多等 2 秒
+export const STEER_LATE_MS = 10_000;          // 插入后这一轮这么快就结束，当作没读到，补交一次
 export const PERSON_BUCKET = { cap: 3, refillMs: 600_000 };
 export const TIERS = {
   save:     { cap: 2, refillMs: 1_200_000 },
@@ -60,7 +61,7 @@ export const SMALL_GROUP = 5;                 // 活跃人数不超过这个数�
 
 ### 2.2 状态
 
-一个 `HearingBook` 管一个 Agent 的所有群。key 是聊天 ID：线程有自己的计时，令牌和档位跟着所属的群。
+一个 `HearingBook` 管一个 Agent 的所有群。计时按聊天 ID（线程有自己的计时）；人（E、被晾次数、每人的桶、打字节奏）和全群的桶按群，所以一个人换到线程里刷，花的还是同一个桶。
 
 ```ts
 interface Person {
@@ -70,12 +71,14 @@ interface Person {
   gaps: number[]; lastAt?: number;   // 打字节奏：最近 20 个 < 30 秒的间隔
 }
 interface ChatHearing {
-  people: Map<string, Person>;       // key：发言人在平台上的 ID（senderId）
   pending?: { from: number; since: number; fastSince?: number; engaged: Set<string> };
   heardAt?: number;                  // 上一段交出的时间（原 Mingle.heardAt）
   unanswered: number;                // 慢通道的连续未答段数（原 Mingle.unanswered），只给退避用
 }
-interface GroupBucket { tokens: number; at: number }
+interface GroupHearing {
+  people: Map<string, Person>;       // key：发言人在平台上的 ID（senderId）。按群算：线程里的话也记在群上
+  tokens: number; at: number;        // 全群的桶
+}
 ```
 
 `Mingle` 里原来的 `hearing` / `heardAt` / `unanswered` 三个 Map 收进这里。`Mingle.hearing` 只留定时器句柄：`Map<chatId, NodeJS.Timeout>`。
@@ -157,7 +160,7 @@ spokenSince(chatId: string, at: number): { createdAt: number; replyToSender: str
 ```
 
 - 带引用的：被引用消息的发送者算"回了"。
-- 不带引用、直接发到群里的：算回了这一轮交给它的这个聊天里所有**在聊**的人。没人在聊时，算回了这段里最后发言的人。
+- 不带引用、直接发到群里的：算回了**这一轮交给它的话里**、这个聊天的在聊者。没有在聊者时，算回了这些话里最后发言的人。这一轮没交过这个聊天的话（比如它主动开口）时，不算回了谁。不能扩大到"这个群里所有在聊的人"：已经不说话的 B 会因为 Agent 回了 A 而一直被拉回 E = 1，B 的闲聊就一直走快速通道。
 - 这样不碰 outbox，也覆盖 Agent 不走 `message reply`、直接 `message send` 的情况。
 
 ### 2.7 `settle()`
@@ -166,10 +169,13 @@ spokenSince(chatId: string, at: number): { createdAt: number; replyToSender: str
 |---|---|
 | Agent 开口了 | 被回的人（2.6）：E = 1，被晾次数清零；慢通道 `unanswered = 0` |
 | Agent 没开口 | 这段里每个人：E ×0.6 |
-| 没开口，并且走的是 fast 或 steer | 全群令牌 −1；`engaged` 里每个人：令牌 −1，被晾次数 +1 |
+| 没开口，并且走的是 fast（含 steer 的补交） | 预留的令牌不退；`engaged` 里每个人被晾次数 +1 |
+| 没开口，并且是 steer | 不扣令牌；`engaged` 里每个人被晾次数 +1 |
 | 没开口，并且走的是 slow 或 ride | 慢通道 `unanswered + 1`，退避和 V1 一样；不扣令牌 |
 
-令牌在交出时并不预扣，只在确认白花后才扣。所以上限公式成立：白花一段最多扣 1 个全群令牌。
+**令牌在交出时预留，开口了再退回。** 走 fast 的一段在 `handOver()` 时就扣 1 个全群令牌和 `engaged` 里每人 1 个；`settle()` 看到 Agent 开口了，全部退回。只在确认白花后才扣的话，同一个群的群聊和线程可能同时有几段在路上，每段交出时都看到"还有令牌"，桶会被透支，上限公式就不成立了。预留之后，同一时刻在路上的快速段也受桶约束，公式严格成立。
+
+steer 不扣令牌：它插进已经在跑的一轮，不多花一轮。它的补交（4.2）才多花一轮，按 fast 处理，同样预留。
 
 ## 3. `mingle.ts` 的改动
 
@@ -205,9 +211,9 @@ spokenSince(chatId: string, at: number): { createdAt: number; replyToSender: str
 
 插在一轮的末尾，可能被接收了但没被处理：runtime 里提醒类 text 不插进去，就是这个原因。所以对 steer 再加一道保险：
 
-- 这一轮结束时（`track.ended`），如果 Agent 在这个聊天里没有比这次插入更晚的发言，就把这个聊天按 0 安静窗口**重新排一次**。`hear()` 本来就从它上次开口之后取话，所以不会重复。
+- harness 只告诉我们插进去了（`steered`），不告诉我们读没读。所以只在**插得太晚**时补交：这一轮在插入后 `STEER_LATE_MS`（10 秒）内就结束了，并且 Agent 在这个聊天里没有比这次插入更晚的发言，就把这个聊天按 0 安静窗口**重新排一次**。插入后这一轮又跑了 10 秒以上，就当它读到了、选择不说话，按 steer 的 `settle()` 处理。`hear()` 本来就从它上次开口之后取话，所以不会重复。
 - 只补一次：同一段补过一次之后，降级为 slow。
-- 补的这一次不扣令牌。
+- 补的这一次多花一轮，按 fast 预留令牌（2.7）；没有令牌时降级为 slow。不能免费：否则"插在末尾 → 补交"就成了绕开桶的口子。
 
 ### 4.3 不做
 
@@ -335,10 +341,10 @@ alex: heard c12 fast: 3 messages from 1 person (2 engaged), first +0s, last +9s,
 |---|---|
 | `test/hearing.test.ts`（新，纯逻辑、假时钟） | E 的衰减和打折；说完时间：μ+2σ、上下限、样本不足时的默认值；fast / ride / slow / steer 选路；`--every` 禁用快速通道；两层桶的扣减和补充；**上限性质**：随机生成 1 万条事件，断言任意窗口内白花的快速段 ≤ `C + T/r`；被晾减半让玩梗者两次后失效；`live` 只算有令牌、被晾少于 2 次的人；`nameIn` 的中英文和词边界 |
 | `test/listen.test.ts`（已有，扩充） | 在聊的人 15 秒内交出，不受 2 分钟间隔约束；闲聊随下一段一起交，不单独开一轮；30 条先留在聊的人；`Heard` 在聊时的文案和"连发 N 条"；owner 设档位、恢复默认；别名命中后走快速通道；关掉"听所有"时清掉内存状态，但保留别名；`chat alias` 和 `chat info` 的输出、新接口和错误码（沿用这个文件里现有 `chat hear` 测试的写法） |
-| `test/listen.test.ts`：插入 | 同一个人补充时插进去；别人的话不插；插在末尾没被处理时补交一次，第二次降级为 slow |
+| `test/listen-steer.test.ts`（新） | 同一个人补充时插进去；别人的话不插；插在末尾没被处理时补交一次（预留令牌），第二次降级为 slow；插入后一轮又跑了 10 秒以上的不补交。单独一个文件：要用脚本化运行时卡住一轮，和 `listen.test.ts` 的 rig 写法不同 |
 | `test/flow.test.ts`（已有，扩充） | runtime：带 `steer` 的 text 在运行中插进去，不带的照旧等下一轮；`handling()` 在 deliver 时设上，在 turn 结束时清空，queued 的不算 |
 | `test/schema.test.ts` | 迁移 031；`activePeople` 排除机器人 |
-| 模拟器对照 | `docs/rfc/0001-sim/` 加 `sim_impl.py`：把第 2 节的规则用 Python 再写一遍（V3f + steer），和 `sim4.py` 的 V3f 结果对齐，确认实现没偏离模拟 |
+| 模拟器对照 | **不做** `sim_impl.py`：用 Python 再写一遍规则，测的是两份手写代码是否一致，不是实现是否对。改为在 `test/hearing.test.ts` 里用同样的场景参数（1 对 1、30 人每分钟 6 条、玩梗刷名字）生成事件，断言 p90 和白花的量级（例如 30 人群 p90 < 90 秒、每小时白花 ≤ 档位上限），给实现一个和模拟可比的回归基线 |
 
 `pnpm check` 全过，控制台改动跑 `pnpm build && pnpm ui:review`，逐张看截图。
 
@@ -362,3 +368,13 @@ A、B、C 都合并后一起发一个版本：A 单独发也安全，但发版�
 | 活跃人数的查询拖慢收消息 | 只在 `observe()` 时读缓存，过期了在后台刷新。需要的话给 `messages(chat_id, created_at)` 加索引；检查现有索引是否已经覆盖 |
 | 别名被滥用（Agent 给自己加一堆常见词） | 限 8 个、至少 2 个字符；被晾减半照样生效；owner 在控制台能看到并删掉 |
 | 重启丢掉在聊状态 | 和 V1 一样，只是第一段走慢通道。可以接受 |
+
+## 12. CR 记录（DIYGod）
+
+接口划分（第 2 节）、`mingle.ts` 只接线、分 4 个 PR 都同意。改了五处：
+
+1. **令牌在交出时预留，开口了退回**（2.7）。原来"白花后才扣"在群和线程同时有几段在路上时会透支，上限公式不成立。
+2. **人和全群的桶按群记，计时按聊天记**（2.2）。原来每人的桶记在聊天上，换到线程里就是一个新桶。
+3. **不带引用的发言只算回了这一轮交给它的话里的在聊者**（2.6）。原来算"这个聊天所有在聊的人"，已经不说话的人会被一直拉回 E = 1。
+4. **steer 本身不扣令牌，补交按 fast 预留**；只在插入后 10 秒内这一轮就结束时补交（4.2、2.7）。原来 steer 白花也扣令牌，但它没多花一轮；补交反而免费，成了绕开桶的口子。harness 只报 `steered`、不报"读到了"，所以用"插得太晚"近似"没读到"。
+5. **测试**（第 9 节）：插入的集成测试单独成 `test/listen-steer.test.ts`；不做 `sim_impl.py`，改为在 `hearing.test.ts` 里用模拟器的场景参数做量级回归。
