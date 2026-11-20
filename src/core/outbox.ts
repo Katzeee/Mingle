@@ -42,17 +42,21 @@ export class Outbox {
   private readonly retryDelaysMs: readonly number[];
 
   private readonly replies: LiveReplies | undefined;
+  /** Whether the harness only queued a message behind the agent's running turn (unseen so far). */
+  private readonly queued: (agentId: string, messageId: string) => boolean;
 
   constructor(
     store: Store,
     live: (connectionId: string) => ChannelConnection | undefined,
     retryDelaysMs: readonly number[] = [1000, 3000, 9000],
     replies?: LiveReplies,
+    queued: (agentId: string, messageId: string) => boolean = () => false,
   ) {
     this.store = store;
     this.live = live;
     this.retryDelaysMs = retryDelaysMs;
     this.replies = replies;
+    this.queued = queued;
   }
 
   async send(agentId: string, request: SendRequest): Promise<SendReport> {
@@ -165,14 +169,14 @@ export class Outbox {
       if (result.kind === "uncertain") {
         store.setOutboundResult(record.id, "uncertain", null);
         sent.push(store.message(record.id) as Message);
-        if (!request.notice) this.markAnswered(chat.id, quoted);
+        if (!request.notice) this.markAnswered(agentId, chat.id, quoted);
         return report("uncertain");
       }
       const why = result.detail ? ` (${connection.platform}: ${result.detail})` : "";
       if (result.textSent) {
         // The person has the text; only the files are missing. Say so, so nobody sends it twice.
         store.setOutboundResult(record.id, "sent", result.textSent.platformId);
-        if (!request.notice) this.markAnswered(chat.id, quoted);
+        if (!request.notice) this.markAnswered(agentId, chat.id, quoted);
         throw new MingleError(
           `send_${result.code}`,
           `the text was delivered but the file was not${why}: ${failureNext(result.code, "file")}. ` +
@@ -183,7 +187,7 @@ export class Outbox {
       store.setOutboundResult(record.id, "failed", null);
       throw new MingleError(`send_${result.code}`, `${failureNext(result.code, "message")}${why}`, 502);
     }
-    if (!request.notice) this.markAnswered(chat.id, quoted);
+    if (!request.notice) this.markAnswered(agentId, chat.id, quoted);
     return report("sent");
   }
 
@@ -205,14 +209,18 @@ export class Outbox {
     return result;
   }
 
-  /** A reply answers the quoted message; a plain send answers everything pending in that chat. */
-  private markAnswered(chatId: string, quoted: Message | undefined): void {
+  /**
+   * A reply answers the quoted message; a plain send answers what the agent has seen in that chat.
+   * Not what the harness queued behind the running turn: the model has not read it yet, and once
+   * marked replied a session restart could no longer hand it back, so it would be lost.
+   */
+  private markAnswered(agentId: string, chatId: string, quoted: Message | undefined): void {
     const answered = quoted
       ? this.store.moveInbound([quoted.id], "reply")
       : this.store.moveInbound(
           this.store
             .chatMessages(chatId, 200)
-            .filter((m) => m.direction === "in")
+            .filter((m) => m.direction === "in" && !this.queued(agentId, m.id))
             .map((m) => m.id),
           "send",
         );

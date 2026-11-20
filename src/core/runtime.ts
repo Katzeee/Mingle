@@ -340,6 +340,14 @@ export class AgentRuntime {
   }
 
   /**
+   * Whether the harness only queued this message behind the running turn: the model has not
+   * seen it yet, so a plain send in its chat must not count as answering it.
+   */
+  isQueued(messageId: string): boolean {
+    return this.queued.has(messageId);
+  }
+
+  /**
    * Whether the turn running now is handling what `senderId` said in `chatId`: a message of theirs
    * there, or what was heard from them there, went into it. Not what the harness queued behind it.
    */
