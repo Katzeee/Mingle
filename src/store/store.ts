@@ -120,6 +120,15 @@ export function contactName(
 /** Contacts with their person's name. */
 const CONTACTS = "SELECT k.*, p.name AS person_name FROM contacts k LEFT JOIN people p ON p.id = k.person_id";
 
+/**
+ * How often a group that hears everything reaches the agent: Mingle's own pace (`auto`), at most once
+ * per `ms` (`every`), or not at all until someone addresses the agent there (`muted`).
+ */
+export type HearPace =
+  | { readonly kind: "auto" }
+  | { readonly kind: "every"; readonly ms: number }
+  | { readonly kind: "muted" };
+
 export interface Chat {
   id: string;
   connectionId: string;
@@ -132,6 +141,8 @@ export interface Chat {
   access: Access;
   /** Groups only: the owner set it to hear every message, not only those addressed to the agent (docs/spec.md 4.2). */
   listen: boolean;
+  /** Groups only: how often what it hears reaches the agent, as the agent set it (docs/spec.md 4.2). */
+  hearPace: HearPace;
   /** Direct chats only: the other person's ID on the platform, when known. */
   peerId: string | null;
 }
@@ -713,6 +724,12 @@ export class Store {
 
   setChatListen(id: string, listen: boolean): void {
     this.db.prepare("UPDATE chats SET listen = ?, updated_at = ? WHERE id = ?").run(listen ? 1 : 0, this.now(), id);
+  }
+
+  setChatHearPace(id: string, pace: HearPace): void {
+    this.db
+      .prepare("UPDATE chats SET hear_pace = ?, hear_every_ms = ?, updated_at = ? WHERE id = ?")
+      .run(pace.kind === "auto" ? null : pace.kind, pace.kind === "every" ? pace.ms : null, this.now(), id);
   }
 
   /**
@@ -1829,6 +1846,12 @@ function toPerson(r: Row): Person {
   };
 }
 
+function hearPace(r: Row): HearPace {
+  if (r.hear_pace === "muted") return { kind: "muted" };
+  if (r.hear_pace === "every" && Number(r.hear_every_ms) > 0) return { kind: "every", ms: Number(r.hear_every_ms) };
+  return { kind: "auto" };
+}
+
 function toChat(r: Row): Chat {
   return {
     id: String(r.id),
@@ -1839,6 +1862,7 @@ function toChat(r: Row): Chat {
     parentId: str(r.parent_id),
     access: access(r.access),
     listen: Number(r.listen ?? 0) === 1,
+    hearPace: hearPace(r),
     peerId: str(r.peer_id),
   };
 }

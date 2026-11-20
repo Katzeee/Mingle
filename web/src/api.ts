@@ -241,6 +241,13 @@ export interface Activity {
   line: { id: string; title: string; state: LineState; started: boolean } | null;
 }
 
+/** How often a group that hears everything reaches the agent. */
+export interface Hearing {
+  pace: "auto" | "every" | "muted";
+  everyMs?: number;
+  slowedMs?: number;
+}
+
 /** One chat in the activity, with its latest messages (oldest first) and what still needs the owner. */
 export interface Conversation {
   chat: { id: string; kind: "dm" | "group" | "thread"; name: string | null };
@@ -249,6 +256,8 @@ export interface Conversation {
   platform: Platform;
   /** A group: whether it hears everything said there. Null where that cannot be set (docs/spec.md 4.2). */
   listen: boolean | null;
+  /** A group that hears everything: the pace the agent set, or the slowing in force (docs/spec.md 4.2). */
+  hearing: Hearing | null;
   latestAt: number;
   /** Older messages not shown; read them with `cursor` as `before`. */
   earlier: number;
@@ -461,6 +470,8 @@ export const api = {
     ),
   setListen: (id: string, chatId: string, listen: boolean) =>
     call<{ listen: boolean }>("PUT", `/v1/admin/agents/${id}/chats/${chatId}/listen`, { listen }),
+  resetHearing: (id: string, chatId: string) =>
+    call<Hearing>("DELETE", `/v1/admin/agents/${id}/chats/${chatId}/hearing`),
   access: (id: string) => call<AccessEntry[]>("GET", `/v1/admin/agents/${id}/access`),
   setAskAll: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/ask-all`, { on }),
   setTidy: (id: string, on: boolean) => call<AgentView>("PUT", `/v1/admin/agents/${id}/tidy`, { on }),

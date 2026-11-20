@@ -2053,6 +2053,25 @@ function ListenSwitch({ agent, conversation }: { agent: AgentView; conversation:
   useEffect(() => {
     if (!saving) setOn(Boolean(conversation.listen));
   }, [conversation.listen, saving]);
+  // What the agent set: shown until the next poll brings the owner's reset back.
+  const [hearing, setHearing] = useState(conversation.hearing);
+  useEffect(() => setHearing(conversation.hearing), [conversation.hearing]);
+  const duration = (ms: number) => {
+    const minutes = Math.max(1, Math.round(ms / 60_000));
+    return minutes % 60 === 0
+      ? t("listen.hours", { count: String(minutes / 60) })
+      : t("line.minutes", { count: String(minutes) });
+  };
+  const pace =
+    !on || !hearing
+      ? null
+      : hearing.pace === "muted"
+        ? t("listen.muted", { name: agent.name })
+        : hearing.pace === "every"
+          ? t("listen.every", { name: agent.name, duration: duration(hearing.everyMs ?? 0) })
+          : hearing.slowedMs
+            ? t("listen.slowed", { name: agent.name, duration: duration(hearing.slowedMs) })
+            : null;
   return (
     <div className="mb-1 flex flex-col gap-1 border-b border-line pb-2.5">
       <label className="flex min-w-0 cursor-pointer items-start gap-3">
@@ -2081,6 +2100,34 @@ function ListenSwitch({ agent, conversation }: { agent: AgentView; conversation:
           }}
         />
       </label>
+      {pace ? (
+        <p className="pr-7 text-caption text-ink2">
+          {pace}
+          {hearing && hearing.pace !== "auto" ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="font-medium text-accent hover:underline disabled:opacity-45"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  setFailure(null);
+                  try {
+                    setHearing(await api.resetHearing(agent.id, conversation.chat.id));
+                  } catch (error) {
+                    setFailure(errorText(t, error));
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                {t("listen.reset")}
+              </button>
+            </>
+          ) : null}
+        </p>
+      ) : null}
       {failure ? <p className="text-caption text-red">{failure}</p> : null}
     </div>
   );

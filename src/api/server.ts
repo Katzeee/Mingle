@@ -25,6 +25,7 @@ import {
   type Contact,
   contactName,
   type Handoff,
+  type HearPace,
   type Message,
   type Task,
   type TaskStatus,
@@ -257,7 +258,34 @@ export function createApi(mingle: Mingle): Hono<Env> {
           };
         });
     }
-    return c.json({ id: chat.id, platform: connection?.platform, kind: chat.kind, name: chat.name, members });
+    // A group that hears everything (or a thread of one): how often it reaches the agent.
+    const group = chat.parentId ? store.chat(chat.parentId) : chat;
+    const hearing = chat.kind !== "dm" && group?.listen ? mingle.hearingView(group) : null;
+    return c.json({ id: chat.id, platform: connection?.platform, kind: chat.kind, name: chat.name, members, hearing });
+  });
+
+  /**
+   * The agent sets how often a group that hears everything reaches it (docs/spec.md 4.2):
+   * `{ "every": "1h" }`, `{ "mute": true }` (until someone addresses it there) or `{ "default": true }`.
+   */
+  app.put("/v1/agent/chats/:id/hearing", async (c) => {
+    const body = await c.req.json<{ every?: unknown; mute?: unknown; default?: unknown }>();
+    const given = [body.every !== undefined, body.mute === true, body.default === true].filter(Boolean).length;
+    if (given !== 1)
+      throw new MingleError(
+        "hearing_invalid",
+        'send one of { "every": "1h" }, { "mute": true } or { "default": true }',
+      );
+    if (body.every !== undefined && typeof body.every !== "string")
+      throw new MingleError("hearing_invalid", 'give "every" as a duration, like "1h"');
+    const pace: HearPace =
+      typeof body.every === "string"
+        ? { kind: "every", ms: parseDuration(body.every) }
+        : body.mute === true
+          ? { kind: "muted" }
+          : { kind: "auto" };
+    const { chat, view } = mingle.setHearPace(c.get("agent").id, c.req.param("id"), pace);
+    return c.json({ chat: chat.id, ...view });
   });
 
   const contactView = (k: Contact & { platform: Platform; owner: boolean }) => ({
@@ -927,6 +955,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
           v.chat.kind === "group" && mingle.hasChannel(v.platform) && mingle.channel(v.platform).groupMessages
             ? v.chat.listen
             : null,
+        // A group that hears everything: the pace the agent set, or the slowing in force.
+        hearing: v.chat.kind === "group" && v.chat.listen ? mingle.hearingView(v.chat) : null,
         latestAt: v.latestAt,
         earlier: v.earlier,
         cursor: v.cursor,
@@ -1069,6 +1099,11 @@ export function createApi(mingle: Mingle): Hono<Env> {
     mingle.setListen(c.req.param("id"), c.req.param("chatId"), listen);
     return c.json({ listen });
   });
+
+  /** The owner puts a group back on Mingle's own pace, whatever the agent set (docs/spec.md 4.2). */
+  app.delete("/v1/admin/agents/:id/chats/:chatId/hearing", (c) =>
+    c.json(mingle.resetHearPace(c.req.param("id"), c.req.param("chatId"))),
+  );
 
   /** The people and groups the owner (or the default) let in or turned away, to change their mind. */
   app.get("/v1/admin/agents/:id/access", (c) => {

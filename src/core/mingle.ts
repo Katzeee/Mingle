@@ -24,6 +24,7 @@ import {
   type Contact,
   contactName,
   type Handoff,
+  type HearPace,
   type Message,
   type Reminder,
   Store,
@@ -46,7 +47,7 @@ import { coldRebuildFor } from "./cold.ts";
 import { diagnosisPrompt } from "./diagnose.ts";
 import { checkEnvName, checkEnvValue, decodeEnvValue, encodeEnvValue, envRef } from "./env.ts";
 import { MingleError, notFound } from "./errors.ts";
-import { formatHeard, formatReminder, renderMessage } from "./format.ts";
+import { formatHeard, formatReminder, formatUnmuted, renderMessage } from "./format.ts";
 import { checkHandoff, handoffPrompt } from "./handoff.ts";
 import { createHome, memorySize, readRole, writeRole } from "./home.ts";
 import { slugify } from "./ids.ts";
@@ -136,6 +137,26 @@ export const HEAR_QUIET_MS = 20_000;
 export const HEAR_MAX_WAIT_MS = 60_000;
 export const HEAR_GAP_MS = 120_000;
 const HEAR_MESSAGES = 30;
+/**
+ * Left to Mingle's own pace, a group whose stretches the agent keeps leaving unanswered is heard less
+ * often: after `HEAR_BACKOFF_AFTER` in a row, each further one doubles the gap, up to
+ * `HEAR_BACKOFF_MAX_MS`. The agent speaking there, someone addressing it or the owner speaking
+ * brings the usual gap back. Only later, never lost: what was said waits for the next stretch.
+ */
+export const HEAR_BACKOFF_AFTER = 3;
+export const HEAR_BACKOFF_MAX_MS = 30 * 60_000;
+/** The gaps an agent may set for a group itself: no more often than Mingle's own pace, at most a day. */
+export const HEAR_EVERY_MIN_MS = HEAR_GAP_MS;
+export const HEAR_EVERY_MAX_MS = 24 * 60 * 60_000;
+
+/** A group's pace as the owner and the agent see it: what was set, and the gap in force now. */
+export interface HearingView {
+  readonly pace: "auto" | "every" | "muted";
+  /** `every`: the gap the agent set. */
+  readonly everyMs?: number;
+  /** `auto` while unanswered stretches have lengthened the gap: the gap now. */
+  readonly slowedMs?: number;
+}
 
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
 
@@ -179,6 +200,8 @@ export class Mingle {
   private readonly hearing = new Map<string, { agentId: string; from: number; since: number; timer: NodeJS.Timeout }>();
   /** When each chat last handed the agent a stretch it heard. */
   private readonly heardAt = new Map<string, number>();
+  /** Stretches each chat handed the agent in a row without it speaking there since. In memory. */
+  private readonly unanswered = new Map<string, number>();
   /** Sessions of just-paused agents that are still closing; resuming waits for them. */
   private readonly closing = new Map<string, Promise<void>>();
   /**
@@ -1536,6 +1559,8 @@ export class Mingle {
         .catch((error) => this.log(`bot brake note failed: ${(error as Error).message}`));
     }
     if (decision === "background" && !bot && (parent ?? chat).listen) {
+      // The owner speaking there is a sign the group matters: heard at the usual pace again.
+      if (owner) this.unanswered.delete(chat.id);
       this.overhear(connection, chat, parent ?? chat, contact, owner, message);
     }
     if (!triggers || verdict === "drop") return; // Background, or someone the owner refused.
@@ -1579,6 +1604,14 @@ export class Mingle {
           .catch((error) => this.log(`stop reply failed: ${(error as Error).message}`)),
       );
       return;
+    }
+    // Addressed where it chose to hear nothing: back to the usual pace, and it may choose again.
+    this.unanswered.delete(chat.id);
+    const place = parent ?? chat;
+    if (place.kind === "group" && place.listen && place.hearPace.kind === "muted") {
+      this.store.setChatHearPace(place.id, { kind: "auto" });
+      this.runtimes.get(connection.agentId)?.enqueueText(formatUnmuted(place.id));
+      this.log(`${connection.agentId}: ${place.id} hears everything again, someone addressed the agent there`);
     }
     // A follow-up about work a line is doing goes straight to that line (docs/spec.md 4.13).
     const line = this.lineFor(connection.agentId, chat, quoted);
@@ -1625,14 +1658,16 @@ export class Mingle {
       group: group.access,
     });
     if (verdict !== "deliver") return;
-    const pace = this.options.hearing ?? { quietMs: HEAR_QUIET_MS, maxWaitMs: HEAR_MAX_WAIT_MS, gapMs: HEAR_GAP_MS };
+    // The agent chose to hear nothing here until someone addresses it: kept as background only.
+    if (group.hearPace.kind === "muted") return;
+    const pace = this.pace();
     const now = Date.now();
     const waiting = this.hearing.get(chat.id);
     if (waiting) clearTimeout(waiting.timer);
     const since = waiting?.since ?? now;
     const due = Math.max(
       Math.min(now + pace.quietMs, since + pace.maxWaitMs),
-      (this.heardAt.get(chat.id) ?? 0) + pace.gapMs,
+      (this.heardAt.get(chat.id) ?? 0) + this.gap(chat, group),
     );
     const timer = setTimeout(() => this.hear(chat.id), Math.max(0, due - now));
     timer.unref?.();
@@ -1642,6 +1677,90 @@ export class Mingle {
       since,
       timer,
     });
+  }
+
+  private pace(): { quietMs: number; maxWaitMs: number; gapMs: number } {
+    return this.options.hearing ?? { quietMs: HEAR_QUIET_MS, maxWaitMs: HEAR_MAX_WAIT_MS, gapMs: HEAR_GAP_MS };
+  }
+
+  /** Stretches this chat handed over in a row that the agent has not spoken after. */
+  private unansweredIn(chatId: string): number {
+    const heard = this.heardAt.get(chatId);
+    const spoke = this.store.lastSpokeAt(chatId);
+    if (heard === undefined || (spoke !== undefined && spoke >= heard)) return 0;
+    return this.unanswered.get(chatId) ?? 0;
+  }
+
+  /** The least time between two stretches from this chat (a group or one of its threads). */
+  private gap(chat: Chat, group: Chat): number {
+    const base = this.pace().gapMs;
+    if (group.hearPace.kind === "every") return Math.max(base, group.hearPace.ms);
+    const unanswered = this.unansweredIn(chat.id);
+    if (unanswered < HEAR_BACKOFF_AFTER) return base;
+    return Math.min(base * 2 ** (unanswered - HEAR_BACKOFF_AFTER + 1), HEAR_BACKOFF_MAX_MS);
+  }
+
+  /** A group's pace as set, and the gap in force while unanswered stretches slowed it. */
+  hearingView(group: Chat): HearingView {
+    if (group.hearPace.kind === "muted") return { pace: "muted" };
+    if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms };
+    const gap = this.gap(group, group);
+    return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap } : { pace: "auto" };
+  }
+
+  /**
+   * The agent sets how often a group that hears everything reaches it (docs/spec.md 4.2): at most
+   * once per `everyMs`, nothing until someone addresses it there, or Mingle's own pace again. A
+   * thread stands for its group. Only slower than Mingle's own pace, never faster: whoever asks it
+   * to change this cannot make it spend more than the owner agreed to.
+   */
+  setHearPace(agentId: string, chatId: string, pace: HearPace): { chat: Chat; view: HearingView } {
+    const chat = this.store.agentChat(agentId, chatId);
+    if (!chat || chat.kind === "dm") throw notFound("chat", chatId);
+    const group = chat.parentId ? this.store.chat(chat.parentId) : chat;
+    if (!group?.listen) {
+      throw new MingleError(
+        "not_hearing",
+        "this group reaches you only when someone @-mentions you or replies to you; only your owner can set it to hear everything",
+        409,
+      );
+    }
+    if (pace.kind === "every" && (pace.ms < HEAR_EVERY_MIN_MS || pace.ms > HEAR_EVERY_MAX_MS)) {
+      throw new MingleError("every_out_of_range", "pick a gap from 2m to 24h; to hear nothing at all, use --mute");
+    }
+    this.store.setChatHearPace(group.id, pace);
+    this.forgetHearing(agentId, group.id, pace.kind === "muted");
+    const updated = this.store.chat(group.id) ?? group;
+    this.log(
+      `${agentId}: ${group.id} hears ${pace.kind === "every" ? `at most every ${pace.ms / 60_000} min` : pace.kind === "muted" ? "nothing until addressed" : "at the usual pace"}`,
+    );
+    return { chat: updated, view: this.hearingView(updated) };
+  }
+
+  /** The owner puts a group back on Mingle's own pace, whatever the agent set. */
+  resetHearPace(idOrSlug: string, chatId: string): HearingView {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    this.store.setChatHearPace(chat.id, { kind: "auto" });
+    this.forgetHearing(agent.id, chat.id, false);
+    this.log(`${agent.name}: owner put ${chat.id} back on the usual pace`);
+    return this.hearingView(this.store.chat(chat.id) ?? chat);
+  }
+
+  /** A group's pace changed: the slowing from unanswered stretches ends, and muted drops what waits. */
+  private forgetHearing(agentId: string, groupId: string, drop: boolean): void {
+    const ids = [
+      groupId,
+      ...this.store
+        .agentChats(agentId)
+        .filter((c) => c.parentId === groupId)
+        .map((c) => c.id),
+    ];
+    for (const id of ids) {
+      this.unanswered.delete(id);
+      if (drop) this.unhear(id);
+    }
   }
 
   /** Drop the stretch a chat was waiting to hand over. */
@@ -1673,6 +1792,7 @@ export class Mingle {
       (m) => !(m.senderId && this.store.contactByPlatformId(chat.connectionId, m.senderId)?.isBot),
     );
     if (!person) return;
+    this.unanswered.set(chat.id, this.unansweredIn(chat.id) + 1);
     this.heardAt.set(chat.id, Date.now());
     runtime.enqueueText(formatHeard(this.store, chat, messages));
   }
@@ -1693,8 +1813,9 @@ export class Mingle {
     if (listen && chat.access === null) this.setAccess(agent.id, { chat: chat.id }, "allowed");
     this.store.setChatListen(chat.id, listen);
     if (!listen) {
-      this.unhear(chat.id);
-      for (const thread of this.store.agentChats(agent.id)) if (thread.parentId === chat.id) this.unhear(thread.id);
+      // Whatever pace the agent set goes with it: turned on again, the group starts at the usual pace.
+      this.store.setChatHearPace(chat.id, { kind: "auto" });
+      this.forgetHearing(agent.id, chat.id, true);
     }
     this.log(`${agent.name}: owner set ${chat.id} to hear ${listen ? "everything" : "what is addressed to it"}`);
   }
