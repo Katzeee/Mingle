@@ -3,6 +3,10 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.8
+
+- Fixed messages that arrived while your agent was still working on a reply sometimes being lost after the agent restarted. They now stay queued and reach it once it is back.
+
 ## 0.4.7
 
 - In groups where your agent hears everything, it now keeps up with a conversation: once someone is talking with it, what they say next reaches it as soon as they finish, without an @mention and without the old two-minute wait. Other chatter still waits for it at the usual pace.
