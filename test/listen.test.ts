@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { messageIds, type Rig, rig, runCli, until } from "./helpers.ts";
 
 /**
@@ -281,6 +281,23 @@ describe("a group that hears everything", () => {
     await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: false });
     await r.admin("PUT", `/v1/admin/agents/${r.agentId}/chats/${chat}/listen`, { listen: true });
     expect(await hearingOf(r, chat)).toEqual({ pace: "auto" });
+  });
+
+  it("lets go of a stretch it was about to hear when it stops", async () => {
+    const r = await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      r.channel.receive({ text: "shall we start at 8?", addressedToBot: false });
+      expect(vi.getTimerCount()).toBe(1);
+      // Stopping lets go of the waiting stretch; a message arriving meanwhile starts no new one.
+      r.mingle.beginShutdown();
+      expect(vi.getTimerCount()).toBe(0);
+      r.channel.receive({ text: "or 9?", addressedToBot: false });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(r.turns).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is set on groups only", async () => {

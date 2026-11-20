@@ -400,6 +400,8 @@ export class Mingle {
   beginShutdown(): void {
     this.stopping = true;
     for (const op of this.checking.values()) op.controller.abort();
+    // Stretches waiting to be heard go with it: their timers must not outlive the store.
+    for (const chatId of this.hearing.keys()) this.unhear(chatId);
   }
 
   async stop(): Promise<void> {
@@ -1648,7 +1650,7 @@ export class Mingle {
     owner: boolean,
     message: Message,
   ): void {
-    if (this.paused.has(connection.agentId)) return;
+    if (this.stopping || this.paused.has(connection.agentId)) return;
     const verdict = gate({
       trust: this.channel(connection.platform).trust ?? "public",
       askAll: this.store.agent(connection.agentId)?.askAll ?? false,

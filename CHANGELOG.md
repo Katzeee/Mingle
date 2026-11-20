@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.5
+
+- Your agent now hears what is said in the groups it is allowed in — including groups it was already in — wherever the chat app delivers those messages, not only when someone @-mentions it. You can turn this off for any conversation.
+- Busy groups taper off on their own: when the agent has nothing to add, it hears from the group less and less often. The agent can also choose to hear a group at most once a week, or stay out of ordinary chatter until someone speaks to it directly.
+
 ## 0.4.4
 
 - @mention your agent in a Feishu document comment and it can answer in the same thread. For an existing bot, open its Feishu permissions and scan again to enable Document comments.
