@@ -143,9 +143,15 @@ export function holdUntil(why: FailureInfo, holds: number, now: number): number 
   }
 }
 
+/** Told when a text input reaches the harness, and when the turn it went into ends. */
+export interface TextTrack {
+  delivered(at: number): void;
+  ended(at: number): void;
+}
+
 type Pending =
   | { readonly kind: "message"; readonly id: string }
-  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string; readonly track?: TextTrack }
   /** The one reminder about messages the agent has not answered; checked again when delivered. */
   | { readonly kind: "nudge"; readonly ids: readonly string[] }
   | { readonly kind: "handoff"; readonly id: string };
@@ -196,6 +202,8 @@ export class AgentRuntime {
   private blocked: { until: number; why: FailureInfo } | undefined;
   /** The ledger revision the running turn began with, so it clears only the wait it knew. */
   private turnRevision: number | undefined;
+  /** Text inputs handed to the harness whose turn has not ended yet. */
+  private tracked: TextTrack[] = [];
   private unblockTimer: NodeJS.Timeout | undefined;
   /** When the agent last finished work, or Mingle last saw it busy: how long the session sat. */
   private idleSince: number;
@@ -310,8 +318,8 @@ export class AgentRuntime {
   }
 
   /** Input that is not a chat message: a reminder firing, or a note from Mingle itself. */
-  enqueueText(text: string): void {
-    this.pending.push({ kind: "text", text });
+  enqueueText(text: string, track?: TextTrack): void {
+    this.pending.push(track ? { kind: "text", text, track } : { kind: "text", text });
     this.schedule();
   }
 
@@ -550,6 +558,12 @@ export class AgentRuntime {
       notes.map((n) => n.id),
     );
     this.deps.store.markHandoffsDelivered(batch.flatMap((p) => (p.kind === "handoff" ? [p.id] : [])));
+    const at = this.now();
+    for (const p of batch) {
+      if (p.kind !== "text" || !p.track) continue;
+      p.track.delivered(at);
+      this.tracked.push(p.track);
+    }
     if (result.outcome === "queued") for (const id of messageIds) this.queued.add(id);
     this.deps.log?.(`${this.agentId}: delivered ${messageIds.join(",") || "note"} (${result.outcome})`);
   }
@@ -1066,6 +1080,8 @@ export class AgentRuntime {
 
   /** No turn runs any more in this session. */
   private ended(): void {
+    const at = this.now();
+    for (const track of this.tracked.splice(0)) track.ended(at);
     this.running = false;
     this.clearStall();
     this.deps.store.setTurnAt(this.agentId, null);

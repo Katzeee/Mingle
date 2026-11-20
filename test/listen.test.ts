@@ -18,7 +18,12 @@ describe("a group that hears everything", () => {
 
   /** The agent answers what is addressed to it; what it only heard, it leaves be unless `speak`. */
   async function setup(
-    options: { speak?: boolean; hearing?: typeof hearing; heard?: (chat: string) => Promise<void> } = {},
+    options: {
+      speak?: boolean;
+      hearing?: typeof hearing;
+      heard?: (chat: string) => Promise<void>;
+      log?: (line: string) => void;
+    } = {},
   ) {
     current = await rig(
       async (t) => {
@@ -33,7 +38,7 @@ describe("a group that hears everything", () => {
         }
         for (const id of messageIds(t.input)) await runCli(env, ["message", "reply", id], "ok");
       },
-      { hearing: options.hearing ?? hearing },
+      { hearing: options.hearing ?? hearing, ...(options.log ? { log: options.log } : {}) },
     );
     return current;
   }
@@ -121,6 +126,31 @@ describe("a group that hears everything", () => {
     await until(() => r.turns.length === 2);
     expect(r.turns[1]?.input).toContain("great, thanks");
     expect(r.turns[1]?.input).not.toContain("which way to the top?");
+  });
+
+  it("says how many earlier messages a long stretch leaves out, and where to read them", async () => {
+    const r = await setup({ hearing: { quietMs: 400, maxWaitMs: 5_000, gapMs: 0 } });
+    for (let i = 1; i <= 33; i++) r.channel.receive({ text: `line ${i}`, addressedToBot: false });
+    await until(() => r.turns.length === 1);
+    const input = r.turns[0]?.input ?? "";
+    const hint =
+      /: 30 messages said there, none addressed to you\. 3 earlier messages are not shown: `message read c\w+ --before (m\w+)`\./.exec(
+        input,
+      );
+    expect(hint).not.toBeNull();
+    // The hint points at the oldest message shown: what came before it is what was left out.
+    expect(r.mingle.store.message(hint?.[1] as string)?.body).toBe("line 4");
+    expect(input).not.toMatch(/line 3$/m);
+  });
+
+  it("logs where the time of a stretch went once its turn ends", async () => {
+    const lines: string[] = [];
+    const r = await setup({ speak: true, log: (line) => lines.push(line) });
+    r.channel.receive({ text: "which way to the top?", addressedToBot: false });
+    await until(() => lines.some((l) => l.includes(": heard c")));
+    expect(lines.find((l) => l.includes(": heard c"))).toMatch(
+      /: heard c\w+: 1 message, first \+0s, last \+0s, handed over \+\d+s, turn \+\d+s, spoke \+\d+s$/,
+    );
   });
 
   it("does not start a stretch for another bot", async () => {

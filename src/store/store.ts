@@ -1166,6 +1166,17 @@ export class Store {
     return rows.map(toMessage);
   }
 
+  /** When the agent first spoke in this chat itself at or after `at` (notices do not count), if it has. */
+  firstSpokeAt(chatId: string, at: number): number | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT min(created_at) AS at FROM messages WHERE chat_id = ? AND direction = 'out' AND notice = 0
+         AND state IN ('sent', 'uncertain') AND created_at >= ?`,
+      )
+      .get(chatId, at) as Row;
+    return row.at == null ? undefined : Number(row.at);
+  }
+
   /** When the agent last spoke in this chat itself (Mingle's own notices do not count), if it has. */
   lastSpokeAt(chatId: string): number | undefined {
     const row = this.db
@@ -1189,6 +1200,16 @@ export class Store {
       )
       .all(chatId, from, limit) as Row[];
     return rows.map(toMessage).reverse();
+  }
+
+  /** How many messages `background(chatId, from, …)` could return without a limit. */
+  backgroundCount(chatId: string, from: number): number {
+    const row = this.db
+      .prepare(
+        `SELECT count(*) AS n FROM messages WHERE chat_id = ? AND direction = 'in' AND triggers = 0 AND created_at >= ?`,
+      )
+      .get(chatId, from) as Row;
+    return Number(row.n);
   }
 
   /**

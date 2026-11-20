@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="250" viewBox="0 0 720 250" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif">
+  <title>一段是怎么攒出来的（V1 默认节奏）</title>
   <rect width="720" height="250" rx="12" fill="#FFFFFF" stroke="#EBEBEF"/>
   <text x="24" y="34" font-size="14" font-weight="600" fill="#1D1D22">一段是怎么攒出来的（V1 默认节奏）</text>
   <!-- axis: 0..180s mapped to x 40..680 => 3.555px/s -->
