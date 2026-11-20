@@ -3,6 +3,14 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.7
+
+- In groups where your agent hears everything, it now keeps up with a conversation: once someone is talking with it, what they say next reaches it as soon as they finish, without an @mention and without the old two-minute wait. Other chatter still waits for it at the usual pace.
+- Calling the agent by name in a group counts as calling it. Add other names the group uses for it (like a nickname) in the console under the group, or let the agent add them itself.
+- Choose how quickly the agent keeps up in each group: Save, Balanced or Fast. Small groups start on Fast, busier ones on Balanced. It only spends more when it looks and has nothing to say.
+- A message someone adds while the agent is still working on their request goes straight into that work, and the agent is nudged to reply in short messages, starting with a quick line before longer work.
+- Fixed messages sent while the agent was replying in a group sometimes never reaching it.
+
 ## 0.4.6
 
 - On Feishu, Slack, and Discord, your agent can keep a long task's questions and progress in a thread. Reply there without another @mention to add details or ask it to stop. The result comes back to the group chat.
