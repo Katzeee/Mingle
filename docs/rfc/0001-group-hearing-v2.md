@@ -1,6 +1,6 @@
 # RFC 0001：群聊旁听 V2：在聊时跟得上，不在聊时不打扰
 
-- 状态：草案，待评审
+- 状态：已接受（2026-11-20），实现中，见 [实现方案](0001-implementation.md)
 - 日期：2026-11-20
 - 关联：MING-134 · [V1 博客](../blog/group-hearing-v1.md) · [`spec.md` 4.2](../spec.md) · [PR #168](https://github.com/earayu/Mingle/pull/168)
 - 模拟器：[`0001-sim/`](0001-sim/)（`python3 sim4.py 30`，依赖同目录的 `sim2.py`、`sim3.py`）
