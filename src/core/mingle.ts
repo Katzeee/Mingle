@@ -170,6 +170,42 @@ export interface HearingView {
   readonly everyMs?: number;
   /** `auto` while unanswered stretches have lengthened the gap: the gap now. */
   readonly slowedMs?: number;
+  /** How fast it keeps up with a conversation, as the owner chose; null follows the group's size. */
+  readonly tier: HearTier | null;
+  /** The tier the group's size gives it. */
+  readonly defaultTier: HearTier;
+  /** `auto`: the people it is in a conversation with now, by name, most engaged first. */
+  readonly live: string[];
+  /** Other names that count as calling it there. */
+  readonly aliases: string[];
+}
+
+/** What else a group may call the agent (docs/spec.md 4.2): a few short names, so a word cannot become a trigger for everything. */
+export const ALIAS_MAX = 8;
+export const ALIAS_CHARS = { min: 2, max: 16 } as const;
+
+/** Aliases as stored: trimmed, each once (ignoring case), the agent's own names left out. */
+export function cleanAliases(list: readonly string[], own: readonly (string | null | undefined)[]): string[] {
+  const taken = new Set(own.flatMap((n) => (n ? [n.trim().toLowerCase()] : [])));
+  const out: string[] = [];
+  for (const raw of list) {
+    const alias = raw.trim().replace(/\s+/g, " ");
+    const chars = [...alias].length;
+    if (chars < ALIAS_CHARS.min || chars > ALIAS_CHARS.max) {
+      throw new MingleError(
+        "alias_invalid",
+        `give a name of ${ALIAS_CHARS.min} to ${ALIAS_CHARS.max} characters, the way people in the group call you`,
+      );
+    }
+    const key = alias.toLowerCase();
+    if (taken.has(key)) continue;
+    taken.add(key);
+    out.push(alias);
+  }
+  if (out.length > ALIAS_MAX) {
+    throw new MingleError("too_many_aliases", `a group can have at most ${ALIAS_MAX} names; remove one first`);
+  }
+  return out;
 }
 
 const OWN_SIGN_IN = /(API_KEY|AUTH_TOKEN|ACCESS_TOKEN|BASE_URL|CONFIG_DIR|_HOME)$/;
@@ -1697,7 +1733,7 @@ export class Mingle {
       senderId,
       at: message.createdAt,
       now,
-      named: nameIn(message.body, [agent?.name, connection.botName]),
+      named: nameIn(message.body, [agent?.name, connection.botName, ...group.aliases]),
       owner,
       tier: this.tierOf(group, now),
       ...(group.hearPace.kind === "every" ? { everyMs: group.hearPace.ms } : {}),
@@ -1720,7 +1756,11 @@ export class Mingle {
 
   /** How fast a group keeps up with a conversation: the owner's choice, or else by its size. */
   private tierOf(group: Chat, now: number): HearTier {
-    if (group.hearTier) return group.hearTier;
+    return group.hearTier ?? this.defaultTierOf(group, now);
+  }
+
+  /** The tier a group's size gives it: people who spoke there in the last week, counted once an hour. */
+  private defaultTierOf(group: Chat, now: number): HearTier {
     let active = this.active.get(group.id);
     if (!active || now - active.at > ACTIVE_TTL_MS) {
       active = { n: this.store.activePeople(group.id, now - ACTIVE_WINDOW_MS), at: now };
@@ -1753,11 +1793,67 @@ export class Mingle {
   }
 
   /** A group's pace as set, and the gap in force while unanswered stretches slowed it. */
-  hearingView(group: Chat): HearingView {
-    if (group.hearPace.kind === "muted") return { pace: "muted" };
-    if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms };
+  hearingView(group: Chat, now = Date.now()): HearingView {
+    const base = {
+      tier: group.hearTier,
+      defaultTier: this.defaultTierOf(group, now),
+      live: [] as string[],
+      aliases: group.aliases,
+    };
+    if (group.hearPace.kind === "muted") return { pace: "muted", ...base };
+    if (group.hearPace.kind === "every") return { pace: "every", everyMs: group.hearPace.ms, ...base };
+    const live = this.book.live(group.id, now).map((id) => {
+      const contact = this.store.contactByPlatformId(group.connectionId, id);
+      return (contact && contactName(contact)) ?? contact?.name ?? id;
+    });
     const gap = this.book.gap(group.id);
-    return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap } : { pace: "auto" };
+    return gap > this.pace().gapMs ? { pace: "auto", slowedMs: gap, ...base, live } : { pace: "auto", ...base, live };
+  }
+
+  /**
+   * The owner picks how fast a group keeps up with a conversation (docs/spec.md 4.2): `save`,
+   * `balanced` or `fast`, or null to follow the group's size. The owner's one knob on what it costs.
+   */
+  setHearTier(idOrSlug: string, chatId: string, tier: HearTier | null): HearingView {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    this.store.setChatHearTier(chat.id, tier);
+    this.book.setTier(chat.id, tier ?? this.defaultTierOf(chat, Date.now()), Date.now());
+    this.log(`${agent.name}: owner set ${chat.id} to keep up ${tier ?? "by its size"}`);
+    return this.hearingView(this.store.chat(chat.id) ?? chat);
+  }
+
+  /** The owner adds or removes one name a group calls the agent by, on the list as it is now. */
+  ownerAlias(idOrSlug: string, chatId: string, alias: string, add: boolean): HearingView {
+    const agent = this.agent(idOrSlug);
+    const chat = this.store.agentChat(agent.id, chatId);
+    if (chat?.kind !== "group") throw notFound("chat", chatId);
+    return this.hearingView(this.alias(agent.id, chat.id, alias, add).chat);
+  }
+
+  /**
+   * The agent adds or removes a name the group calls it by (`chat alias`). A thread stands for its
+   * group. It only helps a call be heard as one: what that costs stays within the owner's tier.
+   */
+  alias(agentId: string, chatId: string, alias: string, add: boolean): { chat: Chat; aliases: string[] } {
+    const chat = this.store.agentChat(agentId, chatId);
+    if (!chat || chat.kind === "dm") throw notFound("chat", chatId);
+    const group = (chat.parentId ? this.store.chat(chat.parentId) : chat) ?? chat;
+    const [name] = cleanAliases([alias], []);
+    const key = (name ?? "").toLowerCase();
+    const rest = group.aliases.filter((a) => a.toLowerCase() !== key);
+    const next = add ? cleanAliases([...group.aliases, alias], this.ownNames(agentId, group)) : rest;
+    this.store.setChatAliases(group.id, next);
+    this.log(`${agentId}: ${add ? "added" : "removed"} the name "${name}" in ${group.id}`);
+    return { chat: this.store.chat(group.id) ?? group, aliases: next };
+  }
+
+  /** The names a group calls the agent by anyway: its own and its bot's. */
+  private ownNames(agentId: string, group: Chat): string[] {
+    return [this.store.agent(agentId)?.name, this.store.connection(group.connectionId)?.botName].filter(
+      (n): n is string => Boolean(n),
+    );
   }
 
   /**
@@ -1800,7 +1896,11 @@ export class Mingle {
     return this.hearingView(this.store.chat(chat.id) ?? chat);
   }
 
-  /** A group's pace changed: the slowing from unanswered stretches ends, and muted drops what waits. */
+  /**
+   * A group's pace changed: the slowing from unanswered stretches ends, and muted drops what waits.
+   * Otherwise what the group and its threads wait to hand over is timed again at the new pace, so a
+   * stretch put off by a long `--every` does not keep waiting for it once the pace is shorter.
+   */
   private forgetHearing(agentId: string, groupId: string, drop: boolean): void {
     const ids = [
       groupId,
@@ -1810,7 +1910,18 @@ export class Mingle {
         .map((c) => c.id),
     ];
     this.book.forget(ids, drop);
-    if (drop) for (const id of ids) this.unhear(id);
+    if (drop) {
+      for (const id of ids) this.unhear(id);
+      return;
+    }
+    const pace = this.store.chat(groupId)?.hearPace;
+    const everyMs = pace?.kind === "every" ? pace.ms : undefined;
+    const now = Date.now();
+    for (const id of ids) {
+      const waiting = this.hearing.get(id);
+      const dueAt = waiting ? this.book.retime(id, everyMs) : undefined;
+      if (waiting && dueAt !== undefined) this.hearAt(waiting.agentId, id, dueAt, now);
+    }
   }
 
   /** Drop the stretch a chat was waiting to hand over. */
@@ -1823,7 +1934,7 @@ export class Mingle {
   }
 
   /**
-   * Hand the agent what was said in the chat since it last spoke there, as input it may answer or
+   * Hand the agent what was said in the chat since the stretch began, as input it may answer or
    * leave be: no live reply, no reminder to answer, nothing for the owner (docs/spec.md 4.2).
    */
   private hear(chatId: string): void {
@@ -1833,8 +1944,8 @@ export class Mingle {
     const chat = this.store.chat(chatId);
     const group = chat?.parentId ? this.store.chat(chat.parentId) : chat;
     const runtime = this.runtimes.get(waiting.agentId);
-    // Turned off, paused or gone meanwhile: nothing to hear.
-    if (!chat || !group?.listen || !runtime || this.paused.has(waiting.agentId)) {
+    // Turned off, muted, paused or gone meanwhile: nothing to hear.
+    if (!chat || !group?.listen || group.hearPace.kind === "muted" || !runtime || this.paused.has(waiting.agentId)) {
       this.book.drop(chatId);
       return;
     }
@@ -1853,7 +1964,10 @@ export class Mingle {
     }
     const { stretch } = handed;
     const spoke = this.store.lastSpokeAt(chat.id);
-    const from = spoke === undefined ? stretch.from : Math.max(stretch.from, spoke + 1);
+    // From the stretch's first line, not from when the agent last spoke: a line said while it was
+    // still answering the previous stretch reaches it after, so it has not seen it. (The stretch
+    // starts after the previous hand-over, and an @ or reply to it drops the stretch.)
+    const from = stretch.from;
     // Those in a conversation with the agent are never the ones left out.
     const messages = this.store.backgroundFor(chat.id, from, stretch.engaged, HEAR_MESSAGES);
     const omitted = messages.length < HEAR_MESSAGES ? 0 : this.store.backgroundCount(chat.id, from) - messages.length;
@@ -1911,7 +2025,10 @@ export class Mingle {
         const lastSpoke = spoke === undefined ? undefined : this.store.lastSpokeAt(chatId);
         // Steered in as the turn was ending, and not answered: it may never have been read.
         if (stretch.lane === "steer" && spoke === undefined && this.book.late(turn ?? at, at)) {
-          const dueAt = this.book.resend(stretch, Date.now());
+          const group = this.store.chat(stretch.groupId);
+          // Muted or turned off since it was steered in: it is not handed over again.
+          const hearing = group?.listen === true && group.hearPace.kind !== "muted";
+          const dueAt = hearing ? this.book.resend(stretch, Date.now()) : undefined;
           if (dueAt !== undefined && !this.paused.has(agentId)) {
             this.log(`${agentId}: heard ${chatId} steer: the turn ended ${secs(at)}, handing it over again`);
             this.hearAt(agentId, chatId, dueAt, Date.now());

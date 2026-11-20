@@ -149,6 +149,8 @@ interface Pending {
   readonly engaged: Set<string>;
   readonly heard: Set<string>;
   last: string;
+  /** When its latest line came. */
+  lastAt: number;
 }
 
 interface ChatHearing {
@@ -217,10 +219,12 @@ export class HearingBook {
       engaged: new Set(),
       heard: new Set(),
       last: o.senderId,
+      lastAt: now,
     };
     const pending = chat.pending;
     pending.heard.add(o.senderId);
     pending.last = o.senderId;
+    pending.lastAt = now;
     const every = o.everyMs !== undefined;
     // Someone else spoke into a follow-up waiting to go into the running turn: theirs is not
     // steered in, so the stretch goes as a stretch of its own, after the turn.
@@ -286,18 +290,38 @@ export class HearingBook {
       // That turn ended meanwhile: this one starts a turn of its own.
       pending.lane = "fast";
     }
-    let reserved = false;
-    if (pending.lane === "fast" && group) {
-      if (this.groupTokens(group, now) < 1) {
+    if (everyMs !== undefined) {
+      // The agent set its own pace (`chat hear --every`) after this stretch was planned: no fast lane
+      // any more, and the gap it chose holds for what is already waiting.
+      if (pending.lane !== "slow") {
         pending.lane = "slow";
         pending.engaged.clear();
+      }
+      const gapDue = chat.heardAt === undefined ? now : chat.heardAt + this.gap(chat.id, everyMs);
+      if (gapDue > now) {
+        pending.dueAt = gapDue;
+        return { dueAt: gapDue };
+      }
+    }
+    let reserved = false;
+    if (pending.lane === "fast" && group) {
+      // Checked again now, the person's bucket as well as the group's: the same person may have fast
+      // stretches waiting in several threads of the group, and each saw a token when it was planned.
+      const able = [...pending.engaged].filter((id) => {
+        const person = group.people.get(id);
+        return person !== undefined && this.personTokens(person, now) >= 1;
+      });
+      pending.engaged.clear();
+      if (this.groupTokens(group, now) < 1 || able.length === 0) {
+        pending.lane = "slow";
         pending.dueAt = this.slowDue(chat, pending, now, everyMs);
         if (pending.dueAt > now) return { dueAt: pending.dueAt };
       } else {
         group.tokens -= 1;
-        for (const id of pending.engaged) {
+        for (const id of able) {
+          pending.engaged.add(id);
           const person = group.people.get(id);
-          if (person) person.tokens = this.personTokens(person, now) - 1;
+          if (person) person.tokens -= 1;
         }
         reserved = true;
       }
@@ -326,6 +350,7 @@ export class HearingBook {
       engaged: new Set(),
       heard: new Set(),
       last: [...stretch.engaged].at(-1) ?? "",
+      lastAt: now,
     };
     chat.pending = {
       ...pending,
@@ -437,10 +462,35 @@ export class HearingBook {
     }
   }
 
+  /**
+   * The pace changed (the agent's `--every`, or the owner put it back): when a stretch waiting at
+   * the slow pace is due now, by the quiet window and the gap in force. One planned under a longer
+   * gap is not held to it any more. Fast, steered and riding stretches keep their own time; `--every`
+   * reaches those at hand-over.
+   */
+  retime(chatId: string, everyMs?: number): number | undefined {
+    const chat = this.chats.get(chatId);
+    const pending = chat?.pending;
+    if (!chat || !pending) return undefined;
+    if (pending.lane !== "slow") return pending.dueAt;
+    const p = this.pace();
+    const quiet = Math.min(pending.lastAt + p.quietMs, pending.since + p.maxWaitMs);
+    pending.dueAt = chat.heardAt === undefined ? quiet : Math.max(quiet, chat.heardAt + this.gap(chatId, everyMs));
+    return pending.dueAt;
+  }
+
   /** Drop what a chat was waiting to hand over (someone addressed the agent meanwhile). */
   drop(chatId: string): void {
     const chat = this.chats.get(chatId);
     if (chat) chat.pending = undefined;
+  }
+
+  /**
+   * The owner picked another tier: the group's bucket follows at once, so stretches already waiting
+   * are held to it. Tokens are cut to the new size, never refilled.
+   */
+  setTier(groupId: string, tier: HearTier, now: number): void {
+    if (this.groups.has(groupId)) this.group(groupId, tier, now);
   }
 
   // ------------------------------------------------------------------ internals

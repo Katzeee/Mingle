@@ -136,6 +136,39 @@ describe("the pace of a group that hears everything", () => {
     expect(say(b, "a", at(21), { chat: "t0", tier: "save" }).lane).toBe("fast");
   });
 
+  it("holds one person to their own bucket across threads of the group, checked at hand-over", () => {
+    const b = book();
+    b.spoke("c1", "c1", ["joker"], 0);
+    const handed: Stretch[] = [];
+    const later: number[] = [];
+    // The same person, four threads at once: each saw their tokens when it was planned.
+    for (let i = 0; i < 4; i++) expect(say(b, "joker", at(1), { chat: `t${i}` }).lane).toBe("fast");
+    for (let i = 0; i < 4; i++) {
+      const r = b.handOver(`t${i}`, at(10));
+      if (r && "stretch" in r) handed.push(r.stretch);
+      else if (r) later.push(r.dueAt);
+    }
+    // Three tokens of their own: the fourth goes at the slow pace instead.
+    expect(handed.filter((s) => s.reserved)).toHaveLength(3);
+    expect(handed.filter((s) => s.reserved && s.lane === "fast")).toHaveLength(3);
+    expect(handed.length + later.length).toBe(4);
+  });
+
+  it("holds stretches already waiting to a tier the owner just lowered", () => {
+    const b = book();
+    for (const who of ["a", "b", "c", "d"]) b.spoke("c1", "c1", [who], 0);
+    // Four fast stretches waiting in four threads, planned under the fast tier (8 tokens).
+    for (const [i, who] of ["a", "b", "c", "d"].entries()) say(b, who, at(1), { chat: `t${i}` });
+    // The owner picks "save" (2 tokens) before any of them is due, and nobody speaks again.
+    b.setTier("c1", "save", at(2));
+    let reserved = 0;
+    for (let i = 0; i < 4; i++) {
+      const r = b.handOver(`t${i}`, at(10));
+      if (r && "stretch" in r && r.stretch.reserved) reserved++;
+    }
+    expect(reserved).toBe(2);
+  });
+
   it("never wastes more fast stretches than the group's bucket allows (property)", () => {
     let seed = 7;
     const random = () => {
@@ -195,6 +228,43 @@ describe("the pace of a group that hears everything", () => {
     b.spoke("c1", "c1", ["u1"], at(5000));
     expect(b.gap("c1")).toBe(120_000);
     expect(b.gap("c1", 3_600_000)).toBe(3_600_000);
+  });
+
+  it("holds a stretch already waiting to a pace the agent set since, fast or slow", () => {
+    const b = book();
+    // A stretch handed over, answered; the next one is planned fast.
+    say(b, "u1", at(0));
+    const first = handOver(b, at(20));
+    b.settle(first, true, at(30));
+    b.spoke("c1", "c1", ["u1"], at(30));
+    expect(say(b, "u1", at(31)).lane).toBe("fast");
+    // Then the agent sets `--every 1h`: the waiting stretch neither goes fast nor holds a token, and
+    // it waits out the hour from the last hand-over.
+    const late = b.handOver("c1", at(40), 3_600_000);
+    expect(late).toEqual({ dueAt: at(20) + 3_600_000 });
+    const s = b.handOver("c1", at(20) + 3_600_000, 3_600_000);
+    expect(s && "stretch" in s ? { lane: s.stretch.lane, reserved: s.stretch.reserved } : s).toEqual({
+      lane: "slow",
+      reserved: false,
+    });
+    // A slow one whose timer was set before the new gap waits for it too.
+    say(b, "u2", at(20) + 3_600_000 + at(1));
+    expect(b.handOver("c1", at(20) + 3_600_000 + at(21), 7_200_000)).toEqual({
+      dueAt: at(20) + 3_600_000 + 7_200_000,
+    });
+  });
+
+  it("times a waiting stretch again when the pace gets shorter", () => {
+    const b = book();
+    say(b, "u1", at(0));
+    b.settle(handOver(b, at(20)), false, at(30));
+    // Planned under `--every 1h`.
+    say(b, "u1", at(40));
+    expect(b.handOver("c1", at(60), 3_600_000)).toEqual({ dueAt: at(20) + 3_600_000 });
+    // Back to the usual pace: due by the usual gap, not the hour.
+    expect(b.retime("c1")).toBe(at(20) + 120_000);
+    // Or `--every 2m`: the same.
+    expect(b.retime("c1", 120_000)).toBe(at(20) + 120_000);
   });
 
   it("has no fast lane where the agent chose its own pace", () => {

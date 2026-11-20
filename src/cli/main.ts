@@ -123,6 +123,9 @@ interface Hearing {
   pace: "auto" | "every" | "muted";
   everyMs?: number;
   slowedMs?: number;
+  tier?: "save" | "balanced" | "fast" | null;
+  defaultTier?: "save" | "balanced" | "fast";
+  aliases?: string[];
 }
 
 function hearingText(h: Hearing): string {
@@ -371,7 +374,13 @@ async function agentCommand(group: string, action: string | undefined, args: str
       print(info, () =>
         [
           `${info.id}  ${info.platform}  ${info.kind}  ${info.name ?? "-"}`,
-          ...(info.hearing ? [`hears everything: ${hearingText(info.hearing)}`] : []),
+          ...(info.hearing
+            ? [
+                `hears everything: ${hearingText(info.hearing)}`,
+                `keeps up with a conversation: ${info.hearing.tier ?? `${info.hearing.defaultTier ?? "fast"}, by the group's size`} (your owner's choice)`,
+                `also called here: ${info.hearing.aliases?.length ? info.hearing.aliases.join(", ") : "none"}`,
+              ]
+            : []),
           info.members
             ? [
                 "members:",
@@ -394,6 +403,24 @@ async function agentCommand(group: string, action: string | undefined, args: str
         ...(flags.every !== undefined ? { every: flags.every } : flags.mute ? { mute: true } : { default: true }),
       });
       print(hearing, () => `${hearing.chat}: ${hearingText(hearing)}`);
+      return true;
+    }
+    case "chat alias": {
+      const usage = "usage: mingle chat alias <chat-id> add|remove <name>";
+      const chat = need(args[0], "chat_required", usage);
+      const action = args[1];
+      const name = args.slice(2).join(" ").trim();
+      if ((action !== "add" && action !== "remove") || !name) throw new CliError("alias_invalid", usage);
+      const result = await call()<{ chat: string; aliases: string[] }>(
+        action === "add" ? "POST" : "DELETE",
+        `/v1/agent/chats/${chat}/aliases`,
+        { alias: name },
+      );
+      print(
+        result,
+        () =>
+          `${result.chat}: ${result.aliases.length ? `also called ${result.aliases.join(", ")}` : "no other names"}`,
+      );
       return true;
     }
     case "contact list": {
@@ -1046,6 +1073,7 @@ For the owner:
 For agents (inside a session):
   mingle message reply <msg> | send --to <chat|contact> | read <chat> | search <words>
   mingle chat list | info <chat> | hear <chat> --every 1h | --mute | --default
+  mingle chat alias <chat> add|remove <name>
   mingle contact list [name] | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
   mingle task create | run | tell | status | done | list | update

@@ -146,6 +146,8 @@ export interface Chat {
   hearPace: HearPace;
   /** Groups only: how fast it keeps up with a conversation there, as the owner chose; null follows the group's size. */
   hearTier: HearTier | null;
+  /** Groups only: other names that count as calling the agent there (docs/spec.md 4.2). */
+  aliases: string[];
   /** Direct chats only: the other person's ID on the platform, when known. */
   peerId: string | null;
 }
@@ -740,6 +742,12 @@ export class Store {
 
   setChatHearTier(id: string, tier: HearTier | null): void {
     this.db.prepare("UPDATE chats SET hear_tier = ?, updated_at = ? WHERE id = ?").run(tier, this.now(), id);
+  }
+
+  setChatAliases(id: string, aliases: readonly string[]): void {
+    this.db
+      .prepare("UPDATE chats SET aliases = ?, updated_at = ? WHERE id = ?")
+      .run(aliases.length > 0 ? JSON.stringify(aliases) : null, this.now(), id);
   }
 
   setChatHearPace(id: string, pace: HearPace): void {
@@ -1985,6 +1993,16 @@ function hearPace(r: Row): HearPace {
   return { kind: "auto" };
 }
 
+function aliases(raw: unknown): string[] {
+  if (typeof raw !== "string") return [];
+  try {
+    const list: unknown = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((a): a is string => typeof a === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function toChat(r: Row): Chat {
   return {
     id: String(r.id),
@@ -1997,6 +2015,7 @@ function toChat(r: Row): Chat {
     listen: Number(r.listen ?? 0) === 1,
     hearPace: hearPace(r),
     hearTier: r.hear_tier === "save" || r.hear_tier === "balanced" || r.hear_tier === "fast" ? r.hear_tier : null,
+    aliases: aliases(r.aliases),
     peerId: str(r.peer_id),
   };
 }

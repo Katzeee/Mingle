@@ -313,6 +313,19 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ chat: chat.id, ...view });
   });
 
+  /**
+   * The agent adds or removes a name a group calls it by (docs/spec.md 4.2): `{ "alias": "小跟班" }`.
+   * A thread stands for its group.
+   */
+  for (const method of ["post", "delete"] as const) {
+    app[method]("/v1/agent/chats/:id/aliases", async (c) => {
+      const { alias } = objectBody(await c.req.json<unknown>());
+      if (typeof alias !== "string") throw new MingleError("alias_invalid", 'send { "alias": "<name>" }');
+      const { chat, aliases } = mingle.alias(c.get("agent").id, c.req.param("id"), alias, method === "post");
+      return c.json({ chat: chat.id, aliases });
+    });
+  }
+
   const contactView = (k: Contact & { platform: Platform; owner: boolean }) => ({
     id: k.id,
     platform: k.platform,
@@ -1151,6 +1164,29 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json({ listen });
   });
 
+  /**
+   * The owner picks how fast a group keeps up with a conversation (docs/spec.md 4.2):
+   * `{ "tier": "save" | "balanced" | "fast" | null }`, null following the group's size.
+   */
+  app.put("/v1/admin/agents/:id/chats/:chatId/hearing", async (c) => {
+    const { tier } = objectBody(await c.req.json<unknown>());
+    if (tier !== null && tier !== "save" && tier !== "balanced" && tier !== "fast")
+      throw new MingleError("tier_invalid", 'send { "tier": "save" }, "balanced", "fast" or null');
+    return c.json(mingle.setHearTier(c.req.param("id"), c.req.param("chatId"), tier));
+  });
+
+  /**
+   * The owner adds or removes one name a group calls the agent by: `{ "alias": "小跟班" }`. One at a
+   * time, applied to the list as it is now, so a name the agent added meanwhile is kept.
+   */
+  for (const method of ["post", "delete"] as const) {
+    app[method]("/v1/admin/agents/:id/chats/:chatId/aliases", async (c) => {
+      const { alias } = objectBody(await c.req.json<unknown>());
+      if (typeof alias !== "string") throw new MingleError("alias_invalid", 'send { "alias": "<name>" }');
+      return c.json(mingle.ownerAlias(c.req.param("id"), c.req.param("chatId"), alias, method === "post"));
+    });
+  }
+
   /** The owner puts a group back on Mingle's own pace, whatever the agent set (docs/spec.md 4.2). */
   app.delete("/v1/admin/agents/:id/chats/:chatId/hearing", (c) =>
     c.json(mingle.resetHearPace(c.req.param("id"), c.req.param("chatId"))),
@@ -1532,4 +1568,9 @@ function lineState(task: Task): "running" | "queued" | "waiting" | "done" | "err
   if (task.status === "done") return "done";
   if (task.lineState === "queued") return "queued";
   return task.lineState === "running" ? "running" : "waiting";
+}
+
+/** A JSON body as an object to read fields from: `null`, a list or a value reads as having none. */
+function objectBody(body: unknown): Record<string, unknown> {
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
 }
