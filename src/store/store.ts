@@ -1107,12 +1107,19 @@ export class Store {
   }
 
   chatMessages(chatId: string, limit: number, before?: string): Message[] {
-    const anchor = before ? (this.message(before)?.createdAt ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+    // Before the anchor in the order stored: one stored in the same millisecond still came first.
+    const anchor = before
+      ? (this.db.prepare("SELECT created_at, rowid FROM messages WHERE id = ?").get(before) as
+          | { created_at: number; rowid: number }
+          | undefined)
+      : undefined;
+    const at = anchor ? Number(anchor.created_at) : Number.MAX_SAFE_INTEGER;
+    const row = anchor ? Number(anchor.rowid) : Number.MAX_SAFE_INTEGER;
     const rows = this.db
       .prepare(
-        "SELECT * FROM messages WHERE chat_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        "SELECT * FROM messages WHERE chat_id = ? AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT ?",
       )
-      .all(chatId, anchor, limit) as Row[];
+      .all(chatId, at, at, row, limit) as Row[];
     return rows.map(toMessage).reverse();
   }
 

@@ -1506,7 +1506,12 @@ export class Mingle {
     if (knownBot && !owner && !contact.isBot) contact = this.store.setContactBot(contact.id, true) ?? contact;
     // The owner is a person, whatever was marked.
     const bot = !owner && contact.isBot;
-    const quoted = inbound.replyTo ? this.store.messageByPlatformId(chat.id, inbound.replyTo) : undefined;
+    // A reply in a thread to a message in the chat it hangs off (a Feishu thread under the group's
+    // message, docs/spec.md 4.13): the message it quotes is in the parent chat.
+    const quoted = inbound.replyTo
+      ? (this.store.messageByPlatformId(chat.id, inbound.replyTo) ??
+        (parent ? this.store.messageByPlatformId(parent.id, inbound.replyTo) : undefined))
+      : undefined;
     const replyTo = quoted?.id ?? null;
     // A message from before the bot joined is the group's past: kept for reading, never answered.
     const decision = inbound.earlier

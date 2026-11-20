@@ -212,6 +212,34 @@ describe("lines in threads", () => {
     ).toContain(`Task ${task}`);
   });
 
+  it("takes a reply in a new thread under the agent's message as addressed to it", async () => {
+    const front: string[] = [];
+    current = await rig(async (t) => {
+      front.push(t.input);
+      for (const id of messageIds(t.input)) {
+        if (t.input.includes("weather")) await runCli(env(t), ["message", "reply", id], "Sunny on Saturday.");
+      }
+    });
+    const { channel } = current;
+    channel.threads = true;
+    channel.receive({ text: "@Alex weather on Saturday?" });
+    await until(() => channel.sent.some((m) => m.text === "Sunny on Saturday."));
+    const answer = channel.sent.find((m) => m.text === "Sunny on Saturday.");
+    // "Reply in thread" on the agent's answer: a thread chat of its own, quoting a message in the group.
+    channel.receive({
+      text: "And Sunday?",
+      addressedToBot: false,
+      replyTo: answer?.platformId as string,
+      chat: {
+        platformId: `-100:${answer?.platformId}`,
+        kind: "thread",
+        parent: { platformId: "-100" },
+        followUp: true,
+      },
+    });
+    await until(() => front.some((input) => input.includes("And Sunday?")));
+  });
+
   it("guides a line to talk in its thread at a few moments, report where there is none, and stop when told", () => {
     const line = renderManual("Alex", "", "darwin", [], { taskId: "t9", title: "Fix login", home: "/h/alex" });
     expect(line).toContain("when you start, when you need to ask someone, when the direction changes");
