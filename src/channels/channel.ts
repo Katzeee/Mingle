@@ -48,6 +48,12 @@ export interface Capabilities {
    * the name goes out as plain text, which notifies nobody and wakes no bot.
    */
   readonly mentions?: true;
+  /**
+   * Can open a thread under a message by replying into it (`OutboundMessage.inThread`): a Feishu
+   * "reply in thread", a Discord thread started from a message (docs/spec.md 4.13). Absent: such a
+   * reply goes out as a plain quoted reply, as before.
+   */
+  readonly threads?: true;
   /** Largest text body one message can carry; longer bodies are split by the core. */
   readonly maxTextLength: number;
 }
@@ -261,6 +267,20 @@ export interface OutboundMessage {
    * `mentionSpots` finds as a real mention; elsewhere the text goes out as written.
    */
   readonly mentions?: readonly Mention[];
+  /**
+   * Reply to `replyTo` in a thread under it, opening one if it has none (where `Capabilities.threads`).
+   * `title` names the thread where the platform names threads. The result's `thread` is where the
+   * reply landed. Where a thread cannot be opened after all, it goes out as a quoted reply and
+   * reports `thread_dropped`.
+   */
+  readonly inThread?: { readonly title: string };
+  /**
+   * This reply is an outcome the whole chat should see, not only those following a thread under
+   * `replyTo` (a line's result, docs/spec.md 4.13). Where a reply to `replyTo` would land in its
+   * thread (Feishu, once one is open under it), it goes out as a message of its own in the chat;
+   * where a thread reply can also show in the channel (Slack), it does both. Elsewhere ignored.
+   */
+  readonly inChat?: true;
 }
 
 export type SendResult =
@@ -273,6 +293,8 @@ export type SendResult =
        * ID (`openDirect`) on a platform that names the chat only once a message is in it.
        */
       readonly chat?: string;
+      /** The thread the message went into, when it opened one (`OutboundMessage.inThread`). */
+      readonly thread?: ChatRef;
     }
   /** The platform refused. `retryable` says whether trying again can help. */
   | {
@@ -300,6 +322,8 @@ export type Degradation =
   | "files_dropped"
   | "markdown_flattened"
   | "text_split"
+  /** Asked for a thread (`OutboundMessage.inThread`), sent as a quoted reply: none could be opened. */
+  | "thread_dropped"
   /** `@name`s went out as plain text: the chat app has no mention a bot can write. */
   | "mentions_plain";
 

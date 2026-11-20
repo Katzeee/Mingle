@@ -58,6 +58,8 @@ const CAPABILITIES: Capabilities = {
   fileDownload: true,
   listMembers: false,
   mentions: true,
+  // A thread started from a message (needs Create Public Threads; without it, a quoted reply).
+  threads: true,
   // A message holds 2,000 characters; leave room for what the adapter adds.
   maxTextLength: 1_900,
 };
@@ -470,6 +472,29 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
         const sent = await request<{ id: string }>("POST", `/channels/${chat.platformId}/messages`, payload);
         return { id: sent.id, degraded: [...new Set(degraded)] };
       };
+      /**
+       * A public thread from the message (docs/spec.md 4.13). Its ID is the message's: one that was
+       * already started is used as it is. Without Create Public Threads, none.
+       */
+      const startThread = async (chat: ChatRef, messageId: string, title: string): Promise<{ thread?: ChatRef }> => {
+        const name = title.replace(/\s+/g, " ").trim().slice(0, 100) || "Thread";
+        const thread = (id: string): ChatRef => {
+          channels.set(id, { kind: "thread", name: `#${name}` });
+          return { platformId: id, kind: "thread", name: `#${name}`, followUp: true };
+        };
+        try {
+          const started = await request<{ id: string }>(
+            "POST",
+            `/channels/${chat.platformId}/messages/${messageId}/threads`,
+            { name, auto_archive_duration: 1440 },
+          );
+          return { thread: thread(started.id) };
+        } catch (error) {
+          // 160004: a thread was already created for this message.
+          if (error instanceof DiscordError && error.code === 160004) return { thread: thread(messageId) };
+          return {};
+        }
+      };
       const edit = (chat: ChatRef, id: string, content: string) =>
         request("PATCH", `/channels/${chat.platformId}/messages/${id}`, {
           content,
@@ -518,12 +543,20 @@ export function discordChannel(options: DiscordOptions = {}): Channel {
         async send(message: OutboundMessage): Promise<SendResult> {
           try {
             const text = discordMentions(message.text.trim(), message.mentions);
-            const sent = await post(message.chat, text, message.replyTo, [...(message.files ?? [])]);
+            const opening =
+              message.inThread && message.replyTo && message.chat.kind === "group"
+                ? await startThread(message.chat, message.replyTo, message.inThread.title)
+                : undefined;
+            const sent = opening?.thread
+              ? await post(opening.thread, text, undefined, [...(message.files ?? [])])
+              : await post(message.chat, text, message.replyTo, [...(message.files ?? [])]);
             if (!sent.id) return { kind: "failed", code: "too_large", retryable: false };
+            const degraded = [...sent.degraded, ...(opening && !opening.thread ? ["thread_dropped" as const] : [])];
             return {
               kind: "sent",
               platformId: sent.id,
-              ...(sent.degraded.length ? { degraded: sent.degraded } : {}),
+              ...(degraded.length ? { degraded } : {}),
+              ...(opening?.thread ? { thread: opening.thread } : {}),
             };
           } catch (error) {
             return sendFailure(error);

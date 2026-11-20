@@ -389,6 +389,8 @@ export interface Task {
   /** Worked on in a line of its own; null for a task that is only a note. */
   line: LineState | null;
   summary: string | null;
+  /** How far the line is, in one line: the latest it said in its thread, or reported. */
+  progress: string | null;
   error: string | null;
   createdAt: number;
   updatedAt: number;

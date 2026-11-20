@@ -211,6 +211,8 @@ describe("feishu document comments (MING-126)", () => {
         platformId: "doc:docx:doxTOKEN:c1",
         kind: "thread",
         name: "Mingle 发布软文 · “业务方在内部工单系统 modio 里提需求”",
+        // One conversation: once the agent answered, replies there need no @ (docs/spec.md 6.8).
+        followUp: true,
       },
       sender: { id: OTHER, name: "张云杨", isBot: false },
       addressedToBot: true,

@@ -14,6 +14,13 @@ export interface SendRequest {
   readonly notice?: boolean;
   /** Sent by the line working on this task (docs/spec.md 4.13): replies to it go back to that line. */
   readonly lineTaskId?: string | undefined;
+  /**
+   * Reply to `replyTo` in a thread under it, opening one where the chat app can (docs/spec.md 4.13).
+   * `title` names the thread where threads have names. Elsewhere a plain reply.
+   */
+  readonly inThread?: { readonly title: string } | undefined;
+  /** An outcome for the whole chat, not only the thread under `replyTo` (`OutboundMessage.inChat`). */
+  readonly inChat?: boolean | undefined;
 }
 
 export interface SendReport {
@@ -24,6 +31,8 @@ export interface SendReport {
   readonly mentioned: readonly { readonly contact: string; readonly name: string }[];
   /** `@words` that are nobody here: they went out as plain text. */
   readonly unmatched: readonly string[];
+  /** The thread the message went into, when sending it opened one (`SendRequest.inThread`). */
+  readonly thread?: string;
 }
 
 /** Everything an agent sends goes through here: lookup, splitting, retries, and marking messages answered. */
@@ -78,6 +87,7 @@ export class Outbox {
     const chunks = split(text, live.capabilities().maxTextLength);
     let ref: ChatRef = { platformId: chat.platformId, kind: chat.kind, ...(chat.name ? { name: chat.name } : {}) };
     const sent: Message[] = [];
+    let thread: string | undefined;
     const degraded = new Set<Degradation>(chunks.length > 1 ? ["text_split"] : []);
     if (found.mentions.length && !live.capabilities().mentions) degraded.add("mentions_plain");
     const report = (state: SendReport["state"]): SendReport => ({
@@ -86,6 +96,7 @@ export class Outbox {
       degraded: [...degraded],
       mentioned: found.mentioned,
       unmatched: found.unmatched,
+      ...(thread ? { thread } : {}),
     });
     for (const [i, chunk] of chunks.entries()) {
       const last = i === chunks.length - 1;
@@ -116,11 +127,16 @@ export class Outbox {
         if (result.kind === "sent")
           result = { ...result, platformId: intoLive.kind === "sent" ? intoLive.platformId : result.platformId };
       } else {
+        // The first piece opens the thread; the rest follow it there.
+        const opening =
+          i === 0 && quoted?.platformId && request.inThread && chat.kind === "group" && live.capabilities().threads;
         result = await this.attempt(live, {
           chat: ref,
           text: chunk,
           ...mentions,
           ...(i === 0 && quoted?.platformId ? { replyTo: quoted.platformId } : {}),
+          ...(opening ? { inThread: request.inThread } : {}),
+          ...(i === 0 && quoted && request.inChat ? { inChat: true as const } : {}),
           ...(files ? { files } : {}),
         });
       }
@@ -129,6 +145,18 @@ export class Outbox {
           store.renameChatPlatformId(chat.id, result.chat);
           ref = { ...ref, platformId: result.chat };
         }
+        if (result.thread) {
+          const opened = store.upsertChat({
+            connectionId: chat.connectionId,
+            platformId: result.thread.platformId,
+            kind: "thread",
+            name: result.thread.name,
+            parentId: chat.kind === "thread" ? (chat.parentId ?? undefined) : chat.id,
+          });
+          thread = opened.id;
+          ref = result.thread;
+        }
+        if (thread) store.setMessageChat(record.id, thread);
         store.setOutboundResult(record.id, "sent", result.platformId);
         for (const d of result.degraded ?? []) degraded.add(d);
         sent.push(store.message(record.id) as Message);

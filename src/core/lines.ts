@@ -38,6 +38,11 @@ export interface LineDeps {
    * the main session, and the line should not have to go and find the conversation it came from.
    */
   readonly source?: (task: Task) => string;
+  /**
+   * The latest of what was said in the line's thread, for a line whose conversation could not be
+   * resumed: the thread is the work's record, beyond the brief and the last summary.
+   */
+  readonly thread?: (task: Task) => string;
   readonly paused: (agentId: string) => boolean;
   readonly log?: (line: string) => void;
   /**
@@ -152,6 +157,23 @@ export class Lines {
   }
 
   /**
+   * The line closed its own task, from inside its turn (someone told it to stop): it ends for good
+   * once this turn is over, without cutting off the command that closed it.
+   */
+  release(taskId: string): void {
+    this.deps.store.updateLine(taskId, { lineState: "ended" });
+    const line = this.lines.get(taskId);
+    if (!line) return;
+    line.pending = [];
+    line.pendingIds.clear();
+    line.steered.clear();
+    if (!line.active) {
+      this.lines.delete(taskId);
+      void this.letGo(line, false);
+    }
+  }
+
+  /**
    * `/stop`: every line of the agent stops its turn and waits; the next message handed to it wakes
    * it. Queued ones stay queued.
    */
@@ -202,13 +224,14 @@ export class Lines {
   }
 
   /** The brief a line starts from: the task, the message it came from, and what is asked. */
-  private brief(task: Task, previous?: string): string {
+  private brief(task: Task, previous?: string, again = false): string {
     const parts = [
       `[task=${task.id} from=${task.fromMessage ?? "-"} chat=${task.fromChat ?? "-"}] ${task.title}`,
       task.brief ?? "",
       this.deps.source?.(task) ?? "",
     ];
     if (task.summary) parts.push(`What you reported last time:\n${task.summary}`);
+    if (again) parts.push(this.deps.thread?.(task) ?? "");
     if (previous) parts.push(previous);
     return parts.filter(Boolean).join("\n\n");
   }
@@ -265,7 +288,7 @@ export class Lines {
     const input = line.pending.join("\n\n");
     line.pending = [];
     line.pendingIds.clear();
-    const text = fresh ? this.brief(task, input) : input;
+    const text = fresh ? this.brief(task, input, true) : input;
     const result = await session.deliver(text, randomUUID()).catch((error: Error) => ({
       outcome: "rejected" as const,
       reason: error.message,
@@ -315,6 +338,13 @@ export class Lines {
     const { store } = this.deps;
     const task = store.taskById(line.taskId);
     if (!task) return;
+    // It closed its own task in this turn: nothing more to do, ever.
+    if (task.lineState === "ended") {
+      this.lines.delete(line.taskId);
+      await this.letGo(line, false);
+      this.schedule(line.agentId);
+      return;
+    }
     if (outcome.kind === "failed") {
       this.failed(line, task, outcome.reason ?? outcome.failure ?? "the turn failed");
       return;

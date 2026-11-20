@@ -292,11 +292,8 @@ async function agentCommand(group: string, action: string | undefined, args: str
       return true;
     }
     case "message send": {
-      const to = need(
-        flags.to,
-        "chat_required",
-        "usage: mingle message send --to <chat-id | contact-id> <<'MSG' ... MSG",
-      );
+      // A line may leave --to out: it sends about its task, where that is (docs/spec.md 4.13).
+      const to = flags.to;
       const text = await readStdin();
       const report = await call()<SendReport>("POST", "/v1/agent/messages/send", { to, text, files });
       print(report, () => sendText(report));
@@ -488,15 +485,22 @@ async function agentCommand(group: string, action: string | undefined, args: str
       const title = need(args.join(" "), "title_required", usage);
       const from = need(flags.from, "from_required", usage);
       const brief = need((await readStdin()).trim(), "brief_required", usage);
-      const task = await call()<{ id: string; title: string; lineState: string }>("POST", "/v1/agent/tasks/run", {
-        title,
-        from,
-        brief,
-      });
+      const task = await call()<{ id: string; title: string; lineState: string; thread?: string }>(
+        "POST",
+        "/v1/agent/tasks/run",
+        { title, from, brief },
+      );
+      // Where people follow the work: a thread under the message where the chat app has them.
+      const where =
+        task.thread === "opens"
+          ? `\nYour acknowledgement (message reply ${from}) opens a thread under it: the work goes on there, the result comes back to the chat.`
+          : task.thread === "existing"
+            ? "\nThe work goes on in the thread the message is in."
+            : "";
       print(task, () =>
         task.lineState === "queued"
-          ? `started ${task.id}: ${task.title} (waiting for a free line; it starts by itself)`
-          : `started ${task.id}: ${task.title}; it answers under ${from} itself`,
+          ? `started ${task.id}: ${task.title} (waiting for a free line; it starts by itself)${where}`
+          : `started ${task.id}: ${task.title}; it answers under ${from} itself${where}`,
       );
       return true;
     }
@@ -519,6 +523,16 @@ async function agentCommand(group: string, action: string | undefined, args: str
       const summary = need((await readStdin()).trim(), "summary_required", "pass a summary on standard input");
       const task = await call()<{ id: string; title: string }>("POST", `/v1/agent/tasks/${id}/done`, { summary });
       print(task, () => `${task.id} is done; your main session gets the summary`);
+      return true;
+    }
+    case "task status": {
+      const text = need(
+        args.join(" ").trim(),
+        "text_required",
+        'usage: mingle task status "Found the cause; fixing it"',
+      );
+      const task = await call()<{ id: string; progress: string | null }>("POST", "/v1/agent/tasks/progress", { text });
+      print(task, () => `${task.id}: ${task.progress ?? ""}`);
       return true;
     }
     case "task update": {
@@ -1034,7 +1048,7 @@ For agents (inside a session):
   mingle chat list | info <chat> | hear <chat> --every 1h | --mute | --default
   mingle contact list [name] | info <user> | name <user> "name" | link <user> <user> | unlink <user> | note <user>
   mingle file get <file>
-  mingle task create | run | tell | done | list | update
+  mingle task create | run | tell | status | done | list | update
   mingle reminder set | list | snooze | cancel
   mingle whoami | manual
 

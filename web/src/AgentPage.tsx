@@ -1081,6 +1081,11 @@ function LineRow({ agentId, task, onDropped }: { agentId: string; task: Task; on
           <span className="truncate">{task.from.name ?? t("chat.dm")}</span>
         </span>
       ) : null}
+      {active && state !== "error" && task.progress ? (
+        <span className="truncate text-ink3" title={task.progress}>
+          {task.progress}
+        </span>
+      ) : null}
       {state === "done" && task.summary ? (
         <span className="line-clamp-2 text-ink3" title={task.summary}>
           {task.summary}

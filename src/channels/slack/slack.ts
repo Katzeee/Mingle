@@ -344,12 +344,14 @@ export function slackChannel(options: SlackOptions = {}): Channel {
       };
       await open();
 
-      const post = async (chat: ChatRef, text: string, replyTo?: string) => {
+      const post = async (chat: ChatRef, text: string, replyTo?: string, broadcast = false) => {
         const { channel, thread } = parseChat(chat.platformId);
         const threadTs = thread ?? (chat.kind === "group" ? replyTo : undefined);
         const sent = await call<{ ts: string }>("chat.postMessage", {
           channel,
           ...(threadTs ? { thread_ts: threadTs } : {}),
+          // "Also send to channel": a line's result shows in the channel too (docs/spec.md 4.13).
+          ...(threadTs && broadcast ? { reply_broadcast: true } : {}),
           ...content(text),
         });
         if (threadTs) threads.add(`${channel}:${threadTs}`);
@@ -369,7 +371,12 @@ export function slackChannel(options: SlackOptions = {}): Channel {
             const staged: Staged[] = [];
             for (const file of message.files ?? []) staged.push(await stageUpload(call, fetchImpl, file));
             if (message.text.trim())
-              ts = await post(message.chat, slackMentions(message.text, message.mentions), message.replyTo);
+              ts = await post(
+                message.chat,
+                slackMentions(message.text, message.mentions),
+                message.replyTo,
+                message.inChat === true,
+              );
             if (staged.length) {
               await call("files.completeUploadExternal", {
                 files: staged,

@@ -38,11 +38,14 @@ type Env = { Variables: { agent: Agent; line: string | undefined } };
 
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "closed"];
 
-/** What a line may write (docs/spec.md 4.13): answer about its task, fetch files, finish it. */
-const LINE_WRITES = [
-  /^\/v1\/agent\/messages\/(reply|send)$/,
-  /^\/v1\/agent\/files\/[^/]+\/download$/,
-  /^\/v1\/agent\/tasks\/[^/]+\/done$/,
+/** What a line may write (docs/spec.md 4.13): answer about its task, fetch files, report, finish or stop it. */
+const LINE_WRITES: readonly (readonly [string, RegExp])[] = [
+  ["POST", /^\/v1\/agent\/messages\/(reply|send)$/],
+  ["POST", /^\/v1\/agent\/files\/[^/]+\/download$/],
+  ["POST", /^\/v1\/agent\/tasks\/[^/]+\/done$/],
+  ["POST", /^\/v1\/agent\/tasks\/progress$/],
+  // Only to close its own task, when someone says to stop (checked in the route).
+  ["PATCH", /^\/v1\/agent\/tasks\/[^/]+$/],
 ];
 
 /**
@@ -107,10 +110,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
     c.set("agent", agent);
     c.set("line", mingle.lineForToken(token));
     // A line speaks for its agent about its task only: it reads freely, and writes only these.
-    if (c.get("line") && c.req.method !== "GET" && !LINE_WRITES.some((r) => r.test(new URL(c.req.url).pathname))) {
+    if (
+      c.get("line") &&
+      c.req.method !== "GET" &&
+      !LINE_WRITES.some(([method, path]) => method === c.req.method && path.test(new URL(c.req.url).pathname))
+    ) {
       throw new MingleError(
         "line_out_of_scope",
-        "this session works on one task: it can reply and send about that task, fetch files and finish it with task done, nothing else",
+        "this session works on one task: it can reply and send about that task, fetch files, say how far it is with task status, finish it with task done or close it when told to stop, nothing else",
         403,
       );
     }
@@ -191,13 +198,22 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!original) throw notFound("message", body.messageId);
     const line = c.get("line");
     if (line) lineScope(line, original);
+    // The line's own task, or the one a line works on for this message (docs/spec.md 4.13).
+    const task = line ? store.taskById(line) : store.threadlessLine(agent.id, original.id);
+    // A line answering the message it works for, with a thread open: the result, for the whole chat.
+    const result = Boolean(line && task?.threadChat && original.id === task.fromMessage);
     const report = await mingle.outbox.send(agent.id, {
       chatId: original.chatId,
       text: body.text ?? "",
       replyTo: original.id,
       files: resolveFiles(mingle.homeDir(agent), body.files),
       lineTaskId: line,
+      // The main session acknowledging work a line took on: the work gets a thread of its own.
+      ...(!line && task ? { inThread: { title: task.title } } : {}),
+      ...(result ? { inChat: true } : {}),
     });
+    // What it answers in the thread is how far it is; the answer to the message itself is the result.
+    if (task) mingle.lineSpoke(task.id, report, { progress: Boolean(line) && original.id !== task.fromMessage });
     return c.json(report);
   });
 
@@ -208,17 +224,26 @@ export function createApi(mingle: Mingle): Hono<Env> {
     // A chat, or a person by contact or person ID: their direct chat, opened if need be.
     const to = body.to ?? body.chatId ?? "";
     const line = c.get("line");
-    // A line sends only into the chat its task came from, under the message it came from.
+    // A line sends only about its task: into its thread, or under the message it came from.
     const task = line ? store.taskById(line) : undefined;
-    if (line && (!task?.fromChat || (to && to !== task.fromChat))) lineScope(line);
-    const chatId = task?.fromChat ?? (await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to));
+    if (line && (!task?.fromChat || (to && to !== task.fromChat && to !== task.threadChat))) lineScope(line);
+    if (!line && !to)
+      throw new MingleError("chat_required", "usage: mingle message send --to <chat-id | contact-id> <<'MSG' ... MSG");
+    // A thread opened under the message: everything but the result goes there (docs/spec.md 4.13).
+    const inOwnThread = Boolean(task?.threadChat && task.threadChat !== task.fromChat);
+    const chatId = task
+      ? ((inOwnThread ? task.threadChat : task.fromChat) as string)
+      : await sendTarget(store, (id) => mingle.liveConnection(id), agent.id, to);
     const report = await mingle.outbox.send(agent.id, {
       chatId,
       text: body.text ?? "",
-      ...(task?.fromMessage ? { replyTo: task.fromMessage } : {}),
+      ...(task?.fromMessage && !inOwnThread ? { replyTo: task.fromMessage } : {}),
+      // No thread yet: the line's first word about its work opens one, where the chat app can.
+      ...(task && !task.threadChat ? { inThread: { title: task.title } } : {}),
       files: resolveFiles(mingle.homeDir(agent), body.files),
       lineTaskId: line,
     });
+    if (task) mingle.lineSpoke(task.id, report, { progress: true });
     return c.json(report);
   });
 
@@ -441,7 +466,9 @@ export function createApi(mingle: Mingle): Hono<Env> {
       throw new MingleError("from_required", "pass --from <message-id>: the message the work is for, where it answers");
     if (!body.brief?.trim())
       throw new MingleError("brief_required", "pass the brief on standard input: what to do, and what done looks like");
-    return c.json(mingle.runTask(agent.id, { title: body.title.trim(), from: body.from, brief: body.brief.trim() }));
+    const task = mingle.runTask(agent.id, { title: body.title.trim(), from: body.from, brief: body.brief.trim() });
+    // Whether the acknowledgement opens a thread for the work, so the main session can say where to follow it.
+    return c.json({ ...task, thread: task.threadChat ? "existing" : mingle.canOpenThread(task) ? "opens" : "none" });
   });
 
   /** Pass a message, a note, or both on to a line. */
@@ -473,13 +500,39 @@ export function createApi(mingle: Mingle): Hono<Env> {
     return c.json(mingle.doneTask(agent.id, line, summary ?? ""));
   });
 
+  /** A line says how far it is, for the console, where it has no thread to say it in (docs/spec.md 4.13). */
+  app.post("/v1/agent/tasks/progress", async (c) => {
+    const agent = c.get("agent");
+    const line = c.get("line");
+    if (!line) {
+      throw new MingleError(
+        "line_only",
+        "task status is how a line says how far it is; tell people in the chat instead",
+        403,
+      );
+    }
+    const { text } = await c.req.json<{ text?: string }>();
+    if (!text?.trim())
+      throw new MingleError("text_required", 'say how far you are: mingle task status "Found the cause"');
+    return c.json(mingle.taskProgress(agent.id, line, text));
+  });
+
   app.patch("/v1/agent/tasks/:id", async (c) => {
     const agent = c.get("agent");
     const { status } = await c.req.json<{ status: TaskStatus }>();
+    const line = c.get("line");
+    // A line may close its own task when someone tells it to stop; nothing else.
+    if (line && (line !== c.req.param("id") || status !== "closed")) {
+      throw new MingleError(
+        "line_out_of_scope",
+        `this session can only close its own task when told to stop: task update ${line} --status closed`,
+        403,
+      );
+    }
     if (!TASK_STATUSES.includes(status)) {
       throw new MingleError("invalid_status", `use one of: ${TASK_STATUSES.join(", ")}`);
     }
-    return c.json(mingle.setTaskStatus(agent.id, c.req.param("id"), status));
+    return c.json(mingle.setTaskStatus(agent.id, c.req.param("id"), status, Boolean(line)));
   });
 
   app.post("/v1/agent/reminders", async (c) => {
@@ -1161,6 +1214,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
           status: t.status,
           line: t.lineState ? lineState(t) : null,
           summary: t.summary,
+          progress: t.progress,
           error: t.lineError,
           createdAt: t.createdAt,
           updatedAt: t.updatedAt,

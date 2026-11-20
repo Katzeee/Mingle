@@ -11,6 +11,7 @@ import {
   type FeishuApi,
   feishuChannel,
   GROUP_MESSAGES_SCOPE,
+  groupThread,
   type LarkChannelLike,
   PROFILE_SCOPES,
   toInbound,
@@ -282,6 +283,29 @@ describe("feishu toInbound", () => {
     });
   });
 
+  it("maps a message in a group's thread to a thread chat under the group (docs/spec.md 4.13)", () => {
+    expect(
+      toInbound(
+        message({ threadId: "omt_1", rootId: "om_0", replyToMessageId: "om_0", mentionedBot: false }),
+        bot,
+        "周末徒步",
+      ),
+    ).toMatchObject({
+      chat: {
+        platformId: "oc_1:om_0",
+        kind: "thread",
+        parent: { platformId: "oc_1", name: "周末徒步" },
+        followUp: true,
+      },
+      addressedToBot: false,
+    });
+    // A topic group's first message is a thread of its own.
+    expect(toInbound(message({ threadId: "omt_2" }), bot, "话题群")?.chat.platformId).toBe("oc_1:om_1");
+    expect(groupThread("oc_1:om_0")).toEqual({ chat: "oc_1", root: "om_0" });
+    expect(groupThread("oc_1")).toBeUndefined();
+    expect(groupThread("doc:docx:tok:c1")).toBeUndefined();
+  });
+
   it("treats direct messages as addressed and ignores the bot's own messages", () => {
     expect(toInbound(message({ chatType: "p2p", mentionedBot: false }), bot, undefined)?.addressedToBot).toBe(true);
     expect(toInbound(message({ mentionedBot: false }), bot, undefined)?.addressedToBot).toBe(false);
@@ -424,6 +448,38 @@ describe("feishu connection", () => {
       kind: "uncertain",
     });
     rmSync(dir, { recursive: true, force: true });
+    await connection.close();
+  });
+
+  it("opens a thread under a message, talks in it, and sends the result to the chat itself (docs/spec.md 4.13)", async () => {
+    const lark = fakeLark();
+    const channel = feishuChannel({ api: fakeApi({ activated: () => true }), createChannel: () => lark.channel });
+    const connection = await channel.connect(
+      { appId: "cli_1", appSecret: "s" },
+      { onMessage: () => {}, onState: () => {}, onMembership: () => {} },
+    );
+    expect(connection.capabilities().threads).toBe(true);
+    const group = { platformId: "oc_1", kind: "group" as const, name: "周末徒步" };
+    const opened = await connection.send({ chat: group, text: "收到", replyTo: "om_1", inThread: { title: "修登录" } });
+    expect(opened).toMatchObject({
+      kind: "sent",
+      thread: {
+        platformId: "oc_1:om_1",
+        kind: "thread",
+        parent: { platformId: "oc_1", name: "周末徒步" },
+        followUp: true,
+      },
+    });
+    expect(lark.sent.at(-1)).toMatchObject({ to: "oc_1", opts: { replyTo: "om_1", replyInThread: true } });
+    // Into the thread: a reply to its root, in the thread.
+    await connection.send({ chat: { platformId: "oc_1:om_1", kind: "thread" }, text: "原因找到了" });
+    expect(lark.sent.at(-1)).toMatchObject({ to: "oc_1", opts: { replyTo: "om_1", replyInThread: true } });
+    // The result: a reply to the root would land in its thread, so it is a message of its own.
+    await connection.send({ chat: group, text: "修好了", replyTo: "om_1", inChat: true });
+    expect(lark.sent.at(-1)).toMatchObject({ to: "oc_1", opts: {} });
+    // Members of a thread are the group's.
+    await connection.listMembers({ platformId: "oc_1:om_1", kind: "thread" });
+    expect(lark.memberCalls.at(-1)?.chatId).toBe("oc_1");
     await connection.close();
   });
 
