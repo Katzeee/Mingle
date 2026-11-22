@@ -136,7 +136,7 @@ describe("onboarding completion", () => {
       expect(store.agent(a2.id)?.hasReplied).toBe(true);
 
       // Removing the connection (and its history) keeps the milestone; so do later failures.
-      store.deleteConnection(store.connections(a1.id)[0]?.id as string);
+      store.deleteConnection(store.connections(a1.id).filter((n) => n.platform !== "local")[0]?.id as string);
       expect(store.agent(a1.id)?.hasReplied).toBe(true);
       const again = store.insertOutbound({ chatId: c2.id, body: "late", replyTo: null });
       store.setOutboundResult(again.id, "failed", null);

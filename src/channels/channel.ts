@@ -22,7 +22,9 @@ export type Platform =
   | "discord"
   | "telegram"
   | "imessage"
-  | "github";
+  | "github"
+  /** The owner's private chat in the Mingle console (docs/spec.md 6.9). Built in, not a chat app. */
+  | "local";
 
 export type ChatKind = "dm" | "group" | "thread";
 
@@ -390,6 +392,12 @@ export interface Channel {
   readonly directMessages?: false;
   /** A link that opens a direct chat with the bot with `/start <code>` ready to send (Telegram). */
   claimUrl?(bot: BotIdentity, code: string): string;
+  /**
+   * Built into Mingle rather than a chat app (the console's private chat, docs/spec.md 6.9): every
+   * agent has exactly one such connection, made by Mingle, with no credentials, no onboarding and
+   * no owner to claim. It is not listed among the agent's chat apps.
+   */
+  readonly builtin?: true;
 
   /** Start connecting a new bot. Yields progress until `succeeded` or `failed`. */
   onboard(

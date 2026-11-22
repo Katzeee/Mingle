@@ -1305,6 +1305,7 @@ Key facts:
 - The agent joins ${chatApps.map((id) => t.platforms[id]).join(", ")} as a bot, through each app's official bot API. People message it directly or @ it in a group.
 - On GitHub it uses an account of its own and answers @mentions in issues, pull requests and review threads from repository owners, members and collaborators.
 - On a Mac, it talks with you in iMessage in your chat with yourself, on your own Apple ID.
+- You can also chat with it privately right in the Mingle app, on the computer it runs on: the same agent and memory, Markdown and files both ways, with a desktop notification when it writes to you there. No chat app or bot credentials needed.
 - One agent keeps one long-lived session and one memory across every chat app. There are no session commands; the owner can send /stop.
 - It keeps tasks, reminders (a reminder can carry a shell check that Mingle runs locally, waking the agent only when its output changes: CI, a web page, a release) and an address book (one person's accounts across apps can be linked), hears group conversations and keeps up with one it is part of without being @-mentioned (a name or a nickname the group uses counts as a call), shows progress (a reaction, then a live reply), sends and receives files, and reports back where it was asked.
 - The owner is whoever scanned the code, or whoever sends the bot the 6-digit claim code the console shows. On public apps (Telegram, Discord, QQ), a new person or group waits for the owner's approval before the agent acts for them.

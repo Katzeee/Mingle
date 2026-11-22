@@ -396,7 +396,7 @@ describe("ignoring messages", () => {
     current = await rig(async () => {});
     const { mingle, agentId, admin, url } = current;
     const store = mingle.store;
-    const connection = await until(() => store.connections(agentId)[0]);
+    const connection = await until(() => store.connections(agentId).filter((n) => n.platform !== "local")[0]);
 
     // A connection Mingle never connected: messages here are offline, retry cannot reach them.
     const offline = store.createConnection({ agentId, platform: "telegram", secretRef: "mingle-offline" });

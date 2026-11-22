@@ -47,7 +47,7 @@ export const KEYS = {
   newAgent: { key: "N" },
   settings: { key: "," },
   agent: (index: number): Keys | undefined => (index < 9 ? { key: String(index + 1) } : undefined),
-  // An agent page's two tabs: macOS's Show Previous / Next Tab; Ctrl+Page Up / Down elsewhere.
+  // An agent page's previous (0) and next (1) tab: macOS's Show Previous / Next Tab; Ctrl+Page Up / Down elsewhere.
   tab: (index: number): Keys =>
     isMac ? { key: index === 0 ? "[" : "]", shift: true } : { key: index === 0 ? "PgUp" : "PgDn" },
   // Command-period cancels on macOS; the same key elsewhere.
@@ -127,8 +127,8 @@ export function onEscape(run: () => void) {
 }
 
 /**
- * An agent page's own keys: its tab, or stopping what it does. Ctrl+Tab and Ctrl+Shift+Tab
- * switch tabs on every platform too; with two tabs, previous is the first and next the second.
+ * An agent page's own keys: the previous (0) or next (1) tab, or stopping what it does. Ctrl+Tab
+ * and Ctrl+Shift+Tab switch tabs on every platform too.
  */
 export function pageAction(event: KeyboardEvent): { tab: 0 | 1 } | "stop" | null {
   if (event.altKey) return null;

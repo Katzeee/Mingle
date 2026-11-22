@@ -147,7 +147,7 @@ describe("bots in a chat", () => {
       mentions: [{ id: "ou_bryce", name: "Bryce小跟班", isBot: true }],
     });
     await until(() => turns.length === 1);
-    const connection = mingle.store.connections(agentId)[0];
+    const connection = mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0];
     expect(mingle.store.contactByPlatformId(connection?.id as string, "ou_bryce")).toMatchObject({
       name: "Bryce小跟班",
       isBot: true,
@@ -164,7 +164,7 @@ describe("bots in a chat", () => {
     });
     await new Promise((r) => setTimeout(r, 300));
     expect(turns).toHaveLength(0);
-    const connection = mingle.store.connections(agentId)[0];
+    const connection = mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0];
     expect(connection?.ownerId).toBeNull();
     expect(mingle.store.contactByPlatformId(connection?.id as string, "bot1")?.isBot).toBe(true);
 

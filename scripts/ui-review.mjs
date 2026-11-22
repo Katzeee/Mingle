@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -490,12 +490,87 @@ try {
   insert("UPDATE agents SET status = 'idle' WHERE id = ?", offAgent.id);
   insert("UPDATE agents SET status = 'idle' WHERE id = ?", doneAgent.id);
   insert("UPDATE agents SET status = 'idle', has_replied = 1 WHERE id = ?", lonelyAgent.id);
+  // The private chat (docs/spec.md 6.9): Alex's has history in every shape; Poppy's is empty.
+  const localOf = (agent) =>
+    db.prepare("SELECT id FROM connections WHERE agent_id = ? AND platform = 'local'").get(agent)?.id;
+  insert(
+    "INSERT INTO chats (id, connection_id, platform_id, kind, created_at, updated_at) VALUES ('cL', ?, 'owner', 'dm', ?, ?)",
+    localOf(alex.id),
+    now,
+    now,
+  );
+  const files = join(home, "uploads", alex.id, "review");
+  mkdirSync(files, { recursive: true });
+  writeFileSync(join(files, "trail-photo.png"), gradientPng(320));
+  writeFileSync(join(files, "Xiangshan north loop, winter timetable and packing notes (final).pdf"), "%PDF-1.4");
+  const local = (id, dir, body, state, ago, attachments = null) =>
+    insert(
+      "INSERT INTO messages (id, chat_id, direction, platform_id, sender_id, sender_name, body, attachments, triggers, state, created_at) VALUES (?, 'cL', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      id,
+      dir,
+      id,
+      dir === "in" ? "owner" : null,
+      dir === "in" ? "owner" : null,
+      body,
+      attachments,
+      dir === "in" ? 1 : 0,
+      state,
+      now - ago,
+    );
+  local("mL1", "in", "明早 9 点提醒我给房东转房租", "replied", 26 * 3_600_000);
+  local("mL2", "out", "好的，明天 09:00 提醒你转房租。", "sent", 26 * 3_600_000 - 30_000);
+  local("mL3", "in", "群里今天早上定了什么？顺便把三条路线对比一下", "replied", 3_000_000);
+  local(
+    "mL4",
+    "out",
+    "今天早上定了三件事：\n\n- 周六 **7:30** 香山公园北门集合\n- 李雷负责买 `12` 个人的保险\n- 下雨就改去八大处\n\n| 路线 | 距离 | 爬升 |\n| --- | --- | --- |\n| 香山北线 | 12 km | 540 m |\n| 西山 | 15 km | 720 m |\n\n原话在 [群聊记录](https://example.com/chat) 里，三条路线的完整对比我在旁边整理。",
+    "sent",
+    2_990_000,
+  );
+  insert("UPDATE tasks SET from_message = 'mL3', from_chat = 'cL' WHERE id = 't5'");
+  local(
+    "mL5",
+    "in",
+    "这张照片里是哪条路？",
+    "replied",
+    1_200_000,
+    JSON.stringify([
+      { id: "fL1", ref: join(files, "trail-photo.png"), name: "trail-photo.png", size: 4096, mime: "image/png" },
+    ]),
+  );
+  local(
+    "mL6",
+    "out",
+    "是香山北线半山亭附近。冬季时刻表和装备清单我整理成了一份文件：",
+    "sent",
+    1_150_000,
+    JSON.stringify([
+      {
+        id: "fL2",
+        ref: join(files, "Xiangshan north loop, winter timetable and packing notes (final).pdf"),
+        name: "Xiangshan north loop, winter timetable and packing notes (final).pdf",
+        size: 1_284_000,
+      },
+    ]),
+  );
+  local("mL7", "in", "周六要是下雨还去吗？", "failed", 600_000);
+  local(
+    "mL8",
+    "in",
+    "Could you also check the weather on Sunday, and what time sunrise is at the north gate?",
+    "delivered",
+    20_000,
+  );
+
   db.close();
 
   const pages = process.env.UI_REMOTE_ONLY
     ? []
     : [
         ["agent", `/a/${alex.slug}`],
+        ["chat", `/a/${alex.slug}/chat`],
+        ["chat-empty", `/a/${idleAgent.slug}/chat`],
+        ["chat-paused", `/a/${pausedAgent.slug}/chat`],
         ["long", `/a/${long.slug}`],
         ["new", "/new"],
         ["home", "/"],
@@ -601,6 +676,28 @@ try {
       assert.ok(dom.includes(zh ? "未命名 · u3hr" : "Unnamed · u3hr"), "unnamed second owner not labelled");
       assert.ok(dom.includes("Maximiliana"), "named owner not shown by name");
       assert.ok(!/>\s*(你|You)\s*</.test(dom), "an owner shared between two people shows as you");
+    },
+    chat: (dom, zh) => {
+      assert.ok(dom.includes("<table"), "the agent's Markdown table did not render");
+      assert.ok(dom.includes("<strong"), "the agent's bold text did not render");
+      assert.ok(dom.includes("trail-photo.png"), "the owner's picture is missing");
+      assert.ok(
+        dom.includes(zh ? "在访达中显示" : "Show in Finder") || process.platform !== "darwin",
+        "no reveal action",
+      );
+      assert.ok(dom.includes(zh ? "开始做" : "Started:"), "the work a message started is missing");
+      assert.ok(dom.includes(zh ? "出错，未回复" : "Failed to reply"), "the failed message does not say so");
+      assert.ok(!dom.includes("**"), "raw Markdown shows");
+    },
+    "chat-empty": (dom, zh) => {
+      assert.ok(
+        dom.includes(zh ? "在这台电脑上和 Poppy 私聊" : "Chat with Poppy on this computer"),
+        "empty chat has no title",
+      );
+    },
+    "chat-paused": (dom, zh) => {
+      assert.ok(dom.includes(zh ? "已暂停" : "is paused"), "paused chat does not say so");
+      assert.ok(/<textarea[^>]*disabled/.test(dom), "a paused agent's chat takes messages");
     },
     paused: (dom, zh) => {
       assert.ok(dom.includes(zh ? "已暂停" : "is paused"), "paused agent does not say so");

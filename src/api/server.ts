@@ -13,7 +13,7 @@ import { contactAlias, MingleError, notFound } from "../core/errors.ts";
 import { excerpt, renderMessage } from "../core/format.ts";
 import { readRole } from "../core/home.ts";
 import { renderManual } from "../core/manual.ts";
-import { AVATAR_MAX_BYTES, type Mingle } from "../core/mingle.ts";
+import { AVATAR_MAX_BYTES, type Mingle, mimeOf, UPLOAD_MAX_BYTES } from "../core/mingle.ts";
 import * as people from "../core/people.ts";
 import { nextFire, parseDuration } from "../core/schedule.ts";
 import type { HarnessInfo } from "../harness/harness.ts";
@@ -56,6 +56,8 @@ const LINE_WRITES: readonly (readonly [string, RegExp])[] = [
 export function createApi(mingle: Mingle): Hono<Env> {
   const app = new Hono<Env>();
   const { store } = mingle;
+  /** The chat apps the owner added: the private chat is built in, not one of them (docs/spec.md 6.9). */
+  const chatApps = (agentId: string) => store.connections(agentId).filter((n) => !mingle.isBuiltin(n));
 
   app.onError((error, c) => {
     if (error instanceof MingleError) {
@@ -144,7 +146,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.get("/v1/agent/whoami", (c) => {
     const agent = c.get("agent");
-    const connections = store.connections(agent.id).map((n) => ({
+    const connections = chatApps(agent.id).map((n) => ({
       platform: n.platform,
       bot: n.botName,
       state: mingle.isLive(n.id) ? n.state : n.state === "connected" ? "reconnecting" : n.state,
@@ -669,8 +671,31 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.post("/v1/admin/ssh/installations", async (c) => c.json(mingle.remotes.install(await c.req.json()), 202));
   app.get("/v1/admin/ssh/installations/:id", (c) => c.json(mingle.remotes.installation(c.req.param("id"))));
 
+  /**
+   * The private chat (docs/spec.md 6.9): what the agent said there that the owner has not seen. While
+   * the console shows the chat, what arrives counts as seen at once, so the desktop app does not
+   * notify about what the owner is already reading.
+   */
+  const watching = new Map<string, number>();
+  const chatView = (agent: Agent) => {
+    const chat = mingle.localChatOf(agent.id);
+    if (!chat) return { unread: 0, last: null };
+    const since = (watching.get(agent.id) ?? 0) > Date.now() ? Date.now() : agent.chatSeenAt;
+    const { count, last } = store.saidSince(chat.id, since);
+    return {
+      unread: count,
+      last: last
+        ? {
+            id: last.id,
+            preview: [...last.body.replace(/\s+/g, " ").trim()].slice(0, 120).join(""),
+            at: last.createdAt,
+          }
+        : null,
+    };
+  };
+
   const agentView = (agent: Agent) => {
-    const connections = store.connections(agent.id);
+    const connections = chatApps(agent.id);
     const shared = sharedOwners(connections);
     return {
       ...agent,
@@ -695,6 +720,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       requests: accessRequests(agent.id),
       // Things under way at once, besides talking (docs/spec.md 4.13).
       doing: mingle.lines.busy(agent.id),
+      chat: chatView(agent),
     };
   };
 
@@ -824,7 +850,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
     c.json({
       version: VERSION,
       agents: store.agents().map((agent) => {
-        const connections = store.connections(agent.id);
+        const connections = chatApps(agent.id);
         const given = store.retryable(agent.id);
         return {
           id: agent.id,
@@ -842,6 +868,8 @@ export function createApi(mingle: Mingle): Hono<Env> {
           })),
           failed: given.filter((m) => m.state === "failed").length,
           unanswered: given.filter((m) => m.state === "unanswered").length,
+          // What it said in the private chat that the owner has not seen (docs/spec.md 6.9).
+          chat: chatView(agent),
         };
       }),
     }),
@@ -1284,6 +1312,117 @@ export function createApi(mingle: Mingle): Hono<Env> {
 
   app.get("/v1/admin/agents/:id/handoff-prompt", (c) => c.json({ text: mingle.handoffPrompt(c.req.param("id")) }));
 
+  // ------------------------------------------------------------ private chat (docs/spec.md 6.9)
+
+  /** One message of the private chat as the console shows it. Mingle's own notices are left out. */
+  const chatMessageView = (agent: Agent) => {
+    const lines = store.lineTasks(agent.id, 0);
+    return (m: Message) => {
+      const task = m.lineTaskId ? lines.find((t) => t.id === m.lineTaskId) : lines.find((t) => t.fromMessage === m.id);
+      return {
+        id: m.id,
+        direction: m.direction,
+        body: m.body,
+        state: m.state,
+        retryAt: m.state === "waiting" ? (m.retryAt ?? null) : null,
+        createdAt: m.createdAt,
+        files: m.attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          size: a.size ?? null,
+          mime: a.mime ?? mimeOf(a.name) ?? null,
+        })),
+        line: task
+          ? { id: task.id, title: task.title, state: lineState(task), started: task.fromMessage === m.id }
+          : null,
+      };
+    };
+  };
+
+  /**
+   * The private chat, newest last: `limit` messages before `before`, or the latest. With `watching`,
+   * the console is showing it: what is there now, and what arrives in the next few seconds, is seen.
+   */
+  app.get("/v1/admin/agents/:id/chat", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const limit = clamp(Number(c.req.query("limit") ?? 50), 1, 200);
+    const before = c.req.query("before");
+    if (c.req.query("watching") === "1") {
+      watching.set(agent.id, Date.now() + CHAT_WATCH_MS);
+      store.setChatSeen(agent.id, Date.now());
+    }
+    const chat = mingle.localChatOf(agent.id);
+    if (!chat) return c.json({ messages: [], more: false });
+    // One more than asked, to tell whether there is anything earlier.
+    const page = store.chatMessages(chat.id, limit + 1, before || undefined).filter((m) => !m.notice);
+    const more = page.length > limit;
+    return c.json({ messages: (more ? page.slice(-limit) : page).map(chatMessageView(agent)), more });
+  });
+
+  app.post("/v1/admin/agents/:id/chat", async (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const body = await c.req.json<{ text?: unknown; files?: unknown }>();
+    const ids = Array.isArray(body.files) ? body.files.filter((f): f is string => typeof f === "string") : [];
+    const files = ids.map((id) => {
+      const file = mingle.upload(agent.id, id);
+      if (!file) throw new MingleError("file_not_found", "attach the file again", 404);
+      return file;
+    });
+    const message = mingle.sayLocally(agent.id, { text: typeof body.text === "string" ? body.text : "", files });
+    // The owner is looking at the chat they just wrote in.
+    watching.set(agent.id, Date.now() + CHAT_WATCH_MS);
+    store.setChatSeen(agent.id, Date.now());
+    return c.json(chatMessageView(agent)(message), 201);
+  });
+
+  /** A file the owner is about to send: the body is its bytes, `x-file-name` its name (URI-encoded). */
+  app.post("/v1/admin/agents/:id/chat/uploads", async (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    if (Number(c.req.header("content-length") ?? 0) > UPLOAD_MAX_BYTES)
+      throw new MingleError("file_too_large", "send files under 100 MB", 413);
+    let name = c.req.header("x-file-name") ?? "";
+    try {
+      name = decodeURIComponent(name);
+    } catch {}
+    const type = c.req.header("content-type")?.split(";")[0]?.trim();
+    const upload = mingle.saveUpload(agent.id, {
+      name,
+      bytes: new Uint8Array(await c.req.arrayBuffer()),
+      ...(type && type !== "application/octet-stream" ? { mime: type } : {}),
+    });
+    return c.json(upload, 201);
+  });
+
+  /** A file in the private chat, sent or received: its bytes, for a preview or to save. */
+  const chatFile = (agentId: string, fileId: string) => {
+    const chat = mingle.localChatOf(agentId);
+    const found = chat && store.chatFile(chat.id, fileId);
+    if (!found || !existsSync(found.attachment.ref)) throw notFound("file", fileId);
+    return found.attachment;
+  };
+
+  app.get("/v1/admin/agents/:id/chat/files/:fileId", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const file = chatFile(agent.id, c.req.param("fileId"));
+    return c.body(readFileSync(file.ref), 200, {
+      "content-type": file.mime ?? mimeOf(file.name) ?? "application/octet-stream",
+      "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "cache-control": "private, max-age=3600",
+      "cross-origin-resource-policy": "same-origin",
+      "x-content-type-options": "nosniff",
+    });
+  });
+
+  /** Show the file in Finder (Explorer, or its folder elsewhere). */
+  app.post("/v1/admin/agents/:id/chat/files/:fileId/reveal", (c) => {
+    const agent = mingle.agent(c.req.param("id"));
+    const file = chatFile(agent.id, c.req.param("fileId"));
+    if (process.platform === "darwin") execFile("open", ["-R", file.ref], () => {});
+    else if (process.platform === "win32") execFile("explorer", [`/select,${file.ref}`], () => {});
+    else execFile("xdg-open", [dirname(file.ref)], () => {});
+    return c.json({ ok: true });
+  });
+
   app.post("/v1/admin/agents/:id/open-home", (c) => {
     const agent = mingle.agent(c.req.param("id"));
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
@@ -1522,6 +1661,9 @@ function handoffView(h: Handoff) {
     deliveredAt: h.deliveredAt,
   };
 }
+
+/** How long the console's look at the private chat counts as watching it; it reads it every second or so. */
+const CHAT_WATCH_MS = 5000;
 
 function clamp(n: number, min: number, max: number): number {
   return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : min;

@@ -41,7 +41,7 @@ Mingle 不预设使用场景。同一个 Agent 可以是私聊里的个人助理
 
 ### 1.4 不做的事
 
-- 自建聊天界面或频道系统。
+- 自建给他人使用的聊天平台或频道系统。本机 owner 和自己的 Agent 私聊属于控制台，不在此列（6.9，MING-142）：只有 owner 一个人、只有一个私聊，不做群、不邀请别人、不做多会话。
 - 任何云端组件、账号体系、多设备同步。
 - 自己实现 agent 循环或模型调用，这是 harness 的事。
 - 未经用户选择就用个人账号替用户说话。接入原则见 6.6：优先官方机器人通道；没有合适的机器人通道时，允许在本机用个人账号接入，怎么用由用户决定，Mingle 不加额外的限制。
@@ -763,7 +763,7 @@ MSG
 
 | 命令 | 作用 |
 |---|---|
-| `mingle chat list` | 列出自己所在的群和私聊，含 ID、平台、名称 |
+| `mingle chat list` | 列出自己所在的群和私聊，含 ID、平台、名称；owner 在控制台的私聊是 `local`（6.9） |
 | `mingle chat info <聊天ID>` | 聊天详情；平台支持时含成员；听所有的群写出当前节奏 |
 | `mingle chat hear <聊天ID> --every 1h \| --mute \| --default` | 调听所有的群多久交一段给它：最多每多久一次（2m–7d）、静音到下次被 @、回到默认（4.2） |
 | `mingle chat alias <聊天ID> add\|remove <名字>` | 群里叫它的另一个称呼：叫到它和叫 Agent 名一样（4.2） |
@@ -989,6 +989,18 @@ stateDiagram-v2
 - **回复**：`POST drive/v1/files/:token/comments/:id/replies`，回在原楼。评论只支持纯文本、链接和 @ 人：Markdown 的标记去掉后发出并报 `markdown_flattened`，`@名字` 写成 `person` 元素；带文件时文字照发、报 `files_dropped`，只有文件时失败（`files_unsupported`）。不加表情回执、不开实时卡片、不列成员。错误码按文档映射：1069303 无权限为 `forbidden`，1069304/1069305/1069307 文档或评论不在为 `chat_gone`。
 - **权限**：建应用时默认申请 `docs:document.comment:read`、`docs:document.comment:create`（读和回复评论）和 `drive:drive.metadata:readonly`（标题和链接，没有时名字退为"Feishu document"），并订阅上面的事件。更早创建的应用在机器人设置的"权限"里显示"文档评论"未开启，再扫一次码补上（6.1）。读不了文档（没分享给机器人）但被 @ 时，仍告诉 Agent 有人找它、读不到原文。
 - **其他平台**：GitHub 的 issue 和 PR 评论已在 6.7 支持。钉钉文档、Slack canvas、企业微信文档没有给机器人的评论 @ 事件，暂不支持。
+
+### 6.9 控制台私聊
+
+2026-11-22（MING-142，GitHub #181）。坐在电脑前想跟 Agent 说两句，不必切到聊天软件，也不必为了在本机试一下先配一套机器人凭据；新建 Agent 后，接好聊天软件之前也能先说上话。它是这个 Agent 的又一个私聊，和微信私聊地位相同：同一个长期会话、同一份记忆、同样的线、提醒、暂停和 `/stop`。
+
+- **内置 Channel `local`**（`src/channels/local/`）：不是聊天软件，`Channel.builtin`。每个 Agent 恰好一条这样的连接，由 Mingle 在启动时和新建 Agent 时自己建好（早于它的 Agent 在升级后第一次启动时补上），没有凭据（不进 Keychain）、没有接入流程、不能移除，随 Agent 删除。`owner_id` 建好就是固定的 owner，不需要认领，访问权限按 `trust: owner`。控制台、菜单栏、`whoami`、"这些都是你吗"和联系人都只列聊天软件，不列它；`mingle chat list` 和诊断信息里有它。
+- **进**：控制台 `POST /v1/admin/agents/:id/chat`（`{ text, files }`），经适配器的 `post` 作为一条普通私聊消息进入 `receive`：消息头 `im=local dm user=… owner`，正文和附件与其他平台一样。附件先 `POST …/chat/uploads` 存到 `~/.mingle/uploads/<agent>/<id>/<文件名>`（单个最多 100 MB），附件的句柄就是这个路径，`mingle file get` 从那里复制。暂停时消息照常记下、不交给 Agent，也不回"已暂停"：控制台自己在私聊上方说明。
+- **出**：Agent 用 `mingle message reply/send` 回复，和其他私聊一样经 outbox。适配器只给出消息 ID；正文和附件由 outbox 记在消息上（出站附件的 `ref` 是本机路径，`message read` 里写成 `sent_file="…"`，不提供下载），控制台从库里读。能力：Markdown（控制台完整渲染）、文件收发、引用；没有表情回执、话题、@ 和实时卡片：处理中的样子由控制台按入站消息状态和 Agent 状态画出，线的结果直接回到这个私聊（4.13 的降级）。Mingle 自己的提示（`notice`）不显示在私聊里，消息的状态（等待、出错、未回复）就地写在消息下面。
+- **读**：`GET /v1/admin/agents/:id/chat?limit=&before=&watching=1`，最新的在最后，往上翻按 `before` 取更早的；`GET …/chat/files/:fileId` 取文件内容（图片预览、下载），`POST …/chat/files/:fileId/reveal` 在访达（资源管理器、文件夹）中显示，Remote SSH 的 Agent 不提供后者。远端 Agent 的这些请求经 SSH 网关转发，上传受网关 2 MB 的上限。
+- **未读和通知**：`agents.chat_seen_at`（迁移 033）记 owner 看到哪儿了。控制台显示私聊并且窗口在前台时，每次读取都带 `watching=1`：看到的和接下来 5 秒内到的都算已读。Agent 在别处给 owner 发的（提醒到点、线做完、它主动想说的）记为未读：`agentView.chat` 和 `/v1/admin/summary` 的 `chat` 给出条数和最后一条的前 120 字；控制台侧栏在这个 Agent 后面显示一个 `accent` 圆点，桌面应用发系统通知（标题是 Agent 名，正文是那几句话，点开直接到私聊），受"需要我处理时通知我"同一个开关控制；启动时已有的未读不通知。
+- **上手**：在私聊里收到回复不算完成上手（迁移 033 的触发器排除 `local`），"上手"卡片仍然引导去接入聊天软件。
+- **不做**：终端里的 `mingle chat`（2026-11-22 决定不做；`mingle chat` 本来也是 Agent 的命令）、多会话、清空、导出、搜索框（Agent 自己会 `message search`）、消息编辑和撤回、表情、在私聊里看或回别的聊天软件的对话，以及从手机访问（控制台仍只监听 `127.0.0.1`）。
 
 ## 7. 整体架构
 
@@ -1297,6 +1309,7 @@ docs/             文档
 | 签名与公证 | 流程已写进 CI，需要维护者提供 Developer ID 证书和 Apple 账号的 secret；没有时是 ad hoc 签名 |
 | 控制台改版（参照 Pinky） | 完成（2026-11-13）：新的视觉和引导，见 `DESIGN.md`。首次打开是欢迎页和三步新建流程；harness 显示本机已装的、带官方图标，模型从 harness 实时读出来选（OAR `listModels`，结果缓存 5 分钟），不再手填；创建后直接进入连接聊天软件；Agent 页分"动态"和"设置"，未回复过消息时有"上手"四步卡片，右侧"需要你处理"汇总出错的连接、等待审核和没回复的消息；harness 和模型可随时更改（`PATCH /v1/admin/agents/:id`，换 harness 时开新会话）。桌面应用隐藏标题栏，红绿灯在侧栏品牌行，侧栏用窗口毛玻璃 |
 | 桌面应用端到端测试 | `desktop/automation_e2e.go`：带 `e2e` 标签构建的应用可由 `mygo-automation` 驱动。本轮用它在真实窗口里走完：欢迎 → 新建（模板、harness、模型）→ 选平台 → 飞书出码 → 返回 → 改模型 → 错误 token 提示 → 删除回到欢迎页，并修了途中发现的问题 |
+| 控制台私聊（MING-142） | 完成（2026-11-22）：见 6.9。内置 `local` Channel、`/v1/admin/agents/:id/chat*` 接口、迁移 033、控制台"私聊"标签（`web/src/Chat.tsx`，自带的安全 Markdown 渲染 `web/src/markdown.tsx`）、侧栏未读圆点、桌面通知。测试覆盖：作为 owner 私聊交给 Agent 并回复、不算完成上手、不出现在聊天软件列表和联系人里、未读计数与"正在看"、双向文件、暂停时不回复也不留提示；桌面的通知规则有 Go 单元测试；`pnpm ui:review` 加了有历史、空、暂停三种私聊截图。真实 harness 在 ui:review 里自己用 `message send` 把提醒结果发到了私聊 |
 | 全部 OAR harness | 完成（2026-11-13）：OAR 的 12 个 harness 都列出，已装的可直接选。设置里有完整列表：没装的可以一键安装（运行官方安装命令，先给人看要跑什么），没登录的可以用 harness 自己的登录流程登录（链接或设备码，需要时在控制台里输入回填）。装了的、harness 自己的更新器判断有新版本时，那一行出现“更新到 x.y.z”，点一下运行它自己的更新器（OAR 的 `checkUpdate` / `upgrade`，与安装共用一个任务队列），以更新后可执行文件报告的版本判断成败；查不到最新版本（包管理器装的、没有更新器的、网络不通）就不显示，不猜。不重启已打开的会话，新开的会话用新版本；未在真机上跑过实际更新，只实测了版本检查（2026-11-15，MING-76）。Cursor 的 SDK 是 Cursor 自己的包，Mingle 不随包分发，按需用 npm 装到数据目录的 `vendor/`。不接受追加系统提示的 harness（Kimi、DeepSeek Harness、CodeBuddy、Cursor）改为在新会话第一条消息里带上操作指南；不接受环境变量的（Cursor）在指南里写明调用 CLI 的完整命令。实测：Claude Code、Codex、OpenCode、Kimi 端到端回复；DeepSeek Harness 和 Cursor 在控制台里装好，分别需要 DeepSeek API key 和 Cursor 登录才能回复；Grok 这台机器上 OAR 的 ACP 初始化超时（直接跑 `grok -p` 正常），待查 |
 | 每个 Agent 的环境变量（MING-39） | 完成（2026-11-14）：见 4.9。值只存凭据存储，API 只写不读；打开会话时并进 harness 的 `env`，改动从下一条消息起生效，Agent 工作中不打断；Cursor 不传、不进提示词。测试覆盖凭据存储替身、保留名、`MINGLE_*` 不被覆盖、工作中改动、Cursor 路径和日志；用 OAR 的脚本化运行时端到端验证了 Agent 在 shell 里 `echo $FOO` 拿到值 |
 | Agent 暂停与恢复（MING-46） | 完成（2026-11-14）：见 4.11。功能清单从产品角度梳理了创建、叫停、暂停、恢复、删除；新增暂停/恢复的 API、CLI、控制台和菜单栏状态。测试覆盖暂停时中止当前轮、旧 token 失效、暂停期间消息忽略且每个聊天只说明一次、重试被拒、提醒顺延到恢复、重启后保持暂停、删除已暂停的 Agent；控制台用 `pnpm ui:review` 截图并点击走过暂停和恢复 |

@@ -1306,7 +1306,7 @@ describe("admin API (console)", () => {
     current = await rig(async () => {});
     const { mingle, agentId, admin } = current;
     const store = mingle.store;
-    const connection = store.connections(agentId)[0] as { id: string };
+    const connection = store.connections(agentId).filter((n) => n.platform !== "local")[0] as { id: string };
     const dm = store.upsertChat({ connectionId: connection.id, platformId: "u1", kind: "dm", name: "Ann" });
     const channel = store.upsertChat({ connectionId: connection.id, platformId: "C1", kind: "group", name: "#design" });
     const thread = store.upsertChat({
@@ -1375,7 +1375,7 @@ describe("admin API (console)", () => {
   it("keeps onboarding complete outside the recent activity window", async () => {
     current = await rig(async () => {});
     const { mingle, agentId, admin } = current;
-    const connection = mingle.store.connections(agentId)[0] as { id: string };
+    const connection = mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0] as { id: string };
     const chat = mingle.store.upsertChat({ connectionId: connection.id, platformId: "history", kind: "dm" });
     const sent = mingle.store.insertOutbound({ chatId: chat.id, body: "First answer", replyTo: null });
     mingle.store.setOutboundResult(sent.id, "sent", "old-answer");
@@ -1520,7 +1520,7 @@ describe("agent settings", () => {
     expect(after?.harness).toBe(before?.harness);
     expect(after?.model).toBe(before?.model);
     expect(after?.sessionId).toBe(before?.sessionId);
-    expect(mingle.store.connections(agentId)).toHaveLength(1);
+    expect(mingle.store.connections(agentId).filter((n) => n.platform !== "local")).toHaveLength(1);
   });
 
   it("rejects a model-only change while the current harness is disabled", async () => {
@@ -1676,7 +1676,7 @@ describe("waking from sleep", () => {
     await mingle.resume("test");
     expect(channel.closes).toBe(1);
     expect(channel.connects).toBe(2);
-    expect(mingle.store.connections()[0]?.state).toBe("connected");
+    expect(mingle.store.connections().filter((n) => n.platform !== "local")[0]?.state).toBe("connected");
 
     channel.receive({ text: "still there?" });
     await until(() => channel.sent.length === 1);
@@ -1685,7 +1685,7 @@ describe("waking from sleep", () => {
   it("keeps trying when the network is not back yet", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
-    const id = mingle.store.connections()[0]?.id as string;
+    const id = mingle.store.connections().filter((n) => n.platform !== "local")[0]?.id as string;
     channel.connectFailures = 2;
     await mingle.resume("test");
     // Offline, but with a time for the next try: never offline with nothing to do.
@@ -1701,7 +1701,7 @@ describe("waking from sleep", () => {
   it("starts over when the adapter gives up, and waits for the owner on refused credentials", async () => {
     current = await rig(async () => {});
     const { channel, mingle, admin } = current;
-    const id = mingle.store.connections()[0]?.id as string;
+    const id = mingle.store.connections().filter((n) => n.platform !== "local")[0]?.id as string;
     channel.report({ kind: "error", code: "unknown" });
     expect(mingle.isLive(id)).toBe(false);
     await until(() => mingle.store.connection(id)?.state === "connected");
@@ -1728,7 +1728,7 @@ describe("waking from sleep", () => {
   it("names the offline bot when a retry cannot run", async () => {
     current = await rig(async () => {});
     const { channel, mingle, agentId, admin } = current;
-    const id = mingle.store.connections()[0]?.id as string;
+    const id = mingle.store.connections().filter((n) => n.platform !== "local")[0]?.id as string;
     const inbound = channel.receive({ text: "anyone?" });
     const chat = await until(() => mingle.store.agentChats(agentId)[0]?.id);
     await until(() => mingle.store.messageByPlatformId(chat, inbound.platformId)?.state === "unanswered");
@@ -1742,7 +1742,7 @@ describe("waking from sleep", () => {
   it("ignores reports from a connection already replaced", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
-    const id = mingle.store.connections()[0]?.id as string;
+    const id = mingle.store.connections().filter((n) => n.platform !== "local")[0]?.id as string;
     const old = (channel as unknown as { events: Parameters<FakeChannel["connect"]>[1] }).events;
     await mingle.reconnect(id);
     old.onState({ kind: "error", code: "credentials_revoked" });
@@ -1752,11 +1752,11 @@ describe("waking from sleep", () => {
   it("leaves a connection removed meanwhile alone", async () => {
     current = await rig(async () => {});
     const { channel, mingle } = current;
-    const id = mingle.store.connections()[0]?.id as string;
+    const id = mingle.store.connections().filter((n) => n.platform !== "local")[0]?.id as string;
     const resumed = mingle.resume("test");
     await mingle.removeConnection(id);
     await resumed;
-    expect(mingle.store.connections()).toEqual([]);
+    expect(mingle.store.connections().filter((n) => n.platform !== "local")).toEqual([]);
     expect(mingle.isLive(id)).toBe(false);
     expect(channel.closes).toBe(channel.connects);
   });
@@ -1767,7 +1767,10 @@ describe("binding a bot again", () => {
     const secrets = memorySecrets();
     current = await rig(async () => {}, { secrets });
     const { channel, mingle } = current;
-    const first = mingle.store.connections()[0] as { id: string; secretRef: string };
+    const first = mingle.store.connections().filter((n) => n.platform !== "local")[0] as {
+      id: string;
+      secretRef: string;
+    };
     const other = mingle.createAgent({ name: "Bea", role: "", harness: "scripted", model: null });
     // Scanning again issued a new secret, which revokes the one the first connection had.
     channel.onboardCredentials = { token: "rotated" };
@@ -1775,7 +1778,12 @@ describe("binding a bot again", () => {
     await expect(mingle.addConnection(other.id, "telegram", { token: "rotated" })).rejects.toMatchObject({
       code: "bot_in_use",
     });
-    expect(mingle.store.connections().map((c) => c.id)).toEqual([first.id]);
+    expect(
+      mingle.store
+        .connections()
+        .filter((n) => n.platform !== "local")
+        .map((c) => c.id),
+    ).toEqual([first.id]);
     expect(JSON.parse((await secrets.get(first.secretRef)) as string)).toEqual({ token: "rotated" });
     expect(channel.lastCredentials).toEqual({ token: "rotated" });
     expect(mingle.store.connection(first.id)?.state).toBe("connected");
@@ -1802,19 +1810,22 @@ describe("binding a bot again", () => {
       mingle.addConnection(other.id, "slack", { token: "y" }),
     ]);
     expect(a.id).toBe(b.id);
-    expect(mingle.store.connections(other.id)).toHaveLength(1);
+    expect(mingle.store.connections(other.id).filter((n) => n.platform !== "local")).toHaveLength(1);
   });
 
   it("rebinds the same agent's bot instead of refusing it", async () => {
     const secrets = memorySecrets();
     current = await rig(async () => {}, { secrets });
     const { channel, mingle, agentId } = current;
-    const first = mingle.store.connections()[0] as { id: string; secretRef: string };
+    const first = mingle.store.connections().filter((n) => n.platform !== "local")[0] as {
+      id: string;
+      secretRef: string;
+    };
     channel.onboardCredentials = { token: "rotated" };
 
     const again = await mingle.addConnection(agentId, "telegram", { token: "rotated" });
     expect(again.id).toBe(first.id);
-    expect(mingle.store.connections()).toHaveLength(1);
+    expect(mingle.store.connections().filter((n) => n.platform !== "local")).toHaveLength(1);
     expect(JSON.parse((await secrets.get(first.secretRef)) as string)).toEqual({ token: "rotated" });
     expect(mingle.store.connection(first.id)?.state).toBe("connected");
   });
@@ -1834,7 +1845,7 @@ describe("contacts", () => {
       for (const id of messageIds(t.input)) await runCli(env, ["message", "reply", id], "ok");
     });
     const { mingle, agentId, admin, channel } = current;
-    const mine = mingle.store.connections(agentId)[0] as { id: string };
+    const mine = mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0] as { id: string };
     mingle.store.updateConnection(mine.id, { ownerId: "me" });
     // A second bot on the same platform, scanned by someone else: it has its own owner.
     const hers = mingle.store.createConnection({ agentId, platform: "telegram", secretRef: "telegram:bot2" });

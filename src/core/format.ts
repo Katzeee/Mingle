@@ -57,7 +57,9 @@ export function formatMessage(
     else if (opts.contact?.isBot) parts.push("bot");
   }
   if (message.replyTo) parts.push(`reply_to=${message.replyTo}`);
-  for (const a of message.attachments) parts.push(`file=${a.id}:${quote(a.name)}`);
+  // A file it sent is on this computer already: named, not offered for download.
+  for (const a of message.attachments)
+    parts.push(message.direction === "out" ? `sent_file=${quote(a.name)}` : `file=${a.id}:${quote(a.name)}`);
   parts.push(`time=${localTime(message.createdAt)}`);
   if (opts.unseen) parts.push(`unseen=${opts.unseen}`);
   const quoted = opts.quoted

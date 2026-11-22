@@ -18,6 +18,7 @@ import {
   type Reminder,
   type Task,
 } from "./api.ts";
+import { PrivateChat } from "./Chat.tsx";
 import {
   BotPage,
   ChatAppList,
@@ -69,12 +70,18 @@ import {
 
 type WorkData = { tasks: Task[]; reminders: Reminder[] };
 
+type Tab = "activity" | "chat" | "settings";
+const TABS: readonly Tab[] = ["activity", "chat", "settings"];
+
 export function AgentPage({
   agent,
+  requestedTab,
   onNavigate,
   onChanged,
 }: {
   agent: AgentView;
+  /** A link or a notification opened a tab: each new request switches to it, once. */
+  requestedTab?: { tab: Tab } | undefined;
   onNavigate: Navigate;
   onChanged: () => Promise<void> | void;
 }) {
@@ -95,7 +102,7 @@ export function AgentPage({
   const workPending = useRef(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [tab, setTab] = useState<"activity" | "settings">("activity");
+  const [tab, setTab] = useState<Tab>(() => requestedTab?.tab ?? "activity");
   const connectionsRef = useRef<HTMLElement>(null);
   const handoffRef = useRef<HTMLDivElement>(null);
   const [handoffRequest, setHandoffRequest] = useState(0);
@@ -203,6 +210,9 @@ export function AgentPage({
     setBot(null);
     setBackTo(null);
   }, [agent.id]);
+  useEffect(() => {
+    if (requestedTab) setTab(requestedTab.tab);
+  }, [requestedTab]);
   usePolling(refresh, 2500);
 
   // A notice answers one click; it must not outlive what it describes.
@@ -224,7 +234,11 @@ export function AgentPage({
     }
   };
   usePageShortcuts({
-    tab: (index) => setTab(index === 0 ? "activity" : "settings"),
+    // The previous or next tab, stopping at the ends as macOS tabs do.
+    tab: (direction) =>
+      setTab(
+        (current) => TABS[Math.max(0, Math.min(TABS.length - 1, TABS.indexOf(current) + (direction ? 1 : -1)))] as Tab,
+      ),
     stop: () => {
       if (busy) void stop();
     },
@@ -342,10 +356,16 @@ export function AgentPage({
               label={t("agent.view")}
               value={tab}
               onChange={setTab}
-              options={[
-                { value: "activity", label: t("agent.tabActivity"), keys: KEYS.tab(0) },
-                { value: "settings", label: t("agent.tabSettings"), keys: KEYS.tab(1) },
-              ]}
+              // Each neighbour of the tab shown carries the key that goes to it.
+              options={TABS.map((value, i) => {
+                const step = i - TABS.indexOf(tab);
+                const label = t(
+                  value === "activity" ? "agent.tabActivity" : value === "chat" ? "agent.tabChat" : "agent.tabSettings",
+                );
+                return step === -1 || step === 1
+                  ? { value, label, keys: KEYS.tab(step === 1 ? 1 : 0) }
+                  : { value, label };
+              })}
             />
             {busy ? (
               <Shortcut label={t("agent.stopHint")} keys={KEYS.stop} side="bottom">
@@ -358,187 +378,208 @@ export function AgentPage({
         }
       />
       <div className="flex min-h-0 flex-1">
-        <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
-            {agent.remote?.reachable === false ? <Unreachable id={agent.remote.id} onReady={onChanged} /> : null}
-            {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
-            {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
-            {agent.status === "error" ? <AgentError agent={agent} /> : null}
+        {tab === "chat" ? (
+          <PrivateChat
+            agent={agent}
+            top={
+              agent.remote?.reachable === false || notice || paused || agent.status === "error" ? (
+                <>
+                  {agent.remote?.reachable === false ? <Unreachable id={agent.remote.id} onReady={onChanged} /> : null}
+                  {notice ? <p className="rise text-small text-ink2">{notice}</p> : null}
+                  {paused ? (
+                    <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} />
+                  ) : null}
+                  {agent.status === "error" ? <AgentError agent={agent} /> : null}
+                </>
+              ) : undefined
+            }
+            onRetry={retry}
+            onIgnore={ignore}
+          />
+        ) : (
+          <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            <div className="flex max-w-[680px] flex-col gap-7 px-6 py-6 md:px-8">
+              {agent.remote?.reachable === false ? <Unreachable id={agent.remote.id} onReady={onChanged} /> : null}
+              {notice ? <p className="rise -mb-3 text-small text-ink2">{notice}</p> : null}
+              {paused ? <PausedCard name={agent.name} disabled={switching} onResume={() => setPaused(false)} /> : null}
+              {agent.status === "error" ? <AgentError agent={agent} /> : null}
 
-            {tab === "settings" && openBot ? (
-              <BotPage
-                agent={agent}
-                connection={openBot}
-                onBack={() => {
-                  setBackTo(openBot.id);
-                  setBot(null);
-                }}
-                onChanged={() => {
-                  void onChanged();
-                  // A renamed person shows by the new name in the activity right away.
-                  void refreshActivity();
-                }}
-              />
-            ) : tab === "settings" ? (
-              <>
-                <Profile agent={agent} onSaved={onChanged} />
-                <RoleEditor agent={agent} onSaved={onChanged} />
-                <Brain agent={agent} onSaved={onChanged} />
-                <section
-                  ref={connectionsRef}
-                  aria-label={t("agent.chatApps")}
-                  tabIndex={-1}
-                  className="rounded-card focus:outline-2 focus:outline-offset-4 focus:outline-accent"
-                >
-                  <ChatAppList
-                    agent={agent}
-                    onOpen={setBot}
-                    onConnect={connect}
-                    onChanged={() => {
-                      void onChanged();
-                      void refreshActivity();
-                    }}
-                  />
-                </section>
-                <AgentEnv agent={agent} />
-                <div ref={handoffRef} tabIndex={-1} className="rounded-card focus:outline-none">
-                  <HandoffSection agent={agent} handoffs={handoffs} onSent={() => void refreshActivity()} />
-                </div>
-                <Section title={t("agent.lifecycle")}>
-                  <Group>
-                    <GroupRow className="flex-wrap">
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span>
-                          {paused
-                            ? t("agent.pausedTitle", { name: agent.name })
-                            : t("agent.pauseTitle", { name: agent.name })}
-                        </span>
-                        <span className="text-caption text-ink2">
-                          {paused
-                            ? t("agent.pausedBody")
-                            : busy
-                              ? `${t("agent.pauseBody")} ${t("agent.pauseBusy")}`
-                              : t("agent.pauseBody")}
-                        </span>
-                      </span>
-                      {paused ? (
-                        <Button small disabled={switching} onClick={() => setPaused(false, "row")}>
-                          <PlayIcon />
-                          {t("agent.resume")}
-                        </Button>
-                      ) : (
-                        <Button small disabled={switching} onClick={() => setPaused(true, "row")}>
-                          <PauseIcon />
-                          {t("agent.pause")}
-                        </Button>
-                      )}
-                      {pauseFailure ? <p className="w-full text-caption text-red">{pauseFailure}</p> : null}
-                    </GroupRow>
-                    <TidyRow agent={agent} onChanged={onChanged} />
-                    <ResetRow key={agent.id} agent={agent} busy={busy} disabled={switching} />
-                    <DiagnosticsRow key={`d-${agent.id}`} agent={agent} />
-                  </Group>
-                </Section>
-                <Section title={t("agent.home")}>
-                  <Group>
-                    <GroupRow>
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span>{t("agent.homeTitle")}</span>
-                        <span className="selectable truncate font-mono text-caption text-ink2" title={agent.home}>
-                          {agent.home}
-                        </span>
-                      </span>
-                      {!agent.remote ? (
-                        <Button small onClick={() => api.openHome(agent.id)}>
-                          {t("agent.openHome")}
-                        </Button>
-                      ) : null}
-                    </GroupRow>
-                    <DeleteRow
+              {tab === "settings" && openBot ? (
+                <BotPage
+                  agent={agent}
+                  connection={openBot}
+                  onBack={() => {
+                    setBackTo(openBot.id);
+                    setBot(null);
+                  }}
+                  onChanged={() => {
+                    void onChanged();
+                    // A renamed person shows by the new name in the activity right away.
+                    void refreshActivity();
+                  }}
+                />
+              ) : tab === "settings" ? (
+                <>
+                  <Profile agent={agent} onSaved={onChanged} />
+                  <RoleEditor agent={agent} onSaved={onChanged} />
+                  <Brain agent={agent} onSaved={onChanged} />
+                  <section
+                    ref={connectionsRef}
+                    aria-label={t("agent.chatApps")}
+                    tabIndex={-1}
+                    className="rounded-card focus:outline-2 focus:outline-offset-4 focus:outline-accent"
+                  >
+                    <ChatAppList
                       agent={agent}
-                      confirming={confirmDelete}
-                      onAsk={() => setConfirmDelete(true)}
-                      onCancel={() => setConfirmDelete(false)}
-                      onDeleted={async () => {
-                        // Refresh first: with the old list, "home" would pick the deleted agent again.
-                        await onChanged();
-                        onNavigate({ kind: "home" }, { replace: true });
+                      onOpen={setBot}
+                      onConnect={connect}
+                      onChanged={() => {
+                        void onChanged();
+                        void refreshActivity();
                       }}
                     />
-                  </Group>
-                </Section>
-              </>
-            ) : (
-              <>
-                {!agent.hasReplied ? (
-                  <GettingStarted
-                    agent={agent}
-                    heard={(activity ?? []).some((m) => m.direction === "in" && m.state !== "held")}
-                    onConnect={connect}
-                    onChanged={onChanged}
-                    onHandoff={() => {
-                      setTab("settings");
-                      setBot(null);
-                      setHandoffRequest((n) => n + 1);
-                    }}
-                  />
-                ) : null}
-                {agent.connections.some((c) => c.state === "connected") ? <KeepOnline /> : null}
-                {/* Narrow windows have no right panel: what needs the person comes first. */}
-                {needsYou ? <div className="flex flex-col gap-7 min-[1140px]:hidden">{needsYou}</div> : null}
-                <Section title={t("agent.activity")}>
-                  {activityError ? <LoadProblem title={t("agent.activityFailed")} onRetry={refreshActivity} /> : null}
-                  {activity === null ? (
-                    activityError ? null : (
-                      <Waiting>{t("agent.activityLoading")}</Waiting>
-                    )
-                  ) : activity.length > 0 || (handoffs ?? []).length > 0 ? (
-                    <ActivityList
-                      key={agent.id}
+                  </section>
+                  <AgentEnv agent={agent} />
+                  <div ref={handoffRef} tabIndex={-1} className="rounded-card focus:outline-none">
+                    <HandoffSection agent={agent} handoffs={handoffs} onSent={() => void refreshActivity()} />
+                  </div>
+                  <Section title={t("agent.lifecycle")}>
+                    <Group>
+                      <GroupRow className="flex-wrap">
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span>
+                            {paused
+                              ? t("agent.pausedTitle", { name: agent.name })
+                              : t("agent.pauseTitle", { name: agent.name })}
+                          </span>
+                          <span className="text-caption text-ink2">
+                            {paused
+                              ? t("agent.pausedBody")
+                              : busy
+                                ? `${t("agent.pauseBody")} ${t("agent.pauseBusy")}`
+                                : t("agent.pauseBody")}
+                          </span>
+                        </span>
+                        {paused ? (
+                          <Button small disabled={switching} onClick={() => setPaused(false, "row")}>
+                            <PlayIcon />
+                            {t("agent.resume")}
+                          </Button>
+                        ) : (
+                          <Button small disabled={switching} onClick={() => setPaused(true, "row")}>
+                            <PauseIcon />
+                            {t("agent.pause")}
+                          </Button>
+                        )}
+                        {pauseFailure ? <p className="w-full text-caption text-red">{pauseFailure}</p> : null}
+                      </GroupRow>
+                      <TidyRow agent={agent} onChanged={onChanged} />
+                      <ResetRow key={agent.id} agent={agent} busy={busy} disabled={switching} />
+                      <DiagnosticsRow key={`d-${agent.id}`} agent={agent} />
+                    </Group>
+                  </Section>
+                  <Section title={t("agent.home")}>
+                    <Group>
+                      <GroupRow>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span>{t("agent.homeTitle")}</span>
+                          <span className="selectable truncate font-mono text-caption text-ink2" title={agent.home}>
+                            {agent.home}
+                          </span>
+                        </span>
+                        {!agent.remote ? (
+                          <Button small onClick={() => api.openHome(agent.id)}>
+                            {t("agent.openHome")}
+                          </Button>
+                        ) : null}
+                      </GroupRow>
+                      <DeleteRow
+                        agent={agent}
+                        confirming={confirmDelete}
+                        onAsk={() => setConfirmDelete(true)}
+                        onCancel={() => setConfirmDelete(false)}
+                        onDeleted={async () => {
+                          // Refresh first: with the old list, "home" would pick the deleted agent again.
+                          await onChanged();
+                          onNavigate({ kind: "home" }, { replace: true });
+                        }}
+                      />
+                    </Group>
+                  </Section>
+                </>
+              ) : (
+                <>
+                  {!agent.hasReplied ? (
+                    <GettingStarted
                       agent={agent}
-                      conversations={conversations ?? []}
-                      handoffs={handoffs ?? []}
-                      onRetry={retry}
-                      onIgnore={ignore}
+                      heard={(activity ?? []).some((m) => m.direction === "in" && m.state !== "held")}
+                      onConnect={connect}
+                      onChanged={onChanged}
+                      onHandoff={() => {
+                        setTab("settings");
+                        setBot(null);
+                        setHandoffRequest((n) => n + 1);
+                      }}
                     />
-                  ) : activityError ? null : (
-                    <div className="flex flex-col items-start gap-3 rounded-card border border-line bg-bg2 p-5">
-                      <svg
-                        width="28"
-                        height="28"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        className="text-ink2"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinejoin="round"
-                        />
-                        <path d="M7 10h8M7 14h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                      </svg>
-                      <div className="flex flex-col gap-1">
-                        <h3 className="font-semibold">{t("agent.noActivity")}</h3>
-                        <p className="text-small text-ink2">{t("agent.noActivityBody")}</p>
-                        {agent.connections.length === 0 ? (
-                          <p className="text-small text-ink2">{t("agent.noActivityConnect")}</p>
+                  ) : null}
+                  {agent.connections.some((c) => c.state === "connected") ? <KeepOnline /> : null}
+                  {/* Narrow windows have no right panel: what needs the person comes first. */}
+                  {needsYou ? <div className="flex flex-col gap-7 min-[1140px]:hidden">{needsYou}</div> : null}
+                  <Section title={t("agent.activity")}>
+                    {activityError ? <LoadProblem title={t("agent.activityFailed")} onRetry={refreshActivity} /> : null}
+                    {activity === null ? (
+                      activityError ? null : (
+                        <Waiting>{t("agent.activityLoading")}</Waiting>
+                      )
+                    ) : activity.length > 0 || (handoffs ?? []).length > 0 ? (
+                      <ActivityList
+                        key={agent.id}
+                        agent={agent}
+                        conversations={conversations ?? []}
+                        handoffs={handoffs ?? []}
+                        onRetry={retry}
+                        onIgnore={ignore}
+                        onOpenChat={() => setTab("chat")}
+                      />
+                    ) : activityError ? null : (
+                      <div className="flex flex-col items-start gap-3 rounded-card border border-line bg-bg2 p-5">
+                        <svg
+                          width="28"
+                          height="28"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          className="text-ink2"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinejoin="round"
+                          />
+                          <path d="M7 10h8M7 14h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                        <div className="flex flex-col gap-1">
+                          <h3 className="font-semibold">{t("agent.noActivity")}</h3>
+                          <p className="text-small text-ink2">{t("agent.noActivityBody")}</p>
+                          {agent.connections.length === 0 ? (
+                            <p className="text-small text-ink2">{t("agent.noActivityConnect")}</p>
+                          ) : null}
+                        </div>
+                        {agent.hasReplied && agent.connections.length === 0 ? (
+                          <Button onClick={connect}>{t("start.connectAction")}</Button>
                         ) : null}
                       </div>
-                      {agent.hasReplied && agent.connections.length === 0 ? (
-                        <Button onClick={connect}>{t("start.connectAction")}</Button>
-                      ) : null}
-                    </div>
-                  )}
-                </Section>
-                <div className="flex flex-col gap-7 min-[1140px]:hidden">
-                  <Work agentId={agent.id} work={work} error={workError} onRetry={refreshWork} onDropped={dropWork} />
-                </div>
-              </>
-            )}
+                    )}
+                  </Section>
+                  <div className="flex flex-col gap-7 min-[1140px]:hidden">
+                    <Work agentId={agent.id} work={work} error={workError} onRetry={refreshWork} onDropped={dropWork} />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
         <aside className="hidden w-[320px] shrink-0 flex-col gap-6 overflow-y-auto border-l border-line bg-wing px-4 py-5 min-[1140px]:flex">
           {needsYou}
           {/* Settings lists the same bots with their controls; the panel glances at them only beside the activity. */}
@@ -1083,7 +1124,9 @@ function LineRow({ agentId, task, onDropped }: { agentId: string; task: Task; on
       {task.from ? (
         <span className="flex min-w-0 items-center gap-1">
           {task.from.platform ? <PlatformIcon platform={task.from.platform} size={12} /> : null}
-          <span className="truncate">{task.from.name ?? t("chat.dm")}</span>
+          <span className="truncate">
+            {task.from.platform === "local" ? t("privateChat.title") : (task.from.name ?? t("chat.dm"))}
+          </span>
         </span>
       ) : null}
       {active && state !== "error" && task.progress ? (
@@ -1773,22 +1816,27 @@ function ActivityList({
   handoffs,
   onRetry,
   onIgnore,
+  onOpenChat,
 }: {
   agent: AgentView;
   conversations: Conversation[];
   handoffs: HandoffView[];
   onRetry: (ids: string[]) => Promise<void>;
   onIgnore: (ids: string[]) => Promise<void>;
+  /** The private chat is read where it is written: its row opens it. */
+  onOpenChat: () => void;
 }) {
   const nodes = conversationTree(conversations);
   // The newest conversation opens by itself: what just happened reads at once, as the timeline did.
-  const [open, setOpen] = useState<Set<string>>(() => new Set(nodes[0] ? [nodes[0].key] : []));
-  const seeded = useRef(nodes.length > 0);
+  // Not the private chat: it opens on its own tab.
+  const newest = nodes.find((n) => n.platform !== "local");
+  const [open, setOpen] = useState<Set<string>>(() => new Set(newest ? [newest.key] : []));
+  const seeded = useRef(Boolean(newest));
   useEffect(() => {
-    if (seeded.current || !nodes[0]) return;
+    if (seeded.current || !newest) return;
     seeded.current = true;
-    setOpen(new Set([nodes[0].key]));
-  }, [nodes]);
+    setOpen(new Set([newest.key]));
+  }, [newest]);
   const toggle = (key: string) =>
     setOpen((current) => {
       const next = new Set(current);
@@ -1832,7 +1880,7 @@ function ActivityList({
               agent={agent}
               node={row.node}
               open={open}
-              onToggle={toggle}
+              onToggle={row.node.platform === "local" ? onOpenChat : toggle}
               onRetry={onRetry}
               onIgnore={onIgnore}
             />
@@ -1863,15 +1911,17 @@ function ConversationRow({
   const all = [...(node.own?.messages ?? []), ...node.threads.flatMap((c) => c.messages)];
   const kind = node.head.kind;
   const title =
-    kind === "dm"
-      ? (node.own &&
-          personLabel(
-            t,
-            node.own.messages.find((m) => m.direction === "in"),
-          )) ||
-        node.head.name ||
-        t("chat.dm")
-      : node.head.name || t(kind === "thread" ? "chat.thread" : "chat.group");
+    node.platform === "local"
+      ? t("privateChat.title")
+      : kind === "dm"
+        ? (node.own &&
+            personLabel(
+              t,
+              node.own.messages.find((m) => m.direction === "in"),
+            )) ||
+          node.head.name ||
+          t("chat.dm")
+        : node.head.name || t(kind === "thread" ? "chat.thread" : "chat.group");
   const where = [
     t(kind === "dm" ? "chat.dm" : kind === "thread" ? "chat.thread" : "chat.group"),
     ...(node.threads.length ? [t("activity.threads", { count: String(node.threads.length) })] : []),
