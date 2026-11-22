@@ -1,7 +1,10 @@
-import { createElement } from "react";
+import { createElement, type FunctionComponent } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { Markdown } from "../web/src/markdown.tsx";
+
+// Loaded by path: the root typecheck does not compile the console's JSX (web/tsconfig.json does).
+const source = "../web/src/markdown.tsx";
+const { Markdown } = (await import(source)) as { Markdown: FunctionComponent<{ text: string }> };
 
 /** The private chat renders what agents write (docs/spec.md 6.9): the usual Markdown, never HTML. */
 const html = (text: string) => renderToStaticMarkup(createElement(Markdown, { text }));
