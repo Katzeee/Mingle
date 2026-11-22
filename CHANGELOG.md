@@ -3,6 +3,11 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.9
+
+- Chat with your agent right in the Mingle app: open its new Chat tab. It is the same agent with the same memory as in your chat apps, and it works before any chat app is connected. Replies render with formatting, and files go both ways: drop, paste or attach them, and open what the agent sends in Finder.
+- When an agent writes to you there while you are elsewhere (a reminder, a finished task), the sidebar marks it and the desktop app sends a notification that opens the chat.
+
 ## 0.4.8
 
 - Fixed messages that arrived while your agent was still working on a reply sometimes being lost after the agent restarted. They now stay queued and reach it once it is back.
