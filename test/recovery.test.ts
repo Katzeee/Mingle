@@ -519,7 +519,7 @@ describe("CR regression", () => {
   it("does not copy connection error detail into diagnostics", async () => {
     current = await rig(answering([]));
     const { mingle, agentId } = current;
-    const connection = mingle.store.connections(agentId)[0] as { id: string };
+    const connection = mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0] as { id: string };
     mingle.store.updateConnection(connection.id, { state: "error", stateDetail: "synthetic-adapter-secret" });
     const result = await current.admin("GET", `/v1/admin/agents/${agentId}/diagnostics`);
     expect(result.status).toBe(200);
@@ -997,7 +997,9 @@ describe("the account limit ledger", () => {
     // The chat app drops and stays down.
     channel.connectFailures = 100;
     channel.report({ kind: "error", code: "network" });
-    await until(() => mingle.store.connections(agentId)[0]?.state !== "connected");
+    await until(
+      () => mingle.store.connections(agentId).filter((n) => n.platform !== "local")[0]?.state !== "connected",
+    );
 
     // A peer on the same sign-in retries and succeeds: the account wait ends for everyone.
     peerChannel.receive({ text: "peer" });

@@ -21,7 +21,7 @@ Create an agent on your own computer: it has a name, a role, a memory and a home
 
 | | |
 | --- | --- |
-| **Chat apps** | [WeChat](https://mingle.build/wechat/), [WeCom](https://mingle.build/wecom/), [Feishu](https://mingle.build/feishu/), [DingTalk](https://mingle.build/dingtalk/), [QQ](https://mingle.build/qq/), [Slack](https://mingle.build/slack/), [Discord](https://mingle.build/discord/), [Telegram](https://mingle.build/telegram/); [GitHub](https://mingle.build/github/) issues and pull requests, from an account of the agent's own; [iMessage](https://mingle.build/imessage/) on a Mac, by texting yourself |
+| **Chat apps** | [WeChat](https://mingle.build/wechat/), [WeCom](https://mingle.build/wecom/), [Feishu](https://mingle.build/feishu/), [DingTalk](https://mingle.build/dingtalk/), [QQ](https://mingle.build/qq/), [Slack](https://mingle.build/slack/), [Discord](https://mingle.build/discord/), [Telegram](https://mingle.build/telegram/); [GitHub](https://mingle.build/github/) issues and pull requests, from an account of the agent's own; [iMessage](https://mingle.build/imessage/) on a Mac, by texting yourself; or chat with it right in the Mingle app |
 | **Harnesses** | [Claude Code](https://mingle.build/claude-code/), [Codex](https://mingle.build/codex/), Cursor, [OpenCode](https://mingle.build/opencode/), [Kimi Code](https://mingle.build/kimi-code/), Grok Build, Qwen Code, Qoder, CodeBuddy Code, DeepSeek Harness, Pi, Antigravity, Devin, Factory Droid, through [OAR](https://github.com/botiverse/oar) |
 | **Systems** | macOS, Windows, Linux |
 
@@ -40,7 +40,7 @@ The macOS app is signed and notarized by Apple. The Windows app is not signed ye
 
 ## Quick start
 
-In the app: **New agent**, give it a name and a role, pick a harness, then connect a chat app and follow the steps shown for it. Whoever scans the code, or sends the bot the 6-digit claim code the app shows, becomes the agent's owner.
+In the app: **New agent**, give it a name and a role, pick a harness, then connect a chat app and follow the steps shown for it. Whoever scans the code, or sends the bot the 6-digit claim code the app shows, becomes the agent's owner. To talk to it before any chat app is connected, or just from your desk, open its **Chat** tab.
 
 The same from source, with Node.js 24 and pnpm:
 

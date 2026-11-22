@@ -40,6 +40,8 @@ export interface Agent {
   askAll: boolean;
   /** Give the agent a daily turn to tidy its memory while it is idle (docs/spec.md 4.5). */
   tidy: boolean;
+  /** Up to when the owner has seen the private chat in the console (docs/spec.md 6.9). */
+  chatSeenAt: number;
   createdAt: number;
 }
 
@@ -359,6 +361,26 @@ export class Store {
 
   setAskAll(id: string, on: boolean): void {
     this.db.prepare("UPDATE agents SET ask_all = ?, updated_at = ? WHERE id = ?").run(on ? 1 : 0, this.now(), id);
+  }
+
+  /** The owner has seen the private chat up to `at`; never moves back. */
+  setChatSeen(id: string, at: number): void {
+    this.db.prepare("UPDATE agents SET chat_seen_at = MAX(chat_seen_at, ?) WHERE id = ?").run(at, id);
+  }
+
+  /** What the agent said in a chat after `since`: how many messages, and the latest. Mingle's notices left out. */
+  saidSince(chatId: string, since: number): { count: number; last: Message | undefined } {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM messages WHERE chat_id = ? AND direction = 'out' AND notice = 0 AND state <> 'failed' AND created_at > ?",
+      )
+      .get(chatId, since) as { n: number };
+    const last = this.db
+      .prepare(
+        "SELECT * FROM messages WHERE chat_id = ? AND direction = 'out' AND notice = 0 AND state <> 'failed' AND created_at > ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(chatId, since) as Row | undefined;
+    return { count: Number(row.n), last: last && toMessage(last) };
   }
 
   setTidy(id: string, on: boolean): void {
@@ -684,6 +706,7 @@ export class Store {
   }
 
   /** Everyone this agent knows, most recently changed first. */
+  /** The people the agent met in its chat apps. The private chat's one person, the owner, is not one of them. */
   agentContacts(agentId: string): (Contact & { platform: Platform; owner: boolean })[] {
     const rows = this.db
       .prepare(
@@ -691,7 +714,7 @@ export class Store {
                 (n.owner_id IS NOT NULL AND n.owner_id = k.platform_id) AS is_owner
          FROM contacts k JOIN connections n ON n.id = k.connection_id
          LEFT JOIN people p ON p.id = k.person_id
-         WHERE n.agent_id = ? ORDER BY k.updated_at DESC`,
+         WHERE n.agent_id = ? AND n.platform <> 'local' ORDER BY k.updated_at DESC`,
       )
       .all(agentId) as Row[];
     return rows.map((r) => ({ ...toContact(r), platform: String(r.platform) as Platform, owner: r.is_owner === 1 }));
@@ -1022,13 +1045,25 @@ export class Store {
     replyTo: string | null;
     notice?: boolean;
     lineTaskId?: string | null;
+    /** Files sent with it: `ref` is their path on this computer. */
+    attachments?: Omit<Attachment, "id">[];
   }): Message {
     const id = this.mint("messages", "m", 5);
+    const attachments = (input.attachments ?? []).map((a) => ({ ...a, id: this.mintFileId() }));
     this.db
       .prepare(
-        `INSERT INTO messages (id, chat_id, direction, body, reply_to, state, notice, line_task_id, created_at) VALUES (?, ?, 'out', ?, ?, 'pending', ?, ?, ?)`,
+        `INSERT INTO messages (id, chat_id, direction, body, attachments, reply_to, state, notice, line_task_id, created_at) VALUES (?, ?, 'out', ?, ?, ?, 'pending', ?, ?, ?)`,
       )
-      .run(id, input.chatId, input.body, input.replyTo, input.notice ? 1 : 0, input.lineTaskId ?? null, this.now());
+      .run(
+        id,
+        input.chatId,
+        input.body,
+        attachments.length ? JSON.stringify(attachments) : null,
+        input.replyTo,
+        input.notice ? 1 : 0,
+        input.lineTaskId ?? null,
+        this.now(),
+      );
     return this.message(id) as Message;
   }
 
@@ -1547,13 +1582,26 @@ export class Store {
     const rows = this.db
       .prepare(
         `SELECT m.* FROM messages m JOIN chats c ON c.id = m.chat_id JOIN connections n ON n.id = c.connection_id
-         WHERE n.agent_id = ? AND m.attachments LIKE ?`,
+         WHERE n.agent_id = ? AND m.direction = 'in' AND m.attachments LIKE ?`,
       )
       .all(agentId, `%"id":"${fileId}"%`) as Row[];
     for (const row of rows) {
       const message = toMessage(row);
       const attachment = message.attachments.find((a) => a.id === fileId);
       if (attachment) return { message, chat: this.chat(message.chatId) as Chat, attachment };
+    }
+    return undefined;
+  }
+
+  /** A file in one chat, sent or received, for the console's private chat (docs/spec.md 6.9). */
+  chatFile(chatId: string, fileId: string): { message: Message; attachment: Attachment } | undefined {
+    const rows = this.db
+      .prepare("SELECT * FROM messages WHERE chat_id = ? AND attachments LIKE ?")
+      .all(chatId, `%"id":"${fileId}"%`) as Row[];
+    for (const row of rows) {
+      const message = toMessage(row);
+      const attachment = message.attachments.find((a) => a.id === fileId);
+      if (attachment) return { message, attachment };
     }
     return undefined;
   }
@@ -1929,6 +1977,7 @@ function toAgent(r: Row): Agent {
     hasReplied: Number(r.has_replied) === 1,
     askAll: Number(r.ask_all) === 1,
     tidy: Number(r.tidy) === 1,
+    chatSeenAt: Number(r.chat_seen_at ?? 0),
     createdAt: Number(r.created_at),
   };
 }

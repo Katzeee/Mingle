@@ -105,7 +105,9 @@ func (c *trayController) start() {
 		c.mu.Lock()
 		slug := c.noteSlugs[id]
 		c.mu.Unlock()
-		if slug != "" {
+		if slug != "" && strings.HasPrefix(id, chatNotePrefix) {
+			c.openPage("/a/" + url.PathEscape(slug) + "/chat")
+		} else if slug != "" {
 			c.openAgent(slug)
 		} else if id != closeHintID {
 			c.show()

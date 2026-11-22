@@ -59,7 +59,9 @@ export type Platform =
   | "discord"
   | "telegram"
   | "imessage"
-  | "github";
+  | "github"
+  /** The owner's private chat in the console (docs/spec.md 6.9): built in, never a chat app in the lists. */
+  | "local";
 
 export interface ConnectionView {
   id: string;
@@ -172,6 +174,39 @@ export interface AgentView {
   requests: AccessRequest[];
   /** Things under way at once besides talking: its lines working or waiting their turn (docs/spec.md 4.13). */
   doing: number;
+  /**
+   * The private chat (docs/spec.md 6.9): what the agent said there that the owner has not seen yet.
+   * Absent from a host on a Mingle older than the private chat.
+   */
+  chat?: { unread: number; last: { id: string; preview: string; at: number } | null };
+}
+
+/** A file in the private chat, sent or received. */
+export interface ChatFile {
+  id: string;
+  name: string;
+  size: number | null;
+  mime: string | null;
+}
+
+/** One message of the private chat (docs/spec.md 6.9). */
+export interface ChatMessage {
+  id: string;
+  direction: "in" | "out";
+  body: string;
+  state: string;
+  retryAt: number | null;
+  createdAt: number;
+  files: ChatFile[];
+  line: { id: string; title: string; state: LineState; started: boolean } | null;
+}
+
+/** A file the owner attached and has not sent yet. */
+export interface ChatUpload {
+  id: string;
+  name: string;
+  size: number;
+  mime?: string;
 }
 
 /** Where a piece of work an agent is doing on the side stands (docs/spec.md 4.13). */
@@ -539,6 +574,48 @@ export const api = {
       "GET",
       `/v1/admin/agents/${id}/conversations${page ? `?chat=${encodeURIComponent(page.chat)}&before=${page.before}&messages=20` : ""}`,
     ),
+  /** The private chat, newest last; `watching` while the console shows it, so what is there counts as seen. */
+  chat: (id: string, options: { before?: string; watching?: boolean } = {}) =>
+    call<{ messages: ChatMessage[]; more: boolean }>(
+      "GET",
+      `/v1/admin/agents/${id}/chat?limit=50${options.before ? `&before=${encodeURIComponent(options.before)}` : ""}${options.watching ? "&watching=1" : ""}`,
+    ),
+  say: (id: string, text: string, files: string[]) =>
+    call<ChatMessage>("POST", `/v1/admin/agents/${id}/chat`, { text, files }),
+  /** Keep a file to send with the next message. */
+  upload: async (id: string, file: File): Promise<ChatUpload> => {
+    let response: Response;
+    try {
+      response = await fetch(`/v1/admin/agents/${id}/chat/uploads`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ""}`,
+          "content-type": file.type || "application/octet-stream",
+          "x-file-name": encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+    } catch {
+      throw new ApiError("offline", "", 0);
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = payload as { error?: string; next?: string };
+      throw new ApiError(error.error ?? "http_error", error.next ?? response.statusText, response.status);
+    }
+    return payload as ChatUpload;
+  },
+  /** A file of the private chat, as bytes to show or save. */
+  chatFile: async (id: string, fileId: string): Promise<Blob> => {
+    const response = await fetch(`/v1/admin/agents/${id}/chat/files/${fileId}`, {
+      headers: { authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ""}` },
+    }).catch(() => {
+      throw new ApiError("offline", "", 0);
+    });
+    if (!response.ok) throw new ApiError("file_not_found", "", response.status);
+    return response.blob();
+  },
+  revealFile: (id: string, fileId: string) => call("POST", `/v1/admin/agents/${id}/chat/files/${fileId}/reveal`),
   handoffs: (id: string) => call<HandoffView[]>("GET", `/v1/admin/agents/${id}/handoffs?limit=30`),
   handoff: (id: string, body: string) =>
     call<{ handoff: HandoffView; state: "idle" | "busy" | "paused" }>("POST", `/v1/admin/agents/${id}/handoffs`, {

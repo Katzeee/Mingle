@@ -67,7 +67,8 @@ export function remoteGateway(remotes: Remotes): MiddlewareHandler {
       }
     }
     if (!host) return next();
-    if (/\/open-home$/.test(path)) throw new MingleError("ssh_remote_home", "Open this directory on the remote host.");
+    if (/\/open-home$|\/chat\/files\/[^/]+\/reveal$/.test(path))
+      throw new MingleError("ssh_remote_home", "Open this on the remote host.");
     const request: RemoteRequest = { method, path: path + new URL(c.req.url).search };
     if (!["GET", "HEAD"].includes(method)) {
       const bytes = await c.req.raw.arrayBuffer();

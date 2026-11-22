@@ -21,7 +21,7 @@
 
 | | |
 | --- | --- |
-| **聊天软件** | [微信](https://mingle.build/zh/wechat/)、[企业微信](https://mingle.build/zh/wecom/)、[飞书](https://mingle.build/zh/feishu/)、[钉钉](https://mingle.build/zh/dingtalk/)、[QQ](https://mingle.build/zh/qq/)、[Slack](https://mingle.build/zh/slack/)、[Discord](https://mingle.build/zh/discord/)、[Telegram](https://mingle.build/zh/telegram/)；[GitHub](https://mingle.build/zh/github/) 的 issue 和 PR（用 Agent 自己的账号）；Mac 上的 [iMessage](https://mingle.build/zh/imessage/)（给自己发消息） |
+| **聊天软件** | [微信](https://mingle.build/zh/wechat/)、[企业微信](https://mingle.build/zh/wecom/)、[飞书](https://mingle.build/zh/feishu/)、[钉钉](https://mingle.build/zh/dingtalk/)、[QQ](https://mingle.build/zh/qq/)、[Slack](https://mingle.build/zh/slack/)、[Discord](https://mingle.build/zh/discord/)、[Telegram](https://mingle.build/zh/telegram/)；[GitHub](https://mingle.build/zh/github/) 的 issue 和 PR（用 Agent 自己的账号）；Mac 上的 [iMessage](https://mingle.build/zh/imessage/)（给自己发消息）；也可以直接在 Mingle 应用里和它私聊 |
 | **Harness** | [Claude Code](https://mingle.build/zh/claude-code/)、[Codex](https://mingle.build/zh/codex/)、Cursor、[OpenCode](https://mingle.build/zh/opencode/)、[Kimi Code](https://mingle.build/zh/kimi-code/)、Grok Build、Qwen Code、Qoder、CodeBuddy Code、DeepSeek Harness、Pi、Antigravity、Devin、Factory Droid，通过 [OAR](https://github.com/botiverse/oar) 接入 |
 | **系统** | macOS、Windows、Linux |
 
@@ -40,7 +40,7 @@ macOS 版已经过 Apple 签名和公证。Windows 版还没有签名，要点"�
 
 ## 快速开始
 
-在应用里点**新建 Agent**，起名字、写角色、选 harness，然后连接一个聊天软件，按界面上的步骤做。扫码的人，或者把应用显示的 6 位认领码发给机器人的人，就是这个 Agent 的 owner。
+在应用里点**新建 Agent**，起名字、写角色、选 harness，然后连接一个聊天软件，按界面上的步骤做。扫码的人，或者把应用显示的 6 位认领码发给机器人的人，就是这个 Agent 的 owner。还没接聊天软件、或者人就在电脑前时，打开它的**私聊**标签就能直接说话。
 
 从源码运行也一样，需要 Node.js 24 和 pnpm：
 

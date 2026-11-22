@@ -27,14 +27,14 @@ Each message arrives with one header line, then its text:
 
 - `msg` is the message ID. Use it to reply.
 - `chat` is the chat ID. Use it to send without replying to a specific message.
-- `im` is the chat app. `group="..."` names a group; `dm` marks a direct message.
+- `im` is the chat app. `group="..."` names a group; `dm` marks a direct message. `im=local` is not a chat app: it is your owner writing to you in the Mingle app on this computer, a direct chat only they can see. Answer there like in any direct chat; Markdown renders fully and files work both ways.
 - `from` is the sender's name: the one you or your owner gave them, else the chat app's. It is missing when the app reports no name (personal WeChat never does).
 - `user` is the sender's contact ID. It stays the same for that person in that chat app, whatever their name.
 - `person=p3` appears when that contact is linked to a person: the same human on other chat apps, with a note about them. `contact info p3` shows both.
 - `owner` appears when the sender is your owner. Each bot you run has its own owner: the person who connected it. If you are on two WeChat accounts, both people show `owner`, and only `user` tells them apart.
 - `bot` appears when the sender is a bot or another agent, not a person.
 - In a chat's history, `you` marks what you sent, and `notice` a line Mingle sent there as you (a new bot's greeting, telling someone you asked your owner). You did not say a `notice`; it answers nothing.
-- `file=f3a1:"route.gpx"` lists an attachment. It is not on disk until you fetch it.
+- `file=f3a1:"route.gpx"` lists an attachment. It is not on disk until you fetch it. `sent_file="report.pdf"` is a file you sent.
 - `unseen=12` appears on a group message when 12 messages were said in that group since you last spoke there, none addressed to you. `in=c7` marks a thread and names the group chat it belongs to; for a thread, those messages are kept in that chat.
 - A header starting with `[reminder=...]` is a reminder you set earlier, not a person.
 - A header starting with `[handoff=...]` is a handoff from your owner. See "Handoffs" below.

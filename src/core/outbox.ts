@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { basename } from "node:path";
 import type { ChannelConnection, ChatRef, Degradation, SendResult } from "../channels/channel.ts";
 import { codeRanges, type Mention, mentionSpots } from "../channels/mention.ts";
 import type { Contact, Message, Store } from "../store/store.ts";
@@ -104,14 +106,16 @@ export class Outbox {
     });
     for (const [i, chunk] of chunks.entries()) {
       const last = i === chunks.length - 1;
+      const files = last && request.files?.length ? request.files.map((path) => ({ path })) : undefined;
       const record = store.insertOutbound({
         chatId: chat.id,
         body: chunk,
         replyTo: i === 0 ? (quoted?.id ?? null) : null,
         ...(request.notice ? { notice: true } : {}),
         ...(request.lineTaskId ? { lineTaskId: request.lineTaskId } : {}),
+        // Kept with the message, so the console can show what went with it.
+        ...(files ? { attachments: files.map((f) => sentFile(f.path)) } : {}),
       });
-      const files = last && request.files?.length ? request.files.map((path) => ({ path })) : undefined;
       // The first piece of a reply goes into the live reply opened for that message, if any.
       // Mingle's own word is not the answer the live reply waits for.
       const intoLive =
@@ -317,4 +321,13 @@ export function split(text: string, max: number): string[] {
   }
   if (rest) out.push(rest);
   return out;
+}
+
+/** A file the agent sends, as kept with its message: its path, name and size. */
+function sentFile(path: string): { ref: string; name: string; size?: number } {
+  let size: number | undefined;
+  try {
+    size = statSync(path).size;
+  } catch {}
+  return { ref: path, name: basename(path), ...(size !== undefined ? { size } : {}) };
 }

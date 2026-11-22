@@ -27,7 +27,8 @@ export type View =
   | { kind: "home" }
   | { kind: "new" }
   | { kind: "settings" }
-  | { kind: "agent"; slug: string }
+  /** `tab`: a link straight to the private chat (`/a/<slug>/chat`), as the desktop app's notifications open. */
+  | { kind: "agent"; slug: string; tab?: "chat" }
   | { kind: "connect"; slug: string; platform?: string };
 
 function viewFromPath(): View {
@@ -39,14 +40,17 @@ function viewFromPath(): View {
     const slug = decodeURIComponent(connect[1]);
     return connect[2] ? { kind: "connect", slug, platform: connect[2] } : { kind: "connect", slug };
   }
-  const agent = /^\/a\/([^/]+)/.exec(path);
-  return agent?.[1] ? { kind: "agent", slug: decodeURIComponent(agent[1]) } : { kind: "home" };
+  const agent = /^\/a\/([^/]+)(\/chat)?/.exec(path);
+  if (!agent?.[1]) return { kind: "home" };
+  return agent[2]
+    ? { kind: "agent", slug: decodeURIComponent(agent[1]), tab: "chat" }
+    : { kind: "agent", slug: decodeURIComponent(agent[1]) };
 }
 
 function pathFor(view: View): string {
   switch (view.kind) {
     case "agent":
-      return `/a/${encodeURIComponent(view.slug)}`;
+      return `/a/${encodeURIComponent(view.slug)}${view.tab === "chat" ? "/chat" : ""}`;
     case "connect":
       return `/a/${encodeURIComponent(view.slug)}/connect${view.platform ? `/${view.platform}` : ""}`;
     case "new":
@@ -76,6 +80,17 @@ export function App() {
 }
 
 export type Navigate = (view: View, options?: { replace?: boolean }) => void;
+
+/** One request per view object: the same view keeps its request, a new navigation makes a new one. */
+const requests = new WeakMap<View, { tab: "chat" }>();
+function requested(view: View, tab: "chat"): { tab: "chat" } {
+  let request = requests.get(view);
+  if (!request) {
+    request = { tab };
+    requests.set(view, request);
+  }
+  return request;
+}
 
 function Shell() {
   const { t } = useI18n();
@@ -157,6 +172,8 @@ function Shell() {
   if (problem === "unauthorized") return <Unauthorized />;
 
   const slug = view.kind === "agent" || view.kind === "connect" ? view.slug : undefined;
+  // Each navigation that names a tab is a new request, so opening the same link again switches back to it.
+  const requestedTab = view.kind === "agent" && view.tab ? requested(view, view.tab) : undefined;
   const current = slug ? agents?.find((a) => a.slug === slug) : undefined;
 
   let page: React.ReactNode =
@@ -179,7 +196,16 @@ function Shell() {
       );
     else if (view.kind === "connect" && current)
       page = <ConnectPage agent={current} platform={view.platform} onNavigate={navigate} onChanged={refresh} />;
-    else if (current) page = <AgentPage key={current.id} agent={current} onNavigate={navigate} onChanged={refresh} />;
+    else if (current)
+      page = (
+        <AgentPage
+          key={current.id}
+          agent={current}
+          requestedTab={requestedTab}
+          onNavigate={navigate}
+          onChanged={refresh}
+        />
+      );
     else if (agents.length === 0) page = <Welcome onStart={() => navigate({ kind: "new" })} />;
     else {
       // Nothing chosen, or a link to an agent that is gone: show the first one.
@@ -288,6 +314,11 @@ function Sidebar({
                     <AgentStatusText status={a.status} where={a.remote} more={more} />
                   </span>
                 </span>
+                {a.chat?.unread ? (
+                  <span className="size-2 shrink-0 rounded-full bg-accent" title={t("privateChat.unread")}>
+                    <span className="sr-only">{t("privateChat.unread")}</span>
+                  </span>
+                ) : null}
               </button>
             </Shortcut>
           );

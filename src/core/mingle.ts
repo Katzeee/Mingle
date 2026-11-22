@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { arch, release } from "node:os";
 import { join } from "node:path";
 import type {
@@ -14,6 +14,7 @@ import type {
   PermissionId,
   Platform,
 } from "../channels/channel.ts";
+import { LOCAL_OWNER, type LocalChannel, type LocalFile, localChannel } from "../channels/local/local.ts";
 import type { Harness, HarnessInfo, HarnessStatus } from "../harness/harness.ts";
 import { checkEnvironment, runCommand } from "../platform/command.ts";
 import type { SecretStore } from "../platform/secrets.ts";
@@ -110,6 +111,38 @@ interface Link {
   /** Which connect attempt is current; bumped by every new attempt and by removal. */
   gen: number;
   timer?: NodeJS.Timeout | undefined;
+}
+
+/** Largest file the owner can attach in the private chat (docs/spec.md 6.9). */
+export const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
+/** A file the owner attached in the private chat, kept until it is sent. */
+export interface LocalUpload {
+  readonly id: string;
+  readonly name: string;
+  readonly size: number;
+  readonly mime?: string;
+}
+
+const MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  heic: "image/heic",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+  json: "application/json",
+  zip: "application/zip",
+};
+
+/** A file's type by its extension, where it is a common one. */
+export function mimeOf(name: string): string | undefined {
+  return MIME[name.slice(name.lastIndexOf(".") + 1).toLowerCase()];
 }
 
 export interface MingleOptions {
@@ -281,9 +314,14 @@ export class Mingle {
   private readonly deleting = new Set<string>();
 
   readonly options: MingleOptions;
+  /** The owner's private chat in the console (docs/spec.md 6.9): one connection per agent, built in. */
+  readonly localChat: LocalChannel = localChannel();
+  /** The chat apps, and the built-in private chat. */
+  private readonly channels: Partial<Record<Platform, Channel>>;
 
   constructor(options: MingleOptions) {
     this.options = options;
+    this.channels = { ...options.channels, local: this.localChat };
     this.book = new HearingBook(() => this.pace(), options.engage);
     this.remotes = new Remotes(options.paths.home, options.remoteTransport);
     for (const dir of [
@@ -388,6 +426,8 @@ export class Mingle {
       }
       for (const agent of this.store.agents()) this.saveLimitFor(agent.id);
     }
+    // Every agent has its private chat in the console, agents made before it came too.
+    for (const agent of this.store.agents()) this.ensureLocalChat(agent.id);
     for (const agent of this.store.agents()) {
       // A paused agent stays paused across restarts: no session, no token, until the owner resumes it.
       if (agent.status === "paused") this.paused.add(agent.id);
@@ -658,6 +698,10 @@ export class Mingle {
     const agent = this.store.createAgent({ name, slug, harness: input.harness, model: input.model ?? null });
     createHome(this.homeDir(agent), name, input.role);
     this.addRuntime(agent).start();
+    const local = this.ensureLocalChat(agent.id);
+    void this.reconnect(local.id).catch((error) =>
+      this.log(`the private chat of ${agent.name} could not open: ${(error as Error).message}`),
+    );
     return agent;
   }
 
@@ -763,6 +807,7 @@ export class Mingle {
       this.store.deleteAgent(agent.id);
       this.removeAvatar(agent.avatar);
       rmSync(join(this.options.paths.home, "lines", agent.slug), { recursive: true, force: true });
+      rmSync(this.uploadsDir(agent.id), { recursive: true, force: true });
       if (removeHome) rmSync(this.homeDir(agent), { recursive: true, force: true });
     } finally {
       this.deleting.delete(agent.id);
@@ -1067,11 +1112,11 @@ export class Mingle {
   // ------------------------------------------------------------- connections
 
   hasChannel(platform: Platform): boolean {
-    return Boolean(this.options.channels[platform]);
+    return Boolean(this.channels[platform]);
   }
 
   channel(platform: Platform): Channel {
-    const channel = this.options.channels[platform];
+    const channel = this.channels[platform];
     if (!channel) throw new MingleError("platform_unsupported", `${platform} is not supported yet`);
     return channel;
   }
@@ -1306,8 +1351,91 @@ export class Mingle {
     if (!connection) return;
     this.drive(connectionId, { kind: "remove" });
     this.links.delete(connectionId);
-    if (connection.secretRef) await this.options.secrets.delete(connection.secretRef);
+    if (connection.secretRef && !this.isBuiltin(connection)) await this.options.secrets.delete(connection.secretRef);
     this.store.deleteConnection(connectionId);
+  }
+
+  /** A connection Mingle makes itself (the console's private chat), not a chat app the owner added. */
+  isBuiltin(connection: Pick<Connection, "platform">): boolean {
+    return Boolean(this.channels[connection.platform]?.builtin);
+  }
+
+  /** The agent's private chat in the console (docs/spec.md 6.9), made the first time it is needed. */
+  ensureLocalChat(agentId: string): Connection {
+    const existing = this.localConnection(agentId);
+    if (existing) return existing;
+    const connection = this.store.createConnection({ agentId, platform: "local", secretRef: `local:${agentId}` });
+    // The one person in it is the owner: nothing to claim, nobody to let in.
+    this.store.updateConnection(connection.id, { botId: connection.id, botName: "Mingle", ownerId: LOCAL_OWNER });
+    return this.store.connection(connection.id) as Connection;
+  }
+
+  localConnection(agentId: string): Connection | undefined {
+    return this.store.connections(agentId).find((n) => this.isBuiltin(n));
+  }
+
+  /** The private chat's one chat, once the owner said something there. */
+  localChatOf(agentId: string): Chat | undefined {
+    const connection = this.localConnection(agentId);
+    return connection ? this.store.agentChats(agentId).find((c) => c.connectionId === connection.id) : undefined;
+  }
+
+  /**
+   * The owner said something to the agent in the console (docs/spec.md 6.9). It goes in like any
+   * direct message: the same inbox, session, lines, pause and /stop. Returns the stored message.
+   */
+  sayLocally(idOrSlug: string, input: { text: string; files: readonly LocalFile[] }): Message {
+    const agent = this.agent(idOrSlug);
+    const text = input.text.trim();
+    if (!text && input.files.length === 0) throw new MingleError("empty_message", "write something or attach a file");
+    const connection = this.ensureLocalChat(agent.id);
+    const platformId = this.localChat.post(connection.id, { text, files: input.files });
+    if (!platformId)
+      throw new MingleError("chat_starting", "Mingle is still opening this chat; try again in a moment", 503);
+    const chat = this.localChatOf(agent.id);
+    const message = chat && this.store.messageByPlatformId(chat.id, platformId);
+    if (!message) throw new MingleError("internal", "the message was not kept; check ~/.mingle/logs", 500);
+    return message;
+  }
+
+  /** Where files the owner attaches in the private chat are kept, one folder each. */
+  private uploadsDir(agentId: string): string {
+    return join(this.options.paths.home, "uploads", agentId);
+  }
+
+  /** Keep a file the owner is about to send in the private chat. Returns the handle `sayLocally` takes. */
+  saveUpload(idOrSlug: string, input: { name: string; bytes: Uint8Array; mime?: string }): LocalUpload {
+    const agent = this.agent(idOrSlug);
+    if (input.bytes.byteLength > UPLOAD_MAX_BYTES)
+      throw new MingleError("file_too_large", "send files under 100 MB", 413);
+    // Only the last part of the name, without control characters a file system or a terminal would trip on.
+    const last = input.name.split(/[\\/]/).pop() ?? "";
+    const base = [...last]
+      .filter((c) => c >= " " && c !== "\u007f")
+      .join("")
+      .trim()
+      .slice(0, 200);
+    const name = base && base !== "." && base !== ".." ? base : "file";
+    const id = randomBytes(9).toString("base64url");
+    const dir = join(this.uploadsDir(agent.id), id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), input.bytes);
+    return { id, name, size: input.bytes.byteLength, ...(input.mime ? { mime: input.mime } : {}) };
+  }
+
+  /** A kept upload as the private chat sends it, or undefined for a handle that is not one. */
+  upload(agentId: string, id: string): LocalFile | undefined {
+    if (!/^[A-Za-z0-9_-]{12}$/.test(id)) return undefined;
+    const dir = join(this.uploadsDir(agentId), id);
+    let name: string | undefined;
+    try {
+      name = readdirSync(dir)[0];
+    } catch {
+      return undefined;
+    }
+    if (!name) return undefined;
+    const path = join(dir, name);
+    return { path, name, size: statSync(path).size, ...(mimeOf(name) ? { mime: mimeOf(name) as string } : {}) };
   }
 
   isLive(connectionId: string): boolean {
@@ -1444,6 +1572,8 @@ export class Mingle {
   }
 
   private async credentials(connection: Connection): Promise<Credentials | undefined> {
+    // The private chat needs no secret: it only has to know which connection it is.
+    if (this.isBuiltin(connection)) return { connection: connection.id };
     const raw = connection.secretRef ? await this.options.secrets.get(connection.secretRef) : undefined;
     if (!raw) return undefined;
     try {
@@ -1649,7 +1779,8 @@ export class Mingle {
     if (this.paused.has(connection.agentId)) {
       // Not handed to the agent, and not kept for later: the person hears once per chat that it is paused.
       this.store.moveInbound([message.id], "pause");
-      if (this.pauseNoted.has(chat.id)) return;
+      // The console says so itself, beside the private chat.
+      if (this.pauseNoted.has(chat.id) || this.isBuiltin(connection)) return;
       this.pauseNoted.add(chat.id);
       const name = this.store.agent(connection.agentId)?.name ?? "";
       void this.outbox
