@@ -25,6 +25,16 @@ export const copy = {
       alt: "The Mingle console: Alex in Telegram, Slack, Discord, WeChat and GitHub, with its recent messages and two things under way",
     },
     logos: { harnesses: "Harnesses", apps: "Chat apps" },
+    film: {
+      eyebrow: "Product film",
+      title: "See Mingle in 40 seconds.",
+      lead: "Pick your local coding agent, connect Slack, Discord, Telegram and the rest, and watch one agent carry the same memory across every chat app.",
+      play: "Watch film",
+      duration: "0:40",
+      name: "Mingle — One agent in every chat app (40s product film)",
+      description:
+        "Connect your local Claude Code, Codex, or other coding agent into Slack, Discord, Telegram, GitHub, and iMessage with one shared MEMORY.md and zero Mingle server.",
+    },
     parallel: {
       eyebrow: "Several things at once",
       title: "Works on the side.<br><span>Answers right away.</span>",
@@ -247,6 +257,16 @@ export const copy = {
       alt: "Mingle 控制台：Alex 接入了微信、飞书、Telegram、钉钉和 GitHub，旁边是它最近的消息和正在做的两件事",
     },
     logos: { harnesses: "支持的 harness", apps: "支持的聊天软件" },
+    film: {
+      eyebrow: "产品介绍",
+      title: "40 秒看懂 Mingle。",
+      lead: "选定本机 coding agent，接入飞书、Slack、微信等聊天软件，看同一个 Agent 带着同一份记忆在多端实时协作。",
+      play: "播放影片",
+      duration: "0:40",
+      name: "Mingle — 一个 Agent，住进你所有的聊天软件（40 秒产品宣传片）",
+      description:
+        "把本机 Claude Code、Codex 等 coding agent 接进飞书、Slack、微信等聊天软件，共享同一份 MEMORY.md，无服务器直连。",
+    },
     parallel: {
       eyebrow: "同时做几件事",
       title: "长活在旁边做，<br><span>问题马上回。</span>",

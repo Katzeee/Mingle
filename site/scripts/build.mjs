@@ -126,6 +126,19 @@ const softwareJsonLd = (t, lang, path) =>
     codeRepository: REPO,
     sameAs: [REPO],
   });
+const videoJsonLd = (t, lang) =>
+  jsonLd({
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: t.film.name,
+    description: t.film.description,
+    thumbnailUrl: [`${ORIGIN}/media/mingle-film-${lang}-poster.webp`],
+    contentUrl: `${ORIGIN}/media/mingle-film-${lang}.mp4`,
+    uploadDate: lastmod,
+    duration: "PT40S",
+    inLanguage: t.lang,
+    publisher: { "@type": "Organization", name: "Mingle", url: `${ORIGIN}/`, logo: `${ORIGIN}/favicon.svg` },
+  });
 const faqJsonLd = (items) =>
   jsonLd({
     "@context": "https://schema.org",
@@ -300,6 +313,29 @@ function logos(key, t) {
 </section>`;
 }
 
+// Product film: native HTML5 video with preload="none" so the page stays instant until play.
+function filmSection(lang, t) {
+  const f = t.film;
+  return `
+<section id="film" class="section film-section">
+  <div class="wrap">
+    <p class="eyebrow">${f.eyebrow}</p>
+    <h2>${f.title}</h2>
+    <p class="lead">${f.lead}</p>
+    <div class="film-frame reveal" data-film>
+      <video class="film-video" controls playsinline preload="none" poster="/media/mingle-film-${lang}-poster.webp" width="2560" height="1440">
+        <source src="/media/mingle-film-${lang}.mp4" type="video/mp4">
+      </video>
+      <button class="film-play" type="button" aria-label="${esc(f.play)} (${f.duration})">
+        <span class="film-play-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg></span>
+        <span>${esc(f.play)}</span>
+        <span class="film-play-time">${f.duration}</span>
+      </button>
+    </div>
+  </div>
+</section>`;
+}
+
 // No server, drawn: your agent → Mingle on your computer → your chat apps. Nothing in a cloud of ours.
 function flow(t) {
   const f = t.privacy.flow;
@@ -452,6 +488,7 @@ ${Object.values(copy)
 <meta name="twitter:card" content="summary_large_image">
 ${websiteJsonLd(t)}
 ${softwareJsonLd(t, lang, t.path)}
+${videoJsonLd(t, lang)}
 ${faqJsonLd(t.faq.items)}
 <link rel="stylesheet" href="/styles.css?v=${version}">
 <script>document.documentElement.classList.add("js")</script>
@@ -482,13 +519,15 @@ ${faqJsonLd(t.faq.items)}
            data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
         <a class="btn" href="#cli">${t.installTerminal}</a>
       </div>
-      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
+      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a> · <a href="#film">${t.film.play} (${t.film.duration})</a></p>
     </div>
     ${shot("agent", lang, t.hero.alt, "hero-shot rise", true)}
   </div>
 </section>
 
 ${logos(key, t)}
+
+${filmSection(lang, t)}
 
 ${demoSection(key, t)}
 
@@ -1483,6 +1522,7 @@ mkdirSync(join(OUT, "zh"), { recursive: true });
 for (const asset of [
   "img",
   "icons",
+  "media",
   "styles.css",
   "main.js",
   "favicon.svg",
