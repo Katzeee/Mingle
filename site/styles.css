@@ -334,6 +334,89 @@ h2 span {
   height: auto;
 }
 
+/* Product film: quiet full-bleed 16:9 frame matching console windows. */
+.film-frame {
+  position: relative;
+  margin-top: 36px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #f3f1ec;
+  box-shadow: var(--shadow-lg);
+  aspect-ratio: 16 / 9;
+}
+.film-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #f3f1ec;
+}
+.film-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 22px 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  background: rgb(17 17 19 / 0.84);
+  color: #ffffff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  box-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.35);
+  transition:
+    transform 160ms var(--ease),
+    background 160ms var(--ease),
+    opacity 180ms var(--ease);
+}
+.film-play:hover {
+  background: rgb(17 17 19 / 0.94);
+  transform: translate(-50%, -50%) scale(1.03);
+}
+.film-play:active {
+  transform: translate(-50%, -50%) scale(0.98);
+}
+.film-play-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+.film-play-time {
+  color: rgb(255 255 255 / 0.68);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.film-frame.is-playing .film-play {
+  opacity: 0;
+  pointer-events: none;
+}
+.film-frame:not(.is-playing) {
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .film-frame {
+    border-radius: 12px;
+    margin-top: 24px;
+  }
+  .film-play {
+    height: 44px;
+    padding: 0 18px 0 14px;
+    font-size: 14px;
+  }
+}
+
 /* Chat app marks */
 .app-icon {
   display: inline-flex;

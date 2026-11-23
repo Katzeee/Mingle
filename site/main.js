@@ -39,6 +39,25 @@ for (const copy of document.querySelectorAll("[data-copy]")) {
   });
 }
 
+// Product film: keep native controls tucked away over the poster until first play.
+for (const frame of document.querySelectorAll("[data-film]")) {
+  const video = frame.querySelector("video");
+  const play = frame.querySelector(".film-play");
+  if (!video || !play) continue;
+  video.controls = false;
+  const startFilm = () => {
+    if (frame.classList.contains("is-playing")) return;
+    frame.classList.add("is-playing");
+    video.controls = true;
+    video.play().catch(() => {});
+  };
+  play.addEventListener("click", (e) => {
+    e.stopPropagation();
+    startFilm();
+  });
+  frame.addEventListener("click", startFilm);
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Phones with a short conversation: messages appear in order (data-seq) once they're on screen,
