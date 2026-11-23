@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@botiverse/oar@0.120.0': 7dd08eb81a4bcd65e71a50c14b43b7e9029dbe80943e27ea7ed1d26834eff06e
+  '@botiverse/oar@0.120.0': d536e4a15ae47a287245d8ac1def4a1fa1a932fc131aa203c3494fde123cc609
 
 importers:
 
@@ -13,7 +13,7 @@ importers:
     dependencies:
       '@botiverse/oar':
         specifier: 0.120.0
-        version: 0.120.0(patch_hash=7dd08eb81a4bcd65e71a50c14b43b7e9029dbe80943e27ea7ed1d26834eff06e)(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(ws@8.22.2)(zod@4.6.7)
+        version: 0.120.0(patch_hash=d536e4a15ae47a287245d8ac1def4a1fa1a932fc131aa203c3494fde123cc609)(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(ws@8.22.2)(zod@4.6.7)
       '@hono/node-server':
         specifier: ^2.1.6
         version: 2.1.6(hono@4.13.17)
@@ -1990,7 +1990,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.6.6':
     optional: true
 
-  '@botiverse/oar@0.120.0(patch_hash=7dd08eb81a4bcd65e71a50c14b43b7e9029dbe80943e27ea7ed1d26834eff06e)(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(ws@8.22.2)(zod@4.6.7)':
+  '@botiverse/oar@0.120.0(patch_hash=d536e4a15ae47a287245d8ac1def4a1fa1a932fc131aa203c3494fde123cc609)(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(ws@8.22.2)(zod@4.6.7)':
     dependencies:
       '@agentclientprotocol/sdk': 1.9.0(zod@4.6.7)
       '@earendil-works/pi-ai': 1.5.2(@aws-sdk/credential-provider-node@3.972.95)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.22.2)(zod@4.6.7)
