@@ -313,27 +313,34 @@ function logos(key, t) {
 </section>`;
 }
 
-// Product film: native HTML5 video with preload="none" so the page stays instant until play.
-function filmSection(lang, t) {
+// Hero stage: 40s product film first (preload="none" so LCP stays instant on the WebP poster),
+// with a quiet segmented switch to flip to the native console screenshot.
+function heroStage(lang, t) {
   const f = t.film;
   return `
-<section id="film" class="section film-section">
-  <div class="wrap">
-    <p class="eyebrow">${f.eyebrow}</p>
-    <h2>${f.title}</h2>
-    <p class="lead">${f.lead}</p>
-    <div class="film-frame reveal" data-film>
-      <video class="film-video" controls playsinline preload="none" poster="/media/mingle-film-${lang}-poster.webp" width="2560" height="1440">
-        <source src="/media/mingle-film-${lang}.mp4" type="video/mp4">
-      </video>
-      <button class="film-play" type="button" aria-label="${esc(f.play)} (${f.duration})">
-        <span class="film-play-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg></span>
-        <span>${esc(f.play)}</span>
-        <span class="film-play-time">${f.duration}</span>
-      </button>
-    </div>
-  </div>
-</section>`;
+    <div id="film" class="hero-stage rise" data-hero-stage>
+      <div class="hero-panels">
+        <div class="hero-panel" data-hero-panel="film">
+          <div class="film-frame hero-film" data-film>
+            <video class="film-video" controls playsinline preload="none" poster="/media/mingle-film-${lang}-poster.webp" width="2560" height="1440">
+              <source src="/media/mingle-film-${lang}.mp4" type="video/mp4">
+            </video>
+            <button class="film-play" type="button" aria-label="${esc(f.play)} (${f.duration})">
+              <span class="film-play-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg></span>
+              <span>${esc(f.play)}</span>
+              <span class="film-play-time">${f.duration}</span>
+            </button>
+          </div>
+        </div>
+        <div class="hero-panel" data-hero-panel="console" hidden>
+          ${shot("agent", lang, t.hero.alt, "hero-console")}
+        </div>
+      </div>
+      <div class="hero-switch" role="tablist" aria-label="${esc(f.switchLabel)}">
+        <button type="button" role="tab" aria-selected="true" data-hero-tab="film">${esc(f.tabFilm)}<span>${f.duration}</span></button>
+        <button type="button" role="tab" aria-selected="false" data-hero-tab="console">${esc(f.tabConsole)}</button>
+      </div>
+    </div>`;
 }
 
 // No server, drawn: your agent → Mingle on your computer → your chat apps. Nothing in a cloud of ours.
@@ -371,69 +378,18 @@ function flow(t) {
     </div>`;
 }
 
-// The interactive demo (site/scripts/demo.mjs): the frame is static, main.js plays the scenes from the inline JSON.
-const demoApps = ["feishu", "wechat", "telegram", "discord"];
-function demoSection(key, t) {
-  const d = demo[key];
-  const data = {
-    owner: d.owner,
-    ui: d.ui,
-    names: Object.fromEntries(demoApps.map((id) => [id, t.platforms[id]])),
-    icons: Object.fromEntries(demoApps.map((id) => [id, platformIcon(id, 18)])),
-    scenes: d.scenes,
-  };
-  const json = JSON.stringify(data).replaceAll("<", "\\u003c");
-  const apps = (s) => [...new Set(Object.values(s.chats).map((c) => c.app))];
+// One agent: the six core capabilities that go deeper than the 40s product film.
+function agentSection(t) {
   return `
-<section id="demo" class="section demo-section">
+<section id="demo" class="section">
   <div class="wrap">
     <p class="eyebrow">${t.agent.eyebrow}</p>
     <h2>${t.agent.title}</h2>
-    <p class="lead">${t.agent.lead} ${t.demo.lead}</p>
-  </div>
-  <div class="wrap demo-grid">
-    <div class="demo-intro">
-      <div class="demo-list" role="tablist" aria-label="${esc(t.demo.scenes)}">
-        ${d.scenes
-          .map(
-            (
-              s,
-              i,
-            ) => `<button type="button" role="tab" aria-selected="${i === 0}" aria-controls="demo-phone" data-scene="${i}">
-          <span class="demo-apps">${apps(s)
-            .map((id) => platformIcon(id, 22))
-            .join("")}</span>
-          <span class="demo-text"><b>${esc(s.title)}</b><small>${esc(s.blurb)}</small></span>
-        </button>`,
-          )
-          .join("")}
-      </div>
-    </div>
-    <div class="demo-stage">
-      <div class="phone" id="demo-phone" role="tabpanel" data-app="feishu">
-        <div class="phone-status" aria-hidden="true"><span>9:41</span><span class="phone-bars"><i></i><i></i><i></i><i></i></span></div>
-        <div class="im-head"></div>
-        <div class="im-logs"></div>
-        <div class="im-typing" aria-hidden="true"></div>
-        <div class="im-compose">
-          <div class="im-input"></div>
-          <button type="button" class="im-send" disabled>${esc(d.ui.send)}</button>
-        </div>
-        <div class="demo-end" hidden>
-          <button type="button" class="btn btn-small" data-again>${esc(d.ui.again)}</button>
-          <button type="button" class="btn btn-small btn-primary" data-next></button>
-        </div>
-        <div class="demo-banner" aria-hidden="true"></div>
-      </div>
-      <p class="demo-caption"><span class="av av-agent" aria-hidden="true">A</span>${esc(d.ui.caption)}</p>
-    </div>
-  </div>
-  <div class="wrap">
+    <p class="lead">${t.agent.lead}</p>
     <ul class="table table-3 reveal">
       ${t.agent.points.map(([h, p]) => `<li><h3>${h}</h3><p>${p}</p></li>`).join("")}
     </ul>
   </div>
-  <script type="application/json" id="demo-data">${json}</script>
 </section>`;
 }
 
@@ -490,6 +446,7 @@ ${websiteJsonLd(t)}
 ${softwareJsonLd(t, lang, t.path)}
 ${videoJsonLd(t, lang)}
 ${faqJsonLd(t.faq.items)}
+<link rel="preload" as="image" href="/media/mingle-film-${lang}-poster.webp">
 <link rel="stylesheet" href="/styles.css?v=${version}">
 <script>document.documentElement.classList.add("js")</script>
 <script defer src="/main.js?v=${version}"></script>
@@ -519,17 +476,15 @@ ${faqJsonLd(t.faq.items)}
            data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
         <a class="btn" href="#cli">${t.installTerminal}</a>
       </div>
-      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a> · <a href="#film">${t.film.play} (${t.film.duration})</a></p>
+      <p class="meta rise">v${version} · <a href="${REPO}">${t.hero.open}</a><span data-intel> · <a href="${downloads.mac[1][1]}">${t.alsoFor.intel}</a></span> · <a href="#download" data-also data-pair="${esc(t.alsoFor.pair)}" data-mac="${t.alsoFor.mac}" data-windows="${t.alsoFor.windows}" data-linux="${t.alsoFor.linux}">${t.alsoFor.pair.replace("{a}", t.alsoFor.windows).replace("{b}", t.alsoFor.linux)}</a></p>
     </div>
-    ${shot("agent", lang, t.hero.alt, "hero-shot rise", true)}
+    ${heroStage(lang, t)}
   </div>
 </section>
 
 ${logos(key, t)}
 
-${filmSection(lang, t)}
-
-${demoSection(key, t)}
+${agentSection(t)}
 
 <section id="parallel" class="section">
   <div class="wrap split parallel">
@@ -750,7 +705,7 @@ ${faqJsonLd(g.faq)}
            data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
         <a class="btn" href="${t.path}#cli">${t.installTerminal}</a>
       </div>
-      <p class="meta rise">v${version} · ${esc(g.transportNote)}</p>
+      <p class="meta rise">v${version} · ${esc(g.transportNote)} · <a href="${t.path}#film">${t.film.play} (${t.film.duration})</a></p>
     </div>
     ${shot("connect", lang, ui.howImgAlt, "hero-shot rise", true)}
   </div>
@@ -952,7 +907,7 @@ ${faqJsonLd(h.faq)}
            data-label-mac="${t.downloadFor.mac}" data-label-windows="${t.downloadFor.windows}" data-label-linux="${t.downloadFor.linux}" data-label-any="${t.downloadFor.any}">${osIcons}<span data-label>${t.downloadFor.mac}</span></a>
         <a class="btn" href="${t.path}#cli">${t.installTerminal}</a>
       </div>
-      <p class="meta rise">v${version} · ${esc(h.metaNote)}</p>
+      <p class="meta rise">v${version} · ${esc(h.metaNote)} · <a href="${t.path}#film">${t.film.play} (${t.film.duration})</a></p>
     </div>
     ${shot("new", lang, t.how.steps[0].alt, "hero-shot rise", true)}
   </div>
