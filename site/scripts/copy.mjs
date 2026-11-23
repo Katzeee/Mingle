@@ -31,6 +31,9 @@ export const copy = {
       lead: "Pick your local coding agent, connect Slack, Discord, Telegram and the rest, and watch one agent carry the same memory across every chat app.",
       play: "Watch film",
       duration: "0:40",
+      tabFilm: "Product film",
+      tabConsole: "Console",
+      switchLabel: "Preview mode",
       name: "Mingle — One agent in every chat app (40s product film)",
       description:
         "Connect your local Claude Code, Codex, or other coding agent into Slack, Discord, Telegram, GitHub, and iMessage with one shared MEMORY.md and zero Mingle server.",
@@ -263,6 +266,9 @@ export const copy = {
       lead: "选定本机 coding agent，接入飞书、Slack、微信等聊天软件，看同一个 Agent 带着同一份记忆在多端实时协作。",
       play: "播放影片",
       duration: "0:40",
+      tabFilm: "产品影片",
+      tabConsole: "控制台界面",
+      switchLabel: "首屏预览切换",
       name: "Mingle — 一个 Agent，住进你所有的聊天软件（40 秒产品宣传片）",
       description:
         "把本机 Claude Code、Codex 等 coding agent 接进飞书、Slack、微信等聊天软件，共享同一份 MEMORY.md，无服务器直连。",

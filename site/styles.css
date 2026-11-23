@@ -308,6 +308,67 @@ h2 span {
   margin-top: 72px;
 }
 
+/* Hero stage: 40s product film as the primary visual, with a quiet switch to the console UI. */
+.hero-stage {
+  margin-top: 56px;
+}
+.hero-panel[hidden] {
+  display: none;
+}
+.hero-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 18px auto 0;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.hero-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 160ms var(--ease),
+    color 160ms var(--ease),
+    box-shadow 160ms var(--ease);
+}
+.hero-switch button:hover {
+  color: var(--ink);
+}
+.hero-switch button span {
+  color: var(--ink3);
+  font-variant-numeric: tabular-nums;
+}
+.hero-switch button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  .hero-switch button[aria-selected="true"] {
+    background: var(--bg3);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  }
+}
+html:not(.js) .hero-switch {
+  display: none;
+}
+
 /* A window around a screenshot */
 .window {
   margin: 0;
@@ -344,6 +405,9 @@ h2 span {
   background: #f3f1ec;
   box-shadow: var(--shadow-lg);
   aspect-ratio: 16 / 9;
+}
+.hero-film {
+  margin-top: 0;
 }
 .film-video {
   display: block;
@@ -406,9 +470,15 @@ h2 span {
   cursor: pointer;
 }
 @media (max-width: 640px) {
+  .hero-stage {
+    margin-top: 36px;
+  }
   .film-frame {
     border-radius: 12px;
     margin-top: 24px;
+  }
+  .hero-film {
+    margin-top: 0;
   }
   .film-play {
     height: 44px;
@@ -592,90 +662,7 @@ h3 {
   font-size: 15px;
 }
 
-/* The interactive demo: a phone that wears each chat app's look. Skins are approximations, colors per app below. */
-html:not(.js) .demo-section {
-  display: none;
-}
-.demo-grid {
-  margin-top: 48px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 64px;
-  align-items: start;
-}
-.demo-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 32px;
-}
-.demo-list button {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--card);
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color 0.2s var(--ease),
-    background 0.2s var(--ease);
-}
-.demo-list button:hover {
-  border-color: var(--line2);
-}
-.demo-list button[aria-selected="true"] {
-  border-color: var(--ink);
-  box-shadow: 0 0 0 1px var(--ink);
-}
-.demo-apps {
-  display: flex;
-  flex: none;
-  width: 40px;
-}
-.demo-apps .app-icon {
-  border-radius: 7px;
-  box-shadow: 0 0 0 2px var(--card);
-}
-.demo-apps .app-icon + .app-icon {
-  margin-left: -6px;
-  margin-top: 14px;
-}
-.demo-text {
-  display: grid;
-  min-width: 0;
-}
-.demo-text b {
-  font-size: 15px;
-  font-weight: 600;
-}
-.demo-text small {
-  color: var(--ink2);
-  font-size: 13px;
-  line-height: 1.45;
-}
-.demo-stage {
-  position: sticky;
-  top: 84px;
-}
-.demo-caption {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin: 14px 0 0;
-  color: var(--ink3);
-  font-size: 13px;
-  text-align: center;
-}
-.demo-caption .av {
-  --size: 20px;
-  font-size: 11px;
-}
+/* Phone conversation cards (used in #parallel and #how step 3). */
 
 /* The phone */
 .phone {
@@ -893,53 +880,6 @@ html:not(.js) .demo-section {
   100% {
     box-shadow: 0 0 0 0 transparent;
   }
-}
-.demo-end {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  flex-wrap: wrap;
-  padding: 10px 12px 22px;
-  background: var(--im-bar);
-  border-top: 1px solid var(--im-line);
-}
-.demo-end[hidden] {
-  display: none;
-}
-.demo-end .btn {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.demo-banner {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 24px;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: 600;
-  text-align: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.35s var(--ease);
-}
-.demo-banner .app-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-}
-.demo-banner.shown {
-  opacity: 1;
 }
 
 /* Avatars: people get a color from their name; Alex looks the same in every app. */
@@ -2106,29 +2046,6 @@ html:not(.js) .phone-static .rx .chip {
   .step:nth-child(even) .step-text {
     order: 0;
   }
-  .demo-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 32px;
-  }
-  .demo-stage {
-    position: static;
-    max-width: 400px;
-    width: 100%;
-    margin: 0 auto;
-  }
-  .demo-list {
-    display: flex;
-    overflow-x: auto;
-    margin: 24px -24px 0;
-    padding: 2px 24px 6px;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-  }
-  .demo-list button {
-    flex: none;
-    width: 240px;
-    scroll-snap-align: start;
-  }
   .flow {
     grid-template-columns: minmax(0, 420px);
     justify-content: center;
@@ -2188,10 +2105,6 @@ html:not(.js) .phone-static .rx .chip {
   }
   .logos li {
     font-size: 14px;
-  }
-  .demo-list {
-    margin: 24px -20px 0;
-    padding: 2px 20px 6px;
   }
   .phone {
     border-width: 8px;
