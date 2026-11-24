@@ -559,6 +559,7 @@ export const api = {
     call<SetupState>("POST", `/v1/admin/platforms/${platform}/setup/${action}`, undefined, remote),
   createAgent: (input: { name: string; role: string; harness: string; model?: string }) =>
     call<AgentView>("POST", "/v1/admin/agents", input),
+  reorderAgents: (ids: string[]) => call<{ ids: string[] }>("PUT", "/v1/admin/agents/order", { ids }),
   setAvatar: (id: string, image: Blob) => call<AgentView>("PUT", `/v1/admin/agents/${id}/avatar`, image),
   clearAvatar: (id: string) => call<AgentView>("DELETE", `/v1/admin/agents/${id}/avatar`),
   setRole: (id: string, role: string) => call("PUT", `/v1/admin/agents/${id}/role`, { role }),
