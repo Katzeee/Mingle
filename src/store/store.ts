@@ -354,6 +354,54 @@ export class Store {
     return (this.stmt("SELECT * FROM agents ORDER BY created_at").all() as Row[]).map(toAgent);
   }
 
+  /** Agent IDs in the user's saved sidebar order (local and remote IDs). */
+  agentOrder(): string[] {
+    return (this.stmt("SELECT agent_id FROM agent_order ORDER BY position").all() as Row[]).map((r) =>
+      String(r.agent_id),
+    );
+  }
+
+  /** Replace the saved sidebar order. Duplicates and empty strings are ignored. */
+  setAgentOrder(ids: readonly string[]): string[] {
+    const clean: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of ids) {
+      const id = raw.trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      clean.push(id);
+    }
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM agent_order").run();
+      const insert = this.db.prepare("INSERT INTO agent_order (agent_id, position) VALUES (?, ?)");
+      for (let i = 0; i < clean.length; i++) insert.run(clean[i] as string, i);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return clean;
+  }
+
+  /**
+   * Sort agents by the saved sidebar order. Agents not present in the saved order keep
+   * their original relative order after the ordered ones.
+   */
+  orderByAgentOrder<T extends { id?: unknown }>(items: readonly T[]): T[] {
+    const order = this.agentOrder();
+    if (order.length === 0 || items.length < 2) return [...items];
+    const rank = new Map(order.map((id, i) => [id, i]));
+    return items
+      .map((item, index) => ({
+        item,
+        index,
+        pos: typeof item.id === "string" ? (rank.get(item.id) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER,
+      }))
+      .sort((a, b) => a.pos - b.pos || a.index - b.index)
+      .map((entry) => entry.item);
+  }
+
   setAgentStatus(id: string, status: AgentStatus, detail: string | null = null, failure: string | null = null): void {
     this.stmt("UPDATE agents SET status = ?, status_detail = ?, status_failure = ?, updated_at = ? WHERE id = ?").run(
       status,
@@ -494,6 +542,7 @@ export class Store {
   }
 
   deleteAgent(id: string): void {
+    this.db.prepare("DELETE FROM agent_order WHERE agent_id = ?").run(id);
     this.db.prepare("DELETE FROM agents WHERE id = ?").run(id);
   }
 

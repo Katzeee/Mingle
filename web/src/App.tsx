@@ -1,4 +1,13 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AgentPage } from "./AgentPage.tsx";
 import { type AgentView, ApiError, api, captureToken, clearResponseCache } from "./api.ts";
 import { prefetchChat } from "./Chat.tsx";
@@ -136,11 +145,16 @@ function Shell() {
   }, []);
 
   const refreshVersion = useRef(0);
+  const dragging = useRef(false);
+  const setDragging = useCallback((active: boolean) => {
+    dragging.current = active;
+  }, []);
   const refresh = useCallback(async () => {
+    if (dragging.current) return;
     const version = ++refreshVersion.current;
     try {
       const status = await api.status();
-      if (version !== refreshVersion.current) return;
+      if (version !== refreshVersion.current || dragging.current) return;
       setAgents((prev) => reconcileList(prev, status.agents, (a) => a.id));
       setVersion(status.version);
       setProblem(null);
@@ -149,6 +163,36 @@ function Shell() {
       setProblem(e instanceof ApiError && e.status === 401 ? "unauthorized" : "offline");
     }
   }, []);
+
+  const reorder = useCallback(
+    async (ids: string[]) => {
+      // Any poll started before this drop must not overwrite the optimistic order.
+      const version = ++refreshVersion.current;
+      setAgents((prev) => {
+        if (!prev) return prev;
+        const byId = new Map(prev.map((a) => [a.id, a]));
+        const seen = new Set<string>();
+        const next: AgentView[] = [];
+        for (const id of ids) {
+          const item = byId.get(id);
+          if (item && !seen.has(id)) {
+            seen.add(id);
+            next.push(item);
+          }
+        }
+        for (const item of prev) {
+          if (!seen.has(item.id)) next.push(item);
+        }
+        return next;
+      });
+      try {
+        await api.reorderAgents(ids);
+      } catch {
+        if (version === refreshVersion.current) void refresh();
+      }
+    },
+    [refresh],
+  );
 
   usePolling(refresh, 2000, Boolean(token));
 
@@ -225,14 +269,28 @@ function Shell() {
     <div className="flex h-full">
       {bare ? null : (
         <aside className="sidebar hidden w-[220px] shrink-0 border-r border-line bg-wing md:flex">
-          <Sidebar agents={agents ?? []} view={view} currentId={current?.id} onNavigate={navigate} />
+          <Sidebar
+            agents={agents ?? []}
+            view={view}
+            currentId={current?.id}
+            onNavigate={navigate}
+            onReorder={reorder}
+            onDraggingChange={setDragging}
+          />
         </aside>
       )}
 
       {menuOpen && !bare ? (
         <div className="fixed inset-0 z-40 flex md:hidden">
           <div className="flex w-[260px] max-w-[85%] bg-wing shadow-card">
-            <Sidebar agents={agents ?? []} view={view} currentId={current?.id} onNavigate={navigate} />
+            <Sidebar
+              agents={agents ?? []}
+              view={view}
+              currentId={current?.id}
+              onNavigate={navigate}
+              onReorder={reorder}
+              onDraggingChange={setDragging}
+            />
           </div>
           <button
             type="button"
@@ -280,11 +338,15 @@ const SidebarAgentRow = memo(function SidebarAgentRow({
   index: i,
   current: on,
   onNavigate,
+  onRowPointerDown,
+  suppressClickRef,
 }: {
   agent: AgentView;
   index: number;
   current: boolean;
   onNavigate: Navigate;
+  onRowPointerDown: (event: ReactPointerEvent<HTMLButtonElement>, agentId: string) => void;
+  suppressClickRef: RefObject<boolean>;
 }) {
   const { t } = useI18n();
   // One name per chat app, even with several bots in it.
@@ -302,7 +364,11 @@ const SidebarAgentRow = memo(function SidebarAgentRow({
         type="button"
         title={keys ? undefined : a.name}
         aria-keyshortcuts={keys ? keysAria(keys) : undefined}
-        onClick={() => onNavigate({ kind: "agent", slug: a.slug })}
+        onClick={() => {
+          if (suppressClickRef.current) return;
+          onNavigate({ kind: "agent", slug: a.slug });
+        }}
+        onPointerDown={(e) => onRowPointerDown(e, a.id)}
         onPointerEnter={warm}
         onFocus={warm}
         aria-current={on ? "page" : undefined}
@@ -330,11 +396,15 @@ const Sidebar = memo(function Sidebar({
   view,
   currentId,
   onNavigate,
+  onReorder,
+  onDraggingChange,
 }: {
   agents: AgentView[];
   view: View;
   currentId: string | undefined;
   onNavigate: Navigate;
+  onReorder: (ids: string[]) => void;
+  onDraggingChange: (dragging: boolean) => void;
 }) {
   const { t } = useI18n();
   const update = useUpdates();
@@ -342,6 +412,241 @@ const Sidebar = memo(function Sidebar({
   // An update downloading in the background shows nothing until it is ready.
   const offer = update?.available && (update.ready || !update.automaticDownloads) ? update : null;
   const warmBrains = () => prefetchCached("brains", () => api.brains(), 10_000);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  const suppressClickRef = useRef(false);
+  const activeCleanupRef = useRef<(() => void) | null>(null);
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
+
+  useEffect(() => () => activeCleanupRef.current?.(), []);
+
+  const onRowPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, agentId: string) => {
+      if (event.button !== 0 || agentsRef.current.length < 2 || activeCleanupRef.current) return;
+      const listEl = listRef.current;
+      if (!listEl) return;
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const isTouch = event.pointerType === "touch";
+      const buttonEl = event.currentTarget;
+
+      let started = false;
+      let settled = false;
+      let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
+      let ghost: HTMLElement | null = null;
+      let rows: HTMLElement[] = [];
+      let rowIds: string[] = [];
+      let rects: DOMRect[] = [];
+      let fromIdx = -1;
+      let targetIdx = -1;
+      let slotH = 0;
+      let offsetY = 0;
+      let minTop = 0;
+      let maxTop = 0;
+
+      const resetDom = () => {
+        ghost?.remove();
+        ghost = null;
+        for (const row of rows) {
+          row.classList.remove("agent-drag-sliding");
+          row.style.transform = "";
+          row.style.opacity = "";
+          row.style.pointerEvents = "";
+        }
+        document.body.style.cursor = "";
+      };
+
+      const removeListeners = () => {
+        clearTimeout(holdTimer);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        window.removeEventListener("keydown", onKey, true);
+      };
+
+      const abortImmediately = () => {
+        clearTimeout(settleTimer);
+        removeListeners();
+        resetDom();
+        if (started) onDraggingChange(false);
+        activeCleanupRef.current = null;
+      };
+
+      const update = (clientY: number) => {
+        if (!ghost) return;
+        const fromRect = rects[fromIdx] as DOMRect;
+        const top = Math.max(minTop, Math.min(clientY - offsetY, maxTop));
+        ghost.style.top = `${top}px`;
+        const centerY = top + fromRect.height / 2;
+
+        let nextIdx = 0;
+        for (let i = 0; i < rects.length; i++) {
+          if (i === fromIdx) continue;
+          const r = rects[i] as DOMRect;
+          if (r.top + r.height / 2 < centerY) nextIdx++;
+        }
+
+        if (nextIdx !== targetIdx) {
+          targetIdx = nextIdx;
+          rows.forEach((row, i) => {
+            if (i === fromIdx) return;
+            if (fromIdx < targetIdx && i > fromIdx && i <= targetIdx) {
+              row.style.transform = `translateY(${-slotH}px)`;
+            } else if (fromIdx > targetIdx && i >= targetIdx && i < fromIdx) {
+              row.style.transform = `translateY(${slotH}px)`;
+            } else {
+              row.style.transform = "";
+            }
+          });
+        }
+      };
+
+      const startDrag = (clientY: number) => {
+        rows = [...listEl.querySelectorAll<HTMLElement>("[data-agent-row]")];
+        rowIds = rows.map((row) => row.dataset.agentRow ?? "");
+        fromIdx = rowIds.indexOf(agentId);
+        if (fromIdx < 0 || rows.length < 2) return;
+
+        started = true;
+        targetIdx = fromIdx;
+        suppressClickRef.current = true;
+        onDraggingChange(true);
+
+        rects = rows.map((row) => row.getBoundingClientRect());
+        const fromRect = rects[fromIdx] as DOMRect;
+        const listRect = listEl.getBoundingClientRect();
+        slotH = fromRect.height + 2;
+        offsetY = clientY - fromRect.top;
+        minTop = listRect.top - 4;
+        maxTop = listRect.bottom - fromRect.height + 4;
+
+        const clone = buttonEl.cloneNode(true) as HTMLElement;
+        clone.removeAttribute("id");
+        clone.removeAttribute("aria-describedby");
+        clone.classList.add("agent-drag-ghost");
+        clone.style.width = `${fromRect.width}px`;
+        clone.style.height = `${fromRect.height}px`;
+        clone.style.left = `${fromRect.left}px`;
+        clone.style.top = `${fromRect.top}px`;
+        document.body.appendChild(clone);
+        ghost = clone;
+
+        const sourceRow = rows[fromIdx] as HTMLElement;
+        sourceRow.style.opacity = "0";
+        sourceRow.style.pointerEvents = "none";
+        rows.forEach((row, i) => {
+          if (i !== fromIdx) row.classList.add("agent-drag-sliding");
+        });
+        document.body.style.cursor = "grabbing";
+        update(clientY);
+      };
+
+      const finish = (commit: boolean, pointerStillDown = false) => {
+        if (settled) return;
+        settled = true;
+        removeListeners();
+
+        if (!started) {
+          activeCleanupRef.current = null;
+          return;
+        }
+
+        const destIdx = commit ? targetIdx : fromIdx;
+        if (!commit) {
+          rows.forEach((row, i) => {
+            if (i !== fromIdx) row.style.transform = "";
+          });
+        }
+
+        const fromRect = rects[fromIdx] as DOMRect;
+        const destRect = rects[destIdx] as DOMRect;
+        let destTop = fromRect.top;
+        if (destIdx < fromIdx) destTop = destRect.top;
+        else if (destIdx > fromIdx) destTop = destRect.bottom - fromRect.height;
+
+        const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (ghost) {
+          ghost.classList.add("settling");
+          ghost.style.top = `${destTop}px`;
+        }
+
+        const releaseClickGuard = () => {
+          if (pointerStillDown) {
+            const release = () => {
+              setTimeout(() => {
+                suppressClickRef.current = false;
+              }, 0);
+            };
+            window.addEventListener("pointerup", release, { once: true });
+            window.addEventListener("pointercancel", release, { once: true });
+          } else {
+            setTimeout(() => {
+              suppressClickRef.current = false;
+            }, 0);
+          }
+        };
+
+        const complete = () => {
+          resetDom();
+          activeCleanupRef.current = null;
+          onDraggingChange(false);
+          releaseClickGuard();
+          if (commit && destIdx !== fromIdx) {
+            const nextIds = [...rowIds];
+            const [moved] = nextIds.splice(fromIdx, 1);
+            if (moved) {
+              nextIds.splice(destIdx, 0, moved);
+              onReorder(nextIds);
+            }
+          }
+        };
+
+        if (reduced) complete();
+        else settleTimer = setTimeout(complete, 165);
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        if (!started) {
+          const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
+          if (isTouch) {
+            if (dist >= 8) {
+              clearTimeout(holdTimer);
+              finish(false);
+            }
+          } else if (dist >= 5) {
+            startDrag(ev.clientY);
+          }
+        } else {
+          update(ev.clientY);
+        }
+      };
+      const onUp = () => finish(true);
+      const onCancel = () => finish(false);
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape" && started) {
+          ev.preventDefault();
+          finish(false, true);
+        }
+      };
+
+      suppressClickRef.current = false;
+      activeCleanupRef.current = abortImmediately;
+      if (isTouch) {
+        holdTimer = setTimeout(() => {
+          if (!started && !settled) startDrag(startY);
+        }, 220);
+      }
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("keydown", onKey, true);
+    },
+    [onDraggingChange, onReorder],
+  );
+
   return (
     <div className="flex min-w-0 flex-1 flex-col px-2 pb-3">
       {/* The brand row: in the desktop app it sits right of the traffic lights and moves the window. */}
@@ -350,9 +655,20 @@ const Sidebar = memo(function Sidebar({
       </div>
       <Eyebrow>{t("sidebar.agents")}</Eyebrow>
       <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain">
-        {agents.map((a, i) => (
-          <SidebarAgentRow key={a.id} agent={a} index={i} current={currentId === a.id} onNavigate={onNavigate} />
-        ))}
+        <div ref={listRef} className="flex flex-col gap-0.5">
+          {agents.map((a, i) => (
+            <div key={a.id} data-agent-row={a.id}>
+              <SidebarAgentRow
+                agent={a}
+                index={i}
+                current={currentId === a.id}
+                onNavigate={onNavigate}
+                onRowPointerDown={onRowPointerDown}
+                suppressClickRef={suppressClickRef}
+              />
+            </div>
+          ))}
+        </div>
         <Shortcut label={t("agents.new")} keys={KEYS.newAgent} side="right">
           <button
             type="button"

@@ -2258,6 +2258,100 @@ export async function reviewInteractions({
       }
     }
 
+    // --- sidebar agent drag-and-drop reorder ------------------------------------------------
+    {
+      const tag = "sidebar agent drag reorder";
+      await metrics(1440);
+      await goto(`/a/${slug}`, LOCALES["zh-CN"]);
+      const rowIds = () =>
+        [...document.querySelectorAll("aside [data-agent-row]")].map((el) => el.getAttribute("data-agent-row"));
+      const rowBox = (index) => {
+        const el = document.querySelectorAll("aside [data-agent-row]")[index];
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, height: r.height };
+      };
+      const before = await call(rowIds);
+      assert(before.length >= 3, `${tag}: expected at least 3 agents`);
+      const startPath = await call(() => location.pathname);
+
+      // Drag row 1 up above row 0, then press Escape to cancel: order must stay unchanged.
+      const r0 = await call(rowBox, 0);
+      const r1 = await call(rowBox, 1);
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r1.x, y: r1.y });
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: r1.x, y: r1.y, button: "left", clickCount: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r1.x, y: r1.y - 12, buttons: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r0.x, y: r0.top + 4, buttons: 1 });
+      await key("Escape", "Escape", 27);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: r0.x,
+        y: r0.top + 4,
+        button: "left",
+        clickCount: 1,
+      });
+      await new Promise((r) => setTimeout(r, 240));
+      assert(JSON.stringify(await call(rowIds)) === JSON.stringify(before), `${tag}: Escape did not cancel drag`);
+
+      // Drag row 1 up above row 0 and release: order updates immediately and persists across reload.
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r1.x, y: r1.y });
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: r1.x, y: r1.y, button: "left", clickCount: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r1.x, y: r1.y - 12, buttons: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r0.x, y: r0.top + 4, buttons: 1 });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: r0.x,
+        y: r0.top + 4,
+        button: "left",
+        clickCount: 1,
+      });
+      const expected = [before[1], before[0], ...before.slice(2)];
+      await until(
+        "reordered sidebar",
+        (want) =>
+          JSON.stringify(
+            [...document.querySelectorAll("aside [data-agent-row]")].map((el) => el.getAttribute("data-agent-row")),
+          ) === want,
+        JSON.stringify(expected),
+      );
+      // Dropping must not accidentally navigate to the dragged row.
+      assert((await call(() => location.pathname)) === startPath, `${tag}: drop triggered navigation`);
+
+      // Wait briefly for PUT /v1/admin/agents/order, then reload and verify persistence.
+      await until(
+        "order persisted on server",
+        async (want) => {
+          const t = sessionStorage.getItem("mingle.token") || "";
+          const res = await fetch("/v1/admin/status", { headers: { authorization: `Bearer ${t}` } });
+          const data = await res.json();
+          return JSON.stringify(data.agents.map((a) => a.id)) === want;
+        },
+        JSON.stringify(expected),
+      );
+      await send("Page.reload");
+      await until(
+        "reordered after reload",
+        (want) =>
+          JSON.stringify(
+            [...document.querySelectorAll("aside [data-agent-row]")].map((el) => el.getAttribute("data-agent-row")),
+          ) === want,
+        JSON.stringify(expected),
+      );
+      assert(await call(pageFits), `${tag}: page overflows`);
+
+      // Restore original order.
+      await call(async (ids) => {
+        const t = sessionStorage.getItem("mingle.token") || "";
+        await fetch("/v1/admin/agents/order", {
+          method: "PUT",
+          headers: { authorization: `Bearer ${t}`, "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+      }, before);
+      passed++;
+      console.log(`${tag}: passed`);
+    }
+
     console.log(`${passed} interaction scenarios passed`);
   } finally {
     try {

@@ -849,15 +849,14 @@ export function createApi(mingle: Mingle): Hono<Env> {
     }
   };
 
-  app.get("/v1/admin/status", async (c) =>
-    c.json({
+  app.get("/v1/admin/status", async (c) => {
+    const local = store.agents().map(agentView);
+    const remote = c.req.query("local") === "1" ? [] : await mingle.remotes.agents();
+    return c.json({
       version: VERSION,
-      agents: [
-        ...store.agents().map(agentView),
-        ...(c.req.query("local") === "1" ? [] : await mingle.remotes.agents()),
-      ],
-    }),
-  );
+      agents: store.orderByAgentOrder([...local, ...remote]),
+    });
+  });
 
   /**
    * Every agent in a line, for the desktop app's menu bar icon (docs/spec.md 9.1): its state, what it
@@ -866,7 +865,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
   app.get("/v1/admin/summary", (c) =>
     c.json({
       version: VERSION,
-      agents: store.agents().map((agent) => {
+      agents: store.orderByAgentOrder(store.agents()).map((agent) => {
         const connections = chatApps(agent.id);
         const given = store.retryable(agent.id);
         return {
@@ -1506,6 +1505,18 @@ export function createApi(mingle: Mingle): Hono<Env> {
     if (!found) throw new MingleError("harness_unavailable", `${id} is not installed here`);
     if (found.disabled) throw new MingleError(found.disabled.code, found.disabled.reason);
   };
+
+  app.put("/v1/admin/agents/order", async (c) => {
+    const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+    if (
+      !body ||
+      !Array.isArray(body.ids) ||
+      !body.ids.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+    ) {
+      throw new MingleError("invalid_order", "Pass an array of agent IDs.", 400);
+    }
+    return c.json({ ids: store.setAgentOrder(body.ids) });
+  });
 
   app.post("/v1/admin/agents", async (c) => {
     const body = await c.req.json<{ name: string; role?: string; harness: string; model?: string }>();
