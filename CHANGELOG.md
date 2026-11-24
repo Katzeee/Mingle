@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.12
+
+- @-mentions in DingTalk group messages now actually notify the people mentioned, and live replies no longer start with a doubled `@@name`.
+- Fixed creating a Slack app from Mingle's prefilled manifest, which Slack had been rejecting since the `/stop` command was added.
+- Long harness lists in **Settings** and **New Agent** are now collapsed, keeping the page tidy.
+
 ## 0.4.11
 
 - Added global network proxy support in **Settings → Network** (and `mingle proxy`): automatic OS proxy detection, manual HTTP/HTTPS/SOCKS5 configuration with credentials kept in the system Keychain, built-in connection testing, optional proxy env forwarding to harnesses, and a quick link to proxy settings when a chat app hits a network error.
