@@ -418,7 +418,8 @@ export function dingtalkChannel(options: DingtalkOptions = {}): Channel {
           const withMention = (text: string) =>
             atUserIds
               ? `${Object.entries(atUserIds)
-                  .map(([id, nick]) => `<a atId="${id}">@${nick}</a>`)
+                  // DingTalk draws the `@` of an atId link itself; writing one here showed `@@nick`.
+                  .map(([id, nick]) => `<a atId="${escapeHtml(id)}">${escapeHtml(nick)}</a>`)
                   .join(" ")} ${text}`
               : text;
           const data = (text: string, flowStatus: string) => ({
@@ -502,6 +503,10 @@ export function dingtalkChannel(options: DingtalkOptions = {}): Channel {
       };
     },
   };
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 /** Map a DingTalk robot callback to Mingle's shape. Exported for tests. */

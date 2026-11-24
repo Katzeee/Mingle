@@ -154,7 +154,7 @@ describe("dingtalk connection", () => {
       .map((c) => [c.body.content, c.body.isFinalize]);
     expect(streamed).toEqual([
       ["**正在处理** · 2 秒", false],
-      ['<a atId="staff1">@张三</a> 答案', true],
+      ['<a atId="staff1">张三</a> 答案', true],
     ]);
 
     await connection.send({ chat: { platformId: "staff1", kind: "dm" }, text: "私聊消息" });
