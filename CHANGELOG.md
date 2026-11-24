@@ -3,6 +3,12 @@
 Each version's section is its release notes, and what the update window shows.
 Releases are cut as described in [docs/releasing.md](docs/releasing.md).
 
+## 0.4.11
+
+- Added global network proxy support in **Settings → Network** (and `mingle proxy`): automatic OS proxy detection, manual HTTP/HTTPS/SOCKS5 configuration with credentials kept in the system Keychain, built-in connection testing, optional proxy env forwarding to harnesses, and a quick link to proxy settings when a chat app hits a network error.
+- Drag and drop agents in the sidebar to set your preferred order across both local and remote SSH agents; the order persists across restarts and carries over to `⌘1–⌘9` shortcuts and the desktop menu bar tray.
+- Fixed a Feishu onboarding crash right after QR app creation that could restart Mingle before saving the new bot's credentials.
+
 ## 0.4.10
 
 - Tasks and reminders in the work panel now show status dots, the last checked time for check reminders, and inline error details when a check fails.

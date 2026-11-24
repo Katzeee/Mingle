@@ -53,6 +53,14 @@ describe("initial schema", () => {
     expect(db.prepare("SELECT count(*) AS n FROM messages").get()?.n).toBe(0);
     expect(search(db, "ridge")).toEqual([]);
   });
+
+  it("uses unique, sequential version numbers for all migration files", () => {
+    const files = readdirSync(new URL("../src/store/migrations/", import.meta.url))
+      .filter((f) => /^\d+_.+\.sql$/.test(f))
+      .sort();
+    const versions = files.map((f) => Number.parseInt(f, 10));
+    expect(versions).toEqual(files.map((_, i) => i + 1));
+  });
 });
 
 describe("onboarding completion", () => {
