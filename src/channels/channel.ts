@@ -18,6 +18,7 @@ export type Platform =
   | "feishu"
   | "dingtalk"
   | "qq"
+  | "onebot11"
   | "slack"
   | "discord"
   | "telegram"
@@ -79,6 +80,7 @@ export interface CredentialField {
   readonly key: string;
   /** Message-catalog key for the label, not display text. */
   readonly labelKey: string;
+  readonly optional?: boolean;
   readonly secret: boolean;
 }
 
@@ -332,7 +334,11 @@ export type Degradation =
 // ------------------------------------------------------------------- adapter
 
 export interface ChannelEvents {
-  onMessage(message: InboundMessage): void;
+  /** The core requests missing quote context and orders it before the live message. */
+  onMessage(
+    message: InboundMessage,
+    readQuote?: () => InboundMessage | undefined | Promise<InboundMessage | undefined>,
+  ): void;
   onState(state: ConnectionState): void;
   /** The bot was added to or removed from a chat. */
   onMembership(change: { readonly chat: ChatRef; readonly joined: boolean }): void;

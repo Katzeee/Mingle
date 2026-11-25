@@ -197,7 +197,10 @@ export function telegramChannel(options: TelegramOptions = {}): Channel {
               offset = update.update_id + 1;
               if (update.message) {
                 const inbound = toInbound(update.message, me);
-                if (inbound) events.onMessage(inbound);
+                if (inbound) {
+                  const quote = update.message.reply_to_message;
+                  events.onMessage(inbound, inbound.replyTo && quote ? () => toInbound(quote, me) : undefined);
+                }
               } else if (update.my_chat_member) {
                 const status = update.my_chat_member.new_chat_member.status;
                 events.onMembership({

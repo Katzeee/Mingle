@@ -1797,14 +1797,53 @@ export class Mingle {
         await this.drive(id, { kind: "failed", code: "credentials_missing" }, gen);
         return;
       }
+      let pending: Promise<void> | undefined;
+      const current = () => this.links.get(id)?.gen === gen;
+      const receive = (message: InboundMessage) => {
+        if (!current()) return;
+        try {
+          this.receive(id, message);
+        } catch (error) {
+          this.log(`could not take a message from ${connection.platform}: ${(error as Error).message}`);
+        }
+      };
       live = await this.channel(connection.platform).connect(credentials, {
-        onMessage: (message) => {
-          if (this.links.get(id)?.gen !== gen) return;
-          try {
-            this.receive(id, message);
-          } catch (error) {
-            this.log(`could not take a message from ${connection.platform}: ${(error as Error).message}`);
-          }
+        onMessage: (message, readQuote) => {
+          if (!current()) return;
+          if (!pending && (!message.replyTo || !readQuote)) return receive(message);
+          // Later messages on this connection wait while a missing quote is being read.
+          const delivery = async () => {
+            if (!current()) return;
+            const ref = message.replyTo;
+            if (
+              ref &&
+              readQuote &&
+              !this.store.hasPlatformMessage(id, message.chat.platformId, ref) &&
+              !(message.chat.parent && this.store.hasPlatformMessage(id, message.chat.parent.platformId, ref))
+            ) {
+              const quote = await Promise.resolve()
+                .then(readQuote)
+                .catch(() => undefined);
+              if (
+                quote &&
+                quote.platformId === ref &&
+                quote.chat.kind === message.chat.kind &&
+                quote.chat.platformId === message.chat.platformId &&
+                ref !== message.platformId
+              )
+                receive({ ...quote, earlier: true });
+            }
+            receive(message);
+          };
+          const last = (pending ?? Promise.resolve())
+            .then(delivery)
+            .catch((error) =>
+              this.log(`could not take a message from ${connection.platform}: ${(error as Error).message}`),
+            );
+          pending = last;
+          void last.then(() => {
+            if (pending === last) pending = undefined;
+          });
         },
         onState: (state) => {
           if (state.kind === "error") reported = state.code;
@@ -1955,10 +1994,16 @@ export class Mingle {
       kind: inbound.chat.kind,
       name: inbound.chat.name,
       parentId: parent?.id,
-      ...(inbound.chat.kind === "dm" ? { peerId: inbound.sender.id } : {}),
+      ...(inbound.chat.kind === "dm" && !inbound.earlier ? { peerId: inbound.sender.id } : {}),
     });
     let contact = this.store.touchContact(connectionId, inbound.sender.id, inbound.sender.name);
-    if (!connection.ownerId && chat.kind === "dm" && !knownBot && this.claim(connection, chat, contact, inbound))
+    if (
+      !inbound.earlier &&
+      !connection.ownerId &&
+      chat.kind === "dm" &&
+      !knownBot &&
+      this.claim(connection, chat, contact, inbound)
+    )
       return;
     const ownerId = connection.ownerId;
     this.learnMentioned(connectionId, ownerId, inbound);
@@ -1984,6 +2029,7 @@ export class Mingle {
           addressed:
             inbound.addressedToBot ||
             quoted?.direction === "out" ||
+            (quoted?.senderId != null && quoted.senderId === connection.botId) ||
             (inbound.chat.followUp === true && this.store.lastSpokeAt(chat.id) !== undefined),
           mentioned: inbound.mentioned ?? (chat.kind !== "dm" && inbound.addressedToBot),
           hops: this.botHops.hops(chat.id),

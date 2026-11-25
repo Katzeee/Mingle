@@ -588,6 +588,7 @@ try {
         // virtual clock outruns. Check it in the desktop app (desktop/README.md) instead.
         ["connect", `/a/${long.slug}/connect`],
         ["connect-counts", `/a/${alex.slug}/connect`],
+        ["connect-onebot11", `/a/${long.slug}/connect/onebot11`],
         ["connect-slack", `/a/${long.slug}/connect/slack`],
         ["connect-discord", `/a/${long.slug}/connect/discord`],
         ["connect-telegram", `/a/${alex.slug}/connect/telegram`],

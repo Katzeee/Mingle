@@ -383,6 +383,45 @@ describe("message flow", () => {
     expect(current.turns.map((turn) => turn.input.includes("queued-for-next-turn"))).toEqual([false, true]);
   });
 
+  it("keeps a missing quote once as background and links subsequent replies to it", async () => {
+    current = await rig(async () => {});
+    const { channel, mingle } = current;
+    const prior = {
+      platformId: "before",
+      chat: { kind: "group" as const, platformId: "-100" },
+      sender: { id: "owner", name: "Alice", isBot: false },
+      attachments: [],
+      text: "original",
+      sentAt: Date.now() - 1000,
+      addressedToBot: true,
+    };
+    const fetchQuote = vi.fn(async () => prior);
+    const reply = { replyTo: "before", text: "about that", addressedToBot: false };
+    channel.receive({ ...reply, platformId: "first" }, fetchQuote);
+    channel.receive({ ...reply, platformId: "second" }, fetchQuote);
+    const chat = await until(() =>
+      mingle.store.agentChats(current?.agentId ?? "").find((c) => c.platformId === "-100"),
+    );
+    await until(() => mingle.store.messageByPlatformId(chat.id, "second"));
+    expect(fetchQuote).toHaveBeenCalledTimes(1);
+    const quoted = await until(() => mingle.store.messageByPlatformId(chat.id, "before"));
+    expect(quoted.state).toBe("ignored");
+    expect(mingle.store.messageByPlatformId(chat.id, "first")?.replyTo).toBe(quoted.id);
+    expect(mingle.store.messageByPlatformId(chat.id, "second")?.replyTo).toBe(quoted.id);
+    channel.receive({ ...reply, platformId: "third", replyTo: "foreign" }, () => ({
+      ...prior,
+      platformId: "foreign",
+      chat: { ...prior.chat, platformId: "elsewhere" },
+    }));
+    channel.receive({ ...reply, platformId: "fourth", replyTo: "gone" }, async () => {
+      throw new Error("quote unavailable");
+    });
+    await until(() => mingle.store.messageByPlatformId(chat.id, "fourth"));
+    expect(mingle.store.messageByPlatformId(chat.id, "third")?.replyTo).toBeNull();
+    expect(mingle.store.messageByPlatformId(chat.id, "fourth")?.replyTo).toBeNull();
+    expect(mingle.store.agentChats(current.agentId).some((c) => c.platformId === "elsewhere")).toBe(false);
+  });
+
   it("quotes what a reply answers, so a bare '已授权' reads in context (MING-103)", async () => {
     current = await rig(async (t) => {
       if (!t.input.includes("download")) return;
@@ -1251,6 +1290,7 @@ describe("admin API (console)", () => {
       "feishu",
       "dingtalk",
       "qq",
+      "onebot11",
       "slack",
       "discord",
       "telegram",
