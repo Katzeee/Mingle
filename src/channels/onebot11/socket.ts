@@ -6,7 +6,12 @@ export function object(value: unknown): Fields {
 }
 
 export class ActionFailed extends Error {}
-export type Call = (action: string, params?: Fields, onChunk?: (chunk: Fields) => void) => Promise<unknown>;
+export type Call = (
+  action: string,
+  params?: Fields,
+  onChunk?: (chunk: Fields) => void,
+  timeoutMs?: number,
+) => Promise<unknown>;
 
 export async function openSocket(
   url: URL,
@@ -68,7 +73,7 @@ export async function openSocket(
     throw error;
   }
   signal?.addEventListener("abort", close, { once: true });
-  const call: Call = async (action, params = {}, onChunk) => {
+  const call: Call = async (action, params = {}, onChunk, timeoutMs = onChunk ? 120_000 : 12_000) => {
     if (ws.readyState !== WebSocket.OPEN || closed) throw new Error("OneBot is offline");
     const echo = crypto.randomUUID();
     let timer: NodeJS.Timeout | undefined;
@@ -76,7 +81,7 @@ export async function openSocket(
       return await new Promise((resolve, reject) => {
         const renew = () => {
           clearTimeout(timer);
-          timer = setTimeout(() => reject(new Error("OneBot action timed out")), onChunk ? 120000 : 12000);
+          timer = setTimeout(() => reject(new Error("OneBot action timed out")), timeoutMs);
         };
         renew();
         pending.set(echo, {

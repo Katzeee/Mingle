@@ -867,6 +867,8 @@ MSG
 
 **OneBot 11（`onebot11`）。** Mingle 主动连接用户管理的协议端（本机或局域网），通过同一条正向 WebSocket 收事件、发动作，以 `echo` 关联响应。连接页填写 WebSocket 地址和可选访问令牌，账号由 `get_login_info` 确认。绑定身份按协议端地址和账号区分。群聊及私聊按 4.2 处理。核心优先关联已存的引用；缺失时由渠道提供原文（Telegram 取事件内的原消息，OneBot 调用 `get_msg`），只将同一会话内可核对的原文保存为历史背景。出站支持文字、原生 @ 和引用回复。入站图片、语音、视频和普通文件消息段保留附件句柄，Agent 请求下载时再取原件。首个接入场景是局域网的 NapCat。下载时先使用消息中的可用直链，必要时拿文件标识请求协议端解析，接收返回的 URL、Base64 或受支持的分块文件流。只有协议端本地路径时，下载需要协议端提供传输原件的接口。传输参考 [OneBot 11](https://github.com/botuniverse/onebot-11/blob/master/communication/ws.md) 与 [LangBot](https://github.com/langbot-app/LangBot/tree/34422164dd69f0eda9acc35e5c599c281fc4eb9f/src/langbot/pkg/platform/adapters/aiocqhttp)，消息转换参考 [AstrBot](https://github.com/AstrBotDevs/AstrBot/tree/5ab395ebca34472e30294abd9dfefefed5778cc5/astrbot/core/platform/sources/aiocqhttp)。
 
+OneBot 11 的 `--file` 通过当前 WebSocket 发送附件字节。图片、语音和视频使用各自的消息段，普通文件使用协议端支持的文件消息段。适配器分别发出正文和附件，避免 QQ 客户端将混合消息呈现为单个文件卡片。发送后用 `get_msg` 核对附件段，并通过现有出站回执报告发送结果。
+
 ### 6.3 统一语义，原生呈现
 
 沿用 dsh-im 的原则：

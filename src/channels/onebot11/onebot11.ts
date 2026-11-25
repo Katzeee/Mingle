@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns";
 import { closeSync, createWriteStream, openSync, writeSync } from "node:fs";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import { BlockList, isIP } from "node:net";
+import { basename, extname } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type {
   Channel,
@@ -15,7 +16,9 @@ import type {
   InboundMessage,
   OutboundMessage,
   Sender,
+  SendResult,
 } from "../channel.ts";
+import { withTextSent } from "../channel.ts";
 import { mentionSpots } from "../mention.ts";
 import { ActionFailed, type Call, type Fields, object, openSocket } from "./socket.ts";
 
@@ -99,39 +102,66 @@ async function connect(
         mentions: true,
         typingIndicator: false,
         reactions: false,
-        fileUpload: false,
+        fileUpload: true,
         fileDownload: true,
         listMembers: true,
         maxTextLength: 4000,
       }),
       async send(m) {
-        if (m.files?.length && !m.text)
-          return { kind: "failed", code: "forbidden", retryable: false, detail: "file_upload_unsupported" };
         const peer = m.chat.platformId.slice(m.chat.platformId.indexOf(":") + 1);
         const group = m.chat.kind === "group";
         if (!m.chat.platformId.startsWith(group ? "group:" : "dm:") || !peer)
           return { kind: "failed", code: "chat_gone", retryable: false };
-        try {
+        const send = async (message: Segment[], attachment = false) => {
           const sent = object(
-            await socket.call(group ? "send_group_msg" : "send_private_msg", {
-              [group ? "group_id" : "user_id"]: wireId(peer),
-              message: outgoing(m, scope),
-            }),
+            await socket.call(
+              group ? "send_group_msg" : "send_private_msg",
+              {
+                [group ? "group_id" : "user_id"]: wireId(peer),
+                message,
+              },
+              undefined,
+              attachment ? 120_000 : undefined,
+            ),
           );
-          const messageId = id(sent.message_id);
-          return messageId
-            ? {
-                kind: "sent",
-                platformId: messageId,
-                degraded: [
-                  ...(m.inThread ? ["thread_dropped" as const] : []),
-                  ...(m.files?.length ? ["files_dropped" as const] : []),
-                ],
-              }
-            : { kind: "uncertain" };
+          return id(sent.message_id);
+        };
+        const degraded = m.inThread ? (["thread_dropped"] as const) : [];
+        let textId = "";
+        let lastId = "";
+        const failed = (failure: Extract<SendResult, { kind: "failed" }>): SendResult => {
+          if (textId) return withTextSent(failure, textId);
+          if (lastId) return { kind: "sent", platformId: lastId, degraded: [...degraded, "files_dropped"] };
+          return failure;
+        };
+        try {
+          if (m.text) {
+            lastId = textId = await send(outgoing(m, scope));
+            if (!textId) return { kind: "uncertain" };
+          }
+          for (const file of m.files ?? []) {
+            const media = await attachmentSegment(file);
+            if ("kind" in media) return failed(media);
+            // QQ can hide other segments behind a file card in a mixed message.
+            const quote = lastId ? [] : outgoing(m, scope);
+            const messageId = await send([...quote, media], true);
+            if (!messageId) return { kind: "uncertain" };
+            const receipt = object(
+              await socket.call("get_msg", { message_id: wireId(messageId) }).catch(() => undefined),
+            );
+            if (!Array.isArray(receipt.message) && typeof receipt.message !== "string") return { kind: "uncertain" };
+            if (!segments(receipt.message).some((part) => part.type === media.type))
+              return failed({ kind: "failed", code: "unknown", retryable: false, detail: "file_not_delivered" });
+            lastId = messageId;
+          }
+          return {
+            kind: "sent",
+            platformId: textId || lastId,
+            degraded,
+          };
         } catch (error) {
           return error instanceof ActionFailed
-            ? { kind: "failed", code: "unknown", retryable: false }
+            ? failed({ kind: "failed", code: "unknown", retryable: false })
             : { kind: "uncertain" };
         }
       },
@@ -223,6 +253,37 @@ function wireId(value: string): unknown {
 interface Segment {
   type: string;
   data: Fields;
+}
+
+const IMAGE_EXTENSIONS = new Set([".apng", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
+const VIDEO_EXTENSIONS = new Set([".mov", ".mp4", ".m4v", ".webm"]);
+const AUDIO_EXTENSIONS = new Set([".amr", ".m4a", ".mp3", ".ogg", ".opus", ".silk", ".wav"]);
+// Leave room for Base64 and message framing within typical OneBot WebSocket frame limits.
+const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+
+async function attachmentSegment(
+  file: NonNullable<OutboundMessage["files"]>[number],
+): Promise<Segment | Extract<SendResult, { kind: "failed" }>> {
+  const name = basename(file.name || file.path);
+  const extension = extname(name).toLowerCase();
+  const type = IMAGE_EXTENSIONS.has(extension)
+    ? "image"
+    : VIDEO_EXTENSIONS.has(extension)
+      ? "video"
+      : AUDIO_EXTENSIONS.has(extension)
+        ? "record"
+        : "file";
+  try {
+    const info = await stat(file.path);
+    if (!info.isFile() || info.size === 0) throw new Error("Expected a nonempty file");
+    if (info.size > MAX_UPLOAD_BYTES) return { kind: "failed", code: "too_large", retryable: false };
+    const bytes = await readFile(file.path);
+    if (!bytes.length) throw new Error("Empty file");
+    if (bytes.length > MAX_UPLOAD_BYTES) return { kind: "failed", code: "too_large", retryable: false };
+    return { type, data: { file: `base64://${bytes.toString("base64")}`, name } };
+  } catch {
+    return { kind: "failed", code: "unknown", retryable: false, detail: "file_unreadable" };
+  }
 }
 function unescapeCq(text: string) {
   return text.replaceAll("&#91;", "[").replaceAll("&#93;", "]").replaceAll("&amp;", "&");
