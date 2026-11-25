@@ -865,6 +865,8 @@ MSG
 - **连接（lifecycle）**：连接、断线重连、状态上报。
 - **消息（messaging）**：收消息事件；发送、回复、上传文件、表情回执、显示"正在输入"。
 
+**OneBot 11（`onebot11`）。** Mingle 主动连接用户管理的协议端（本机或局域网），通过同一条正向 WebSocket 收事件、发动作，以 `echo` 关联响应。连接页填写 WebSocket 地址和可选访问令牌，账号由 `get_login_info` 确认。绑定身份按协议端地址和账号区分。群聊及私聊按 4.2 处理。核心优先关联已存的引用；缺失时由渠道提供原文（Telegram 取事件内的原消息，OneBot 调用 `get_msg`），只将同一会话内可核对的原文保存为历史背景。出站支持文字、原生 @ 和引用回复。入站图片、语音、视频和普通文件消息段保留附件句柄，Agent 请求下载时再取原件。首个接入场景是局域网的 NapCat。下载时先使用消息中的可用直链，必要时拿文件标识请求协议端解析，接收返回的 URL、Base64 或受支持的分块文件流。只有协议端本地路径时，下载需要协议端提供传输原件的接口。传输参考 [OneBot 11](https://github.com/botuniverse/onebot-11/blob/master/communication/ws.md) 与 [LangBot](https://github.com/langbot-app/LangBot/tree/34422164dd69f0eda9acc35e5c599c281fc4eb9f/src/langbot/pkg/platform/adapters/aiocqhttp)，消息转换参考 [AstrBot](https://github.com/AstrBotDevs/AstrBot/tree/5ab395ebca34472e30294abd9dfefefed5778cc5/astrbot/core/platform/sources/aiocqhttp)。
+
 ### 6.3 统一语义，原生呈现
 
 沿用 dsh-im 的原则：
@@ -931,7 +933,7 @@ stateDiagram-v2
 | WhatsApp | Baileys（多设备协议，WebSocket），扫码绑定为"关联设备" | 中：逆向协议，WhatsApp 改协议时会断，要跟进库的更新 | 中到高：违反 WhatsApp 条款；新号、高频、群发更容易被封 | 能 | 能 | Baileys 为 MIT；WhatsApp 条款禁止非官方客户端 | 第二个候选：Node 原生，扫码体验和现有 QR 流程一致 |
 | Signal | signal-cli 以独立进程运行（JSON-RPC），注册专用号码或关联为副设备 | 中高：基于官方 libsignal，服务端变动时要升级 | 低到中：条款不鼓励自动化，但少见封号 | 能 | 能 | signal-cli 为 GPL-3.0，作为独立进程调用、不链接；需要 Java 运行时或原生构建 | 可做，难点在分发 signal-cli |
 | 个人微信 | 已有腾讯 iLink 官方机器人（6.1）。个人号方案：PC 微信 hook、iPad 协议（wechaty 各 puppet） | 低：个人号方案经常失效 | 高：腾讯严查 | iLink 以私聊为主（待实测） | iLink 能回复，主动发待实测 | 个人号方案多为闭源或付费 token | 保持 iLink，不做个人号 |
-| QQ 个人号 | 已有 QQ 官方机器人（6.1）。个人号方案：NapCat、LLOneBot（注入 QQNT 客户端，OneBot 协议） | 中 | 高 | 能 | 能 | 注入客户端；部分项目限制商用和再分发 | 保持官方机器人 |
+| QQ 个人号 | 已有 QQ 官方机器人（6.1）。个人号方案：NapCat、LLOneBot（注入 QQNT 客户端，OneBot 协议） | 中 | 高 | 能 | 能 | 注入客户端；部分项目限制商用和再分发 | 官方机器人优先；用户管理的协议端可通过 OneBot 11 接入（6.2） |
 | Messenger、Instagram | mautrix-meta（Go，Matrix 桥接，模拟网页端） | 中 | 中到高：Meta 风控 | 能 | 能 | AGPL-3.0；必须有 Matrix homeserver | 不直接接入。等 Matrix 渠道上线后，由用户在自己的 homeserver 上跑桥接 |
 | X 私信 | mautrix-twitter（Matrix 桥接） | 低到中：X 经常改接口 | 中 | 群私信能 | 能 | AGPL-3.0 | 同 Messenger |
 | LinkedIn | mautrix-linkedin（Matrix 桥接） | 低 | 中到高：LinkedIn 严格限制自动化 | 能 | 能 | AGPL-3.0 | 同 Messenger，优先级最低 |
@@ -1341,6 +1343,8 @@ docs/             文档
 ## 12. 验证记录
 
 ### 12.1 已实测
+
+OneBot 11：在 Windows 上用正向 WebSocket 连接局域网的 NapCat 4.17.53。令牌鉴权、账号识别、群成员查询通过。用协议端已有的 50 条群消息验证转换，通过 `get_msg` 找到一条引用在同群的原文。一张图片分别经下载地址和 WebSocket 文件流取得，两份字节一致。真实群聊投递、发信和其他媒体类型仍待验证。
 
 2026-11-11，macOS，Node 24.15，OAR 0.97.0。脚本在 [`spikes/`](../spikes/)。
 

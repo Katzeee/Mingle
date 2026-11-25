@@ -202,6 +202,30 @@ describe("telegram connection", () => {
     await connection.close();
   });
 
+  it("offers the original Telegram message with its attachment to the core", async () => {
+    const bot = fakeBot();
+    const original = message({ message_id: 5, text: "route", document: { file_id: "d1", file_name: "route.gpx" } });
+    bot.push([{ update_id: 1, message: message({ text: "use this", reply_to_message: original }) }]);
+    const rec = recorder();
+    let read: Parameters<ChannelEvents["onMessage"]>[1];
+    const connection = await telegramChannel({ fetch: bot.fetchImpl }).connect(
+      { token: TOKEN },
+      {
+        ...rec.events,
+        onMessage: (m, reader) => {
+          rec.messages.push(m);
+          read = reader;
+        },
+      },
+    );
+    try {
+      await until(() => rec.messages.length > 0);
+      expect(await read?.()).toMatchObject({ platformId: "5", text: "route", attachments: [{ id: "d1" }] });
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("reports a revoked token and stops", async () => {
     const bot = fakeBot();
     const rec = recorder();

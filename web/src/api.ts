@@ -84,6 +84,7 @@ export type Platform =
   | "feishu"
   | "dingtalk"
   | "qq"
+  | "onebot11"
   | "slack"
   | "discord"
   | "telegram"
@@ -450,6 +451,7 @@ export type ModelList = { kind: "ok"; models: Model[] } | { kind: "unauthenticat
 export interface CredentialField {
   key: string;
   labelKey: string;
+  optional?: boolean;
   secret: boolean;
 }
 

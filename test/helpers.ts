@@ -203,7 +203,10 @@ export class FakeChannel implements Channel {
   }
 
   /** Deliver a message as if it arrived from the platform. */
-  receive(partial: Partial<InboundMessage> & { text: string }): InboundMessage {
+  receive(
+    partial: Partial<InboundMessage> & { text: string },
+    readQuote?: Parameters<ChannelEvents["onMessage"]>[1],
+  ): InboundMessage {
     const message: InboundMessage = {
       platformId: String(this.seq++),
       chat: { platformId: "-100", kind: "group", name: "Weekend hikes" },
@@ -213,7 +216,7 @@ export class FakeChannel implements Channel {
       sentAt: Date.now(),
       ...partial,
     };
-    this.events?.onMessage(message);
+    this.events?.onMessage(message, readQuote);
     return message;
   }
 }

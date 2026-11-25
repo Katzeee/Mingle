@@ -1217,6 +1217,14 @@ export class Store {
     return Boolean(this.db.prepare("SELECT 1 FROM messages WHERE id = ? AND chat_id = ?").get(id, chatId));
   }
 
+  hasPlatformMessage(connection: string, chat: string, message: string): boolean {
+    return Boolean(
+      this.stmt(
+        "SELECT 1 FROM chats c JOIN messages m ON m.chat_id = c.id WHERE c.connection_id = ? AND c.platform_id = ? AND m.platform_id = ?",
+      ).get(connection, chat, message),
+    );
+  }
+
   messageByPlatformId(chatId: string, platformId: string): Message | undefined {
     const row = this.db
       .prepare("SELECT * FROM messages WHERE chat_id = ? AND platform_id = ?")

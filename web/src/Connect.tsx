@@ -302,7 +302,7 @@ function CredentialsFlow({
   /** Pasting the platform's whole message is fine: each token is picked out, into the field it belongs to. */
   const change = (key: string, raw: string) => setValues(pickTokens(fields, values, key, raw));
 
-  const filled = fields.every((f) => values[f.key]?.trim());
+  const filled = fields.every((f) => f.optional || values[f.key]?.trim());
   const shaped = recognizable(fields) && fields.every((f) => looksRight(f, values[f.key] ?? ""));
   // Tokens with the platform's shape connect right away; an App ID and Secret wait for the button,
   // since a half-typed secret is still "filled".
@@ -350,7 +350,7 @@ function CredentialsFlow({
                 >
                   <Input
                     autoFocus={i === 0}
-                    required
+                    required={!f.optional}
                     type={f.secret ? "password" : "text"}
                     autoComplete="off"
                     spellCheck={false}

@@ -938,6 +938,7 @@ export function createApi(mingle: Mingle): Hono<Env> {
       "feishu",
       "dingtalk",
       "qq",
+      "onebot11",
       "slack",
       "discord",
       "telegram",
