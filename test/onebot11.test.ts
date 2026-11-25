@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +8,12 @@ import type { InboundMessage } from "../src/channels/channel.ts";
 import { download, incoming, onebotChannel, outgoing } from "../src/channels/onebot11/onebot11.ts";
 
 const { peer } = vi.hoisted(() => ({
-  peer: { push: (_frame: unknown) => {}, actions: [] as string[], reply: undefined as unknown },
+  peer: {
+    push: (_frame: unknown) => {},
+    actions: [] as string[],
+    reply: undefined as unknown,
+    outgoing: [] as unknown[],
+  },
 }));
 vi.mock("undici", () => ({
   WebSocket: class extends EventTarget {
@@ -23,8 +28,9 @@ vi.mock("undici", () => ({
       queueMicrotask(() => this.onopen?.());
     }
     send(raw: string) {
-      const { action, echo } = JSON.parse(raw);
+      const { action, echo, params } = JSON.parse(raw);
       peer.actions.push(action);
+      if (action === "send_group_msg") peer.outgoing.push(params);
       const data =
         action === "get_login_info"
           ? { user_id: 9, nickname: "Bot" }
@@ -82,6 +88,59 @@ it("supplies the quoted message on demand and takes background messages in arriv
     ).toMatchObject({ kind: "sent", platformId: "7" });
   } finally {
     await c.close();
+  }
+});
+
+it("sends files separately and reports a missing attachment without resending the text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "onebot-send-"));
+  const c = await onebotChannel().connect(
+    { url: "ws://localhost:1234" },
+    {
+      onMessage() {},
+      onState() {},
+      onMembership() {},
+    },
+  );
+  try {
+    const path = join(root, "range.png");
+    const documentPath = join(root, "notes.txt");
+    const content = Buffer.from("image fixture");
+    await writeFile(path, content);
+    await writeFile(documentPath, "notes");
+    const image = { type: "image", data: { file: `base64://${content.toString("base64")}`, name: "range.png" } };
+    const document = {
+      type: "file",
+      data: { file: `base64://${Buffer.from("notes").toString("base64")}`, name: "notes.txt" },
+    };
+    const text = { type: "text", data: { text: "Found it." } };
+    const request = {
+      chat: { kind: "group" as const, platformId: "group:71" },
+      text: "Found it.",
+      files: [{ path }, { path: documentPath }],
+    };
+    peer.outgoing.length = 0;
+    peer.reply = { message: [{ type: "image" }, { type: "file" }] };
+    expect(await c.send(request)).toMatchObject({ kind: "sent", degraded: [] });
+    expect(peer.outgoing).toEqual([
+      { group_id: 71, message: [text] },
+      { group_id: 71, message: [image] },
+      { group_id: 71, message: [document] },
+    ]);
+    peer.outgoing.length = 0;
+    peer.reply = { message: [text] };
+    expect(await c.send(request)).toMatchObject({
+      kind: "failed",
+      detail: "file_not_delivered",
+      retryable: false,
+      textSent: { platformId: "7" },
+    });
+    expect(peer.outgoing).toEqual([
+      { group_id: 71, message: [text] },
+      { group_id: 71, message: [image] },
+    ]);
+  } finally {
+    await c.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
